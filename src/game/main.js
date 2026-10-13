@@ -773,8 +773,8 @@ window.addEventListener('auxclick', (e) => e.button === 1 && e.preventDefault())
 
 // ------------------------------------------------------------------ tempo lento (bullet time)
 // Botão do meio liga/desliga. Gasta a reserva (segundos de verdade) enquanto
-// está ligado; ela recarrega devagar depois de um tempo desligado.
-const SLOW = { max: 6, left: 6, on: false, k: 1, idle: 9, beat: 0, warn: 0, scale: 0.28 };
+// está ligado; desligado, ela recarrega no mesmo ritmo (6 s gastos voltam em 6 s).
+const SLOW = { max: 6, left: 6, on: false, k: 1, beat: 0, warn: 0, scale: 0.28 };
 function toggleSlowmo(force) {
   const want = force ?? !SLOW.on;
   if (want === SLOW.on) return;
@@ -787,7 +787,6 @@ function toggleSlowmo(force) {
     }
   }
   SLOW.on = want;
-  SLOW.idle = 0;
   SLOW.beat = 0;
   if (want) sfx.slowIn();
   else sfx.slowOut();
@@ -819,8 +818,7 @@ function updateSlowmo(realDt) {
       toggleSlowmo(false);
     }
   } else {
-    SLOW.idle += realDt;
-    if (SLOW.idle > 1.2) SLOW.left = Math.min(SLOW.max, SLOW.left + realDt * 0.5);
+    SLOW.left = Math.min(SLOW.max, SLOW.left + realDt);
   }
   SLOW.k += ((SLOW.on ? SLOW.scale : 1) - SLOW.k) * Math.min(1, realDt * 7);
   const f = SLOW.left / SLOW.max;

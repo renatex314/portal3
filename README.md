@@ -71,7 +71,8 @@ embaixo de Nova Lima. Abre pelo botão **🎮 Jogar** da visita ou direto em `jo
   de um portal no chão, um "funil" puxa a trajetória para o centro dele.
 - **Tempo lento (botão do meio):** desacelera tudo para ~28% (o mouse continua normal), com som
   abafado, batida de coração, tela dessaturada com vinheta azul e um anel em volta da mira. Gasta uma
-  reserva de 6 s (de verdade) mostrada no canto da tela, que recarrega devagar; só no modo solo.
+  reserva de 6 s (de verdade) mostrada no canto da tela, que recarrega no mesmo ritmo em que gasta
+  (6 s gastos voltam em 6 s); só no modo solo.
 - **Passagem contínua:** a câmera sai do portal exatamente onde a vista dele estava e volta suavemente
   a ficar de pé (giro e posição); se ela ainda estiver atrás da boca do portal, é desenhada do ponto
   equivalente do outro lado, então a imagem nunca "pula".
