@@ -14,6 +14,7 @@ import { PEOPLE } from '../documentary.js';
 import { Net } from './net.js';
 import { Turret, crystalMesh } from './turrets.js';
 import { SLOT_COLORS, SLOT_CSS } from './portals.js';
+import { initEnvironment, portalGun, sampleCube } from './models.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
@@ -26,6 +27,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
+initEnvironment(renderer);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x101216);
@@ -250,35 +252,17 @@ body.group.traverse((o) => o.layers.set(1));
 scene.add(body.group);
 
 // ------------------------------------------------------------------ arma de portais (primeira pessoa)
-const gun = new THREE.Group();
+const gun = portalGun();
 {
-  const white = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.25, metalness: 0.1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 });
-  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.32, 8, 20).rotateX(Math.PI / 2), white);
-  const back = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.14, 16).rotateX(Math.PI / 2).translate(0, 0, 0.24), dark);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.016, 10, 24).translate(0, 0, -0.16), dark);
-  const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.4, 3) });
-  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.2, 12).rotateX(Math.PI / 2).translate(0, 0.05, -0.02), coreMat);
-  gun.add(shell, back, ring, core);
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 2;
-    const claw = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.13), dark);
-    claw.position.set(Math.cos(a) * 0.06, Math.sin(a) * 0.06, -0.26);
-    claw.rotation.set(-Math.sin(a) * 0.35, Math.cos(a) * 0.35, 0);
-    gun.add(claw);
-  }
-  const tip = new THREE.Object3D();
-  tip.position.set(0, 0, -0.32);
-  gun.add(tip);
-  gun.userData = { core: coreMat, tip };
-  gun.position.set(0.24, -0.22, -0.48);
-  gun.rotation.set(0.04, 0.08, 0);
-  gun.scale.setScalar(0.85);
+  gun.position.set(0.21, -0.19, -0.44);
+  gun.rotation.set(0.05, 0.09, 0);
+  gun.scale.setScalar(0.62);
   gun.traverse((o) => o.layers.set(2));
   camera.add(gun);
   const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
   gunLight.position.set(0.2, -0.1, -0.4);
   camera.add(gunLight);
+  gun.userData.light = gunLight;
 }
 let recoil = 0;
 
@@ -350,28 +334,7 @@ const saveProgress = () => {
 
 // ------------------------------------------------------------------ cubo de amostra
 function cubeMesh() {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = 256;
-  const g = cv.getContext('2d');
-  g.fillStyle = '#5b5e63';
-  g.fillRect(0, 0, 256, 256);
-  for (let y = 0; y < 256; y += 14) {
-    g.fillStyle = y % 28 ? '#7e3417' : '#33353a';
-    g.fillRect(28, 28 + (y % 200), 200, 9);
-  }
-  g.strokeStyle = '#d9d9d4';
-  g.lineWidth = 22;
-  g.strokeRect(11, 11, 234, 234);
-  g.fillStyle = '#f2c200';
-  g.font = 'bold 26px Arial';
-  g.textAlign = 'center';
-  g.fillText('AMOSTRA', 128, 136);
-  const t = new THREE.CanvasTexture(cv);
-  t.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ map: t, roughness: 0.6, metalness: 0.3 }));
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.62), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.0, 0.2), wireframe: true }));
-  m.add(edge);
-  return m;
+  return sampleCube();
 }
 
 // ------------------------------------------------------------------ fases
@@ -491,6 +454,7 @@ function shoot(which) {
   const blue = which === 'blue';
   recoil = 1;
   gun.userData.core.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
+  gun.userData.light.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
   sfx.shot(blue);
   const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
   const origin = camera.getWorldPosition(new THREE.Vector3());
@@ -947,6 +911,7 @@ function update(dt, t) {
       b.plate.position.y = pressed ? 0.09 : 0.16;
       b.plate.material.color.set(pressed ? 0x27ae60 : 0xc0392b);
       b.plate.material.emissive.set(pressed ? 0x0a4a20 : 0x5a0a05);
+      b.lights?.color.setRGB(...(pressed ? [0.3, 2.4, 0.8] : [2.4, 0.35, 0.15]));
       sfx.click(pressed);
       for (const d of world.doors)
         if (d.id === b.opens) {
@@ -954,6 +919,14 @@ function update(dt, t) {
           sfx.door();
         }
     }
+  }
+
+  // amostra em cima de um botão acende a janela do núcleo
+  for (const c of cubes) {
+    const gl = c.mesh.userData.glow;
+    if (!gl) continue;
+    const on = world.buttons.some((b) => Math.hypot(c.pos.x - b.pos.x, c.pos.z - b.pos.z) < 0.85 && c.pos.y - b.pos.y > 0 && c.pos.y - b.pos.y < 0.9);
+    gl.emissiveIntensity += ((on ? 2.4 : 0.6) - gl.emissiveIntensity) * Math.min(1, dt * 5);
   }
 
   // ---- torretas
@@ -1077,8 +1050,8 @@ function update(dt, t) {
   gun.visible = true;
   recoil = Math.max(0, recoil - dt * 6);
   const sway = Math.sin(player.bob) * 0.012;
-  gun.position.set(0.24 + sway, -0.22 + Math.abs(sway) * 0.6 + recoil * 0.02, -0.48 + recoil * 0.08);
-  gun.rotation.x = 0.04 + recoil * 0.25;
+  gun.position.set(0.21 + sway, -0.19 + Math.abs(sway) * 0.6 + recoil * 0.015, -0.44 + recoil * 0.06);
+  gun.rotation.x = 0.05 + recoil * 0.22;
   tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 5);
   if (sparkT < 1) {
     sparkT += dt;
@@ -1096,6 +1069,9 @@ function update(dt, t) {
   camera.fov = THREE.MathUtils.lerp(camera.fov, 75 + clamp((speed - 8) / 22, 0, 1) * 16, 1 - Math.exp(-dt * 4));
   camera.updateProjectionMatrix();
   player.applyCamera(dt, 0);
+  // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
+  // apareceria colado na vista
+  body.group.visible = !player.inTransit;
   deadFlash = Math.max(0, deadFlash - dt * 1.5);
   $('flash').style.opacity = deadFlash;
   $('timer').textContent = fmt(levelTime);

@@ -3,6 +3,7 @@
 // gatilhos, portas, botões, cubos e o elevador de saída.
 
 import * as THREE from 'three';
+import { floorButton } from './models.js';
 
 const TILE = 2; // metros por repetição de textura
 
@@ -28,49 +29,148 @@ function noiseFill(g, s, base, amp, n = 2600) {
   }
 }
 
+/**
+ * Textura de painéis (cor + relevo). `n` placas por lado; a textura cobre
+ * 4 m (repeat 0.5), então a variação de tom entre placas só se repete de 4 em 4 m.
+ */
+function paneled(size, n, o) {
+  const t = size / n;
+  const cv = document.createElement('canvas');
+  const hv = document.createElement('canvas');
+  cv.width = cv.height = hv.width = hv.height = size;
+  const g = cv.getContext('2d');
+  const h = hv.getContext('2d');
+  h.fillStyle = '#000';
+  h.fillRect(0, 0, size, size);
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++) {
+      const x = i * t;
+      const y = j * t;
+      const d = (Math.random() - 0.5) * 2 * o.vary;
+      const [r, gg, b] = o.base.map((c) => Math.round(c + d));
+      g.fillStyle = `rgb(${r},${gg},${b})`;
+      g.fillRect(x, y, t, t);
+      // grão do concreto/chapa e um leve degradê
+      for (let k = 0; k < (t * t) / 90; k++) {
+        const a = Math.random() * o.grain;
+        g.fillStyle = Math.random() < 0.5 ? `rgba(0,0,0,${a})` : `rgba(255,255,255,${a})`;
+        g.fillRect(x + Math.random() * t, y + Math.random() * t, 1 + Math.random() * 2.5, 1 + Math.random() * 2.5);
+      }
+      const gr = g.createLinearGradient(x, y, x, y + t);
+      gr.addColorStop(0, 'rgba(255,255,255,0.03)');
+      gr.addColorStop(1, 'rgba(0,0,0,0.04)');
+      g.fillStyle = gr;
+      g.fillRect(x, y, t, t);
+      // relevo: placa alta com chanfro até a junta
+      const gp = o.gap / 2;
+      for (let k = 0; k <= o.bevel; k++) {
+        const v = Math.round(255 * (k / o.bevel));
+        h.fillStyle = `rgb(${v},${v},${v})`;
+        h.fillRect(x + gp + k, y + gp + k, t - 2 * (gp + k), t - 2 * (gp + k));
+      }
+      // luz/sombra do chanfro na cor
+      g.fillStyle = 'rgba(255,255,255,0.10)';
+      g.fillRect(x + gp, y + gp, t - 2 * gp, o.bevel * 0.6);
+      g.fillRect(x + gp, y + gp, o.bevel * 0.6, t - 2 * gp);
+      g.fillStyle = 'rgba(0,0,0,0.09)';
+      g.fillRect(x + gp, y + t - gp - o.bevel * 0.6, t - 2 * gp, o.bevel * 0.6);
+      g.fillRect(x + t - gp - o.bevel * 0.6, y + gp, o.bevel * 0.6, t - 2 * gp);
+      o.detail?.(g, x, y, t, h);
+    }
+  // juntas
+  g.fillStyle = 'rgba(60,60,62,0.6)';
+  for (let i = 0; i <= n; i++) {
+    g.fillRect(i * t - o.gap / 2, 0, o.gap, size);
+    g.fillRect(0, i * t - o.gap / 2, size, o.gap);
+  }
+  const map = new THREE.CanvasTexture(cv);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const normal = heightToNormal(hv, 1.5);
+  for (const tx of [map, normal]) {
+    tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+    tx.repeat.set(0.5, 0.5);
+    tx.anisotropy = 8;
+  }
+  return [map, normal];
+}
+
+/** mapa de normais (espaço tangente) a partir de um mapa de altura em tons de cinza */
+function heightToNormal(cv, strength) {
+  const w = cv.width;
+  const hgt = cv.getContext('2d').getImageData(0, 0, w, w).data;
+  const out = document.createElement('canvas');
+  out.width = out.height = w;
+  const og = out.getContext('2d');
+  const img = og.createImageData(w, w);
+  const H = (x, y) => hgt[(((y + w) % w) * w + ((x + w) % w)) * 4] / 255;
+  for (let y = 0; y < w; y++)
+    for (let x = 0; x < w; x++) {
+      const dx = (H(x + 1, y) - H(x - 1, y)) * strength;
+      const dy = (H(x, y + 1) - H(x, y - 1)) * strength;
+      const l = Math.hypot(dx, dy, 1);
+      const i = (y * w + x) * 4;
+      img.data[i] = ((-dx / l) * 0.5 + 0.5) * 255;
+      img.data[i + 1] = ((dy / l) * 0.5 + 0.5) * 255;
+      img.data[i + 2] = ((1 / l) * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  og.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(out);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
 let MATS = null;
 export function materials() {
   if (MATS) return MATS;
-  // painel branco (aceita portal): concreto projetado claro com juntas a cada 1 m
-  const white = canvasTex(512, (g, s) => {
-    noiseFill(g, s, '#d9d8d2', 0.05);
-    g.strokeStyle = 'rgba(70,70,70,0.55)';
-    g.lineWidth = 3;
-    for (let i = 0; i <= 2; i++) {
-      g.beginPath();
-      g.moveTo(i * (s / 2), 0);
-      g.lineTo(i * (s / 2), s);
-      g.moveTo(0, i * (s / 2));
-      g.lineTo(s, i * (s / 2));
-      g.stroke();
-    }
-    g.fillStyle = 'rgba(0,0,0,0.12)';
-    for (const [x, y] of [
-      [12, 12],
-      [s / 2 + 12, 12],
-      [12, s / 2 + 12],
-      [s / 2 + 12, s / 2 + 12],
-    ])
-      g.fillRect(x, y, 10, 10);
+  // painel branco (aceita portal): placas de concreto claro de 1 m, cada uma
+  // com um tom levemente diferente, juntas fundas e cantos chanfrados
+  const [white, whiteN] = paneled(1024, 4, {
+    base: [220, 219, 213],
+    vary: 8,
+    gap: 3,
+    bevel: 3,
+    grain: 0.05,
+    detail(g, x, y, t) {
+      // marcas de fixação nos cantos de algumas placas
+      if (Math.random() < 0.5) {
+        g.fillStyle = 'rgba(0,0,0,0.10)';
+        for (const [u, v] of [
+          [14, 14],
+          [t - 24, 14],
+          [14, t - 24],
+          [t - 24, t - 24],
+        ])
+          g.fillRect(x + u, y + v, 10, 10);
+      }
+    },
   });
-  // metal escuro (não aceita portal): chapa xadrez com rebites
-  const metal = canvasTex(512, (g, s) => {
-    noiseFill(g, s, '#3a3d42', 0.08);
-    for (let y = 0; y < s; y += 32)
-      for (let x = (y / 32) % 2 ? 16 : 0; x < s; x += 32) {
-        g.fillStyle = 'rgba(255,255,255,0.07)';
-        g.fillRect(x, y + 10, 18, 5);
+  // metal escuro (não aceita portal): painéis de chapa com frisos e parafusos
+  const [metal, metalN] = paneled(1024, 2, {
+    base: [58, 61, 66],
+    vary: 6,
+    gap: 4,
+    bevel: 6,
+    grain: 0.09,
+    detail(g, x, y, t, h) {
+      // frisos horizontais e parafusos (também no relevo)
+      for (const ctx of [g, h]) {
+        const hm = ctx === h;
+        ctx.fillStyle = hm ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.28)';
+        for (let k = 1; k < 8; k++) ctx.fillRect(x + 40, y + (k * t) / 8 - 2, t - 80, 4);
+        ctx.fillStyle = hm ? '#fff' : 'rgba(200,205,210,0.4)';
+        for (const [u, v] of [
+          [22, 22],
+          [t - 22, 22],
+          [22, t - 22],
+          [t - 22, t - 22],
+        ]) {
+          ctx.beginPath();
+          ctx.arc(x + u, y + v, 6, 0, 7);
+          ctx.fill();
+        }
       }
-    g.strokeStyle = 'rgba(0,0,0,0.6)';
-    g.lineWidth = 6;
-    g.strokeRect(0, 0, s, s);
-    g.fillStyle = 'rgba(200,200,200,0.35)';
-    for (let i = 24; i < s; i += 76)
-      for (const y of [12, s - 12]) {
-        g.beginPath();
-        g.arc(i, y, 4, 0, 7);
-        g.fill();
-      }
+    },
   });
   // rocha laterítica / itabirito (não aceita portal)
   const rock = canvasTex(512, (g, s) => {
@@ -108,8 +208,11 @@ export function materials() {
     }
   });
   MATS = {
-    white: { mat: new THREE.MeshStandardMaterial({ map: white, roughness: 0.75, metalness: 0.0 }), portalable: true },
-    metal: { mat: new THREE.MeshStandardMaterial({ map: metal, roughness: 0.55, metalness: 0.6, color: 0xb8bcc4 }), portalable: false },
+    white: { mat: new THREE.MeshStandardMaterial({ map: white, normalMap: whiteN, normalScale: new THREE.Vector2(1.2, 1.2), roughness: 0.78, metalness: 0.0 }), portalable: true },
+    metal: {
+      mat: new THREE.MeshStandardMaterial({ map: metal, normalMap: metalN, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.5, metalness: 0.6, color: 0xb8bcc4 }),
+      portalable: false,
+    },
     rock: { mat: new THREE.MeshStandardMaterial({ map: rock, roughness: 0.95 }), portalable: false },
     glass: {
       mat: new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.2, depthWrite: false }),
@@ -242,15 +345,10 @@ export class World {
   }
 
   button(x, y, z, opens) {
-    const g = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.95, 0.12, 32), materials().metal.mat);
-    base.position.y = 0.06;
-    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.66, 0.12, 32), new THREE.MeshStandardMaterial({ color: 0xc0392b, emissive: 0x5a0a05, roughness: 0.4 }));
-    plate.position.y = 0.16;
-    g.add(base, plate);
+    const { group: g, plate, lights } = floorButton();
     g.position.set(x, y, z);
     this.group.add(g);
-    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, group: g };
+    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, group: g };
     this.buttons.push(btn);
     return btn;
   }

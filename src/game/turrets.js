@@ -5,41 +5,13 @@
 
 import * as THREE from 'three';
 import { moveBody } from './player.js';
+import { turretModel } from './models.js';
 
 const RANGE = 26;
 const FOV = THREE.MathUtils.degToRad(55);
 
 function turretMesh() {
-  const g = new THREE.Group();
-  const white = new THREE.MeshStandardMaterial({ color: 0xf0f0ec, roughness: 0.3, metalness: 0.1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.5, metalness: 0.6 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.6, 8, 20).scale(1, 1, 0.75), white);
-  body.position.y = 0.75;
-  g.add(body);
-  // pernas
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 6;
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.7, 6), dark);
-    leg.position.set(Math.cos(a) * 0.22, 0.3, Math.sin(a) * 0.22);
-    leg.rotation.set(Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4);
-    g.add(leg);
-  }
-  // faixa do "olho" e lente vermelha
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.265, 0.265, 0.12, 20, 1, true).scale(1, 1, 0.75), dark);
-  band.position.y = 0.95;
-  g.add(band);
-  const lensMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.15, 0.1) });
-  const lens = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), lensMat);
-  lens.position.set(0, 0.95, 0.2);
-  g.add(lens);
-  // canhões laterais
-  for (const s of [-1, 1]) {
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.28), dark);
-    gun.position.set(s * 0.3, 0.8, 0.08);
-    g.add(gun);
-  }
-  g.userData = { lensMat, body };
-  return g;
+  return turretModel();
 }
 
 export class Turret {
@@ -60,6 +32,7 @@ export class Turret {
     this.cooldown = 0;
     this.airTime = 0;
     this.spotted = false;
+    this.deploy = 0; // 0..1: metades abertas mostrando os canos
     const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xff2a1a, transparent: true, opacity: 0.85 }));
     this.laser.frustumCulled = false;
@@ -80,6 +53,7 @@ export class Turret {
     this.active = false;
     this.laser.visible = false;
     this.mesh.userData.lensMat.color.setRGB(0.15, 0.02, 0.02);
+    this.mesh.userData.eyeGlow.visible = false;
     this.downReason = reason;
     return true;
   }
@@ -99,11 +73,8 @@ export class Turret {
     this.cooldown -= dt;
     let P = this.cooldown <= 0 ? portals.crossing(this.prev, this.pos) : null;
     if (P) {
-      const Q = portals.other(P);
-      const M = portals.transform(P, Q);
-      const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M));
-      this.pos.applyMatrix4(M).addScaledVector(Q.normal, 0.5);
-      this.vel.applyQuaternion(rot);
+      const { Q } = portals.carry(P, this.pos, this.vel);
+      portals.exitAssist(Q, this.pos, this.vel, this.half, gravityAt(this.pos), Q.up);
       this.cooldown = 0.2;
       if (this.active) this.disable('portal');
     }
@@ -118,6 +89,15 @@ export class Turret {
     this.mesh.position.copy(this.pos).add(new THREE.Vector3(0, -0.6, 0));
     this.mesh.rotation.set(0, this.aimYaw, 0);
     this.mesh.rotateX(this.tip * 1.45);
+
+    // abre as metades quando está mirando em alguém
+    this.deploy += ((this.active && this.lock > 0 ? 1 : 0) - this.deploy) * Math.min(1, dt * 8);
+    const { halves, guns } = this.mesh.userData;
+    halves.forEach((h, i) => {
+      const s = i ? 1 : -1;
+      h.position.x = s * (0.006 + this.deploy * 0.07);
+      guns[i].position.x = -s * (0.02 - this.deploy * 0.06);
+    });
 
     let shots = 0;
     this.laser.visible = false;

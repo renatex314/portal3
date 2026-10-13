@@ -21,13 +21,14 @@ button { cursor: pointer; }
 /* ------------------------------------------------ HUD */
 #hud { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
 body.playing #hud { opacity: 1; }
-#xh { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; transform: translate(-50%, -50%); }
-#xh span { position: absolute; top: 0; width: 23px; height: 46px; border: 3px solid rgba(255,255,255,0.25); }
-#xh .l { left: 0; border-right: 0; border-radius: 46px 0 0 46px; }
-#xh .r { right: 0; border-left: 0; border-radius: 0 46px 46px 0; }
-#xh.blue .l { border-color: var(--pa, var(--blue)); box-shadow: -4px 0 12px -4px var(--pa, var(--blue)); }
-#xh.orange .r { border-color: var(--pb, var(--orange)); box-shadow: 4px 0 12px -4px var(--pb, var(--orange)); }
-#xh i { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #fff; }
+#xh { position: absolute; left: 50%; top: 50%; width: 38px; height: 38px; transform: translate(-50%, -50%); }
+/* dois colchetes: azul no alto à esquerda, laranja embaixo à direita; contorno fraco = portal não colocado */
+#xh span { position: absolute; width: 17px; height: 17px; border: 2px solid transparent; transition: border-width 0.12s, box-shadow 0.12s, border-color 0.12s; }
+#xh .l { left: 0; top: 0; border-radius: 17px 0 0 0; border-left-color: color-mix(in srgb, var(--pa, var(--blue)) 45%, transparent); border-top-color: color-mix(in srgb, var(--pa, var(--blue)) 45%, transparent); }
+#xh .r { right: 0; bottom: 0; border-radius: 0 0 17px 0; border-right-color: color-mix(in srgb, var(--pb, var(--orange)) 45%, transparent); border-bottom-color: color-mix(in srgb, var(--pb, var(--orange)) 45%, transparent); }
+#xh.blue .l { border-width: 4px; border-left-color: var(--pa, var(--blue)); border-top-color: var(--pa, var(--blue)); filter: drop-shadow(0 0 4px var(--pa, var(--blue))); }
+#xh.orange .r { border-width: 4px; border-right-color: var(--pb, var(--orange)); border-bottom-color: var(--pb, var(--orange)); filter: drop-shadow(0 0 4px var(--pb, var(--orange))); }
+#xh i { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #fff; box-shadow: 0 0 3px rgba(0,0,0,0.6); }
 #lvl { position: absolute; left: 22px; top: 18px; display: grid; gap: 2px; text-shadow: 0 1px 6px #000; }
 #lvl small { font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--orange); }
 #lvl b { font-family: var(--display); font-size: 24px; }

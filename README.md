@@ -60,8 +60,18 @@ embaixo de Nova Lima. Abre pelo botão **🎮 Jogar** da visita ou direto em `jo
   (`CameraUtils.frameCorners`) e plano de recorte na saída; na tela, cada pixel do portal busca a
   imagem pelo cruzamento do raio olho→pixel com o plano do portal. Há recursão (portal dentro de
   portal) e você vê o próprio corpo pelos portais.
-- **Física:** colisão por caixas, gravidade, "o que entra rápido sai rápido" (posição, velocidade e
-  direção do olhar transformadas), amostras (cubos) que atravessam portais, botões e portas.
+- **Física:** colisão por caixas, gravidade, "o que entra rápido sai rápido": a passagem é disparada
+  pelo centro de massa e posição + velocidade passam pela mesma transformação rígida, sem empurrões
+  extras — a energia se conserva (num loop entre dois portais no chão você volta sempre à mesma
+  altura). Saindo devagar de um portal no chão, há só o mínimo para o corpo sair inteiro. Amostras
+  (cubos) e torretas seguem a mesma regra; botões e portas.
+- **Passagem contínua:** a câmera sai do portal exatamente onde a vista dele estava e volta suavemente
+  a ficar de pé (giro e posição); se ela ainda estiver atrás da boca do portal, é desenhada do ponto
+  equivalente do outro lado, então a imagem nunca "pula".
+- **Visual:** borda dos portais animada com faíscas e clarão ao abrir, plasma girando no portal sem
+  par, arma de portais detalhada (núcleo com a cor do último portal), amostras com cantos reforçados
+  que acendem no botão, botões de piso com luzes, torretas que abrem ao mirar, painéis com relevo
+  (`src/game/models.js`).
 - **6 câmaras ligadas ao documentário**, com as falas narradas dos personagens:
 
 | Câmara | Personagem | Desafio |
@@ -135,7 +145,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (fases/colisão), portals.js (portais), player.js (física), levels.js (câmaras), sfx.js, main.js
+  game/        Parte IV: world.js (fases/colisão), portals.js (portais), player.js (física), models.js (modelos), levels.js (câmaras), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação
