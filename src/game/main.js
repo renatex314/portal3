@@ -1,0 +1,1151 @@
+// Parte IV — "Laboratório Antípoda": jogo de quebra-cabeça em primeira pessoa
+// com arma de portais, ligado ao documentário dos mineiros.
+
+import * as THREE from 'three';
+import { World } from './world.js';
+import { PortalSystem } from './portals.js';
+import { Player, Cube } from './player.js';
+import { LEVELS, SPEAKER_NPC, DEFAULT_GRAVITY } from './levels.js';
+import { Sfx } from './sfx.js';
+import { Soundtrack } from '../audio.js';
+import { Narrator, spoken } from '../narrator.js';
+import { makeWorker, poseWorker } from '../mine.js';
+import { PEOPLE } from '../documentary.js';
+import { Net } from './net.js';
+import { Turret, crystalMesh } from './turrets.js';
+import { SLOT_COLORS, SLOT_CSS } from './portals.js';
+
+const $ = (id) => document.getElementById(id);
+const clamp = THREE.MathUtils.clamp;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ------------------------------------------------------------------ renderer / cena
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101216);
+scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x4a3a30, 1.0));
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.03, 700);
+camera.layers.enable(2); // a arma em primeira pessoa
+scene.add(camera);
+
+const world = new World(scene);
+const portals = new PortalSystem(renderer, scene, camera, world);
+const player = new Player(camera);
+const sound = new Soundtrack();
+const sfx = new Sfx(sound);
+const narrator = new Narrator();
+narrator.onSpeaking = (on) => sound.duck(on);
+
+const dyn = new THREE.Group(); // cubos e personagens da fase
+
+// ------------------------------------------------------------------ multiplayer (rede local)
+const net = new Net();
+const avatars = new Map(); // id → { w, tag, target, yaw, up, moving, lvl, t }
+const mp = () => net.connected;
+const slotHex = (slot, i) => '#' + SLOT_COLORS[slot % 4][i].getHexString();
+
+function nameTag(name, color) {
+  const cv = document.createElement('canvas');
+  cv.width = 512;
+  cv.height = 128;
+  const g = cv.getContext('2d');
+  g.font = 'bold 54px Arial, sans-serif';
+  const w = Math.min(g.measureText(name).width + 60, 512);
+  g.fillStyle = 'rgba(8,10,16,0.75)';
+  g.beginPath();
+  g.roundRect((512 - w) / 2, 18, w, 92, 46);
+  g.fill();
+  g.strokeStyle = color;
+  g.lineWidth = 6;
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.textAlign = 'center';
+  g.fillText(name, 256, 84);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false }));
+  sp.scale.set(1.6, 0.4, 1);
+  sp.position.y = 2.25;
+  return sp;
+}
+
+function avatarFor(id) {
+  const peer = net.peers.get(id);
+  if (!peer) return null;
+  if (!avatars.has(id)) {
+    const w = makeWorker({ helmet: 0xffffff, shirt: SLOT_COLORS[peer.slot % 4][0].getHex(), pants: 0x3a3f4a, vest: true, skin: 0xb07a52 }, 'idle');
+    w.group.add(nameTag(peer.name, slotHex(peer.slot, 0)));
+    scene.add(w.group);
+    avatars.set(id, { w, target: new THREE.Vector3(), yaw: 0, up: 1, moving: false, lvl: -1, t: 0 });
+  }
+  return avatars.get(id);
+}
+
+function removeAvatar(id) {
+  const a = avatars.get(id);
+  if (a) scene.remove(a.w.group);
+  avatars.delete(id);
+  portals.removeRemote(id);
+}
+
+function renderPlayers() {
+  const el = $('mp-list');
+  if (!mp()) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const rows = [`<b>Sala “${net.room}”</b>`, `<span style="--c:${slotHex(net.slot, 0)}">● ${$('mp-name').value || 'você'} (você)</span>`];
+  for (const p of net.peers.values()) rows.push(`<span style="--c:${slotHex(p.slot, 0)}">● ${p.name}</span>`);
+  el.innerHTML = rows.join('');
+}
+
+function setLocalSlot(slot) {
+  portals.setSlot(slot);
+  const [a, b] = SLOT_CSS[slot % 4];
+  document.documentElement.style.setProperty('--pa', a);
+  document.documentElement.style.setProperty('--pb', b);
+}
+
+net.on('joined', (m) => {
+  toast(`${m.name} entrou na sala`);
+  renderPlayers();
+});
+net.on('left', (m) => {
+  toast(`${m.name ?? 'Alguém'} saiu da sala`);
+  removeAvatar(m.id);
+  renderPlayers();
+});
+net.on('disconnect', () => {
+  toast('Conexão com a sala perdida — jogando sozinho.');
+  for (const id of [...avatars.keys()]) removeAvatar(id);
+  setLocalSlot(0);
+  renderPlayers();
+  $('mp-status').textContent = 'Desconectado.';
+});
+net.on('state', (m) => {
+  const a = avatarFor(m.id);
+  if (!a) return;
+  a.target.fromArray(m.p);
+  if (a.lvl !== m.lvl) a.w.group.position.copy(a.target);
+  a.yaw = m.yaw;
+  a.up = m.up;
+  a.moving = m.mv;
+  a.lvl = m.lvl;
+  a.t = performance.now();
+});
+net.on('portal', (m) => {
+  const peer = net.peers.get(m.id);
+  if (peer && m.lvl === levelIdx) portals.placeRemote(m.id, peer.slot, m.which, m.c, m.n, m.u, m.b);
+});
+net.on('cube', (m) => {
+  const c = cubes[m.idx];
+  if (!c || m.lvl !== levelIdx) return;
+  if (held === c) return; // eu é que estou segurando
+  c.remote = { p: new THREE.Vector3().fromArray(m.p), held: m.held, t: performance.now() };
+});
+net.on('turret', (m) => {
+  if (m.lvl === levelIdx) turretDown(m.idx, false, m.p);
+});
+net.on('gem', (m) => {
+  if (m.lvl === levelIdx) takeGem(m.idx, m.name);
+});
+
+function applyRoomFlags(flags) {
+  if (!flags) return;
+  for (const [idx, p] of flags.turrets ?? []) turretDown(idx, false, p);
+  for (const [idx, name] of flags.gems ?? []) takeGem(idx, name);
+}
+
+function fillMapSelect() {
+  const sel = $('room-map');
+  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
+  sel.value = String(levelIdx);
+}
+$('room-map').addEventListener('change', (e) => {
+  if (mp()) net.send({ t: 'setLevel', level: Number(e.target.value) });
+  else {
+    loadLevel(Number(e.target.value));
+    lock();
+  }
+});
+
+net.on('level', (m) => {
+  if (m.final) {
+    toast(`${m.by} atravessou a Terra!`);
+    showFinal();
+    return;
+  }
+  const first = !running;
+  $('menu').hidden = true;
+  $('done').hidden = true;
+  $('final').hidden = true;
+  running = true;
+  if (!first && m.by) {
+    sfx.win();
+    toast(`${m.by} chegou ao elevador — câmara ${String(m.level + 1).padStart(2, '0')}!`);
+  }
+  if (!first && !m.by) toast(`Mapa da sala trocado: ${LEVELS[m.level].name}`);
+  $('next').hidden = false;
+  setTimeout(() => {
+    loadLevel(m.level);
+    fillMapSelect();
+    if (first || !$('pause').hidden) {
+      $('pause').hidden = true;
+      lock();
+    }
+  }, first ? 0 : m.by ? 1400 : 200);
+});
+
+let netSendAcc = 0;
+const cubeSendUntil = new Map();
+function netTick(dt) {
+  if (!mp()) return;
+  netSendAcc += dt;
+  if (netSendAcc >= 0.05) {
+    netSendAcc = 0;
+    const moving = input.f || input.b || input.l || input.r;
+    net.send({ t: 'state', p: player.pos.toArray().map((v) => +v.toFixed(3)), yaw: +player.yaw.toFixed(3), up: player.upSign, mv: moving && player.grounded, lvl: levelIdx });
+    const now = performance.now();
+    cubes.forEach((c, idx) => {
+      if (c === held) cubeSendUntil.set(idx, now + 2500);
+      if ((cubeSendUntil.get(idx) ?? 0) > now && !(c.remote && now - c.remote.t < 300))
+        net.send({ t: 'cube', idx, p: c.pos.toArray().map((v) => +v.toFixed(3)), held: c === held, lvl: levelIdx });
+    });
+  }
+}
+
+function updateAvatars(dt, t) {
+  const now = performance.now();
+  for (const [id, a] of avatars) {
+    const visible = a.lvl === levelIdx && now - a.t < 3000 && running;
+    a.w.group.visible = visible;
+    if (!visible) continue;
+    const feet = a.target.clone().add(new THREE.Vector3(0, -0.9 * a.up, 0));
+    a.w.group.position.lerp(feet, 1 - Math.exp(-dt * 14));
+    a.w.group.rotation.set(0, a.yaw + Math.PI, a.up < 0 ? Math.PI : 0);
+    a.w.P.pose = a.moving ? 'walk' : 'idle';
+    poseWorker(a.w, t, dt);
+  }
+}
+
+function peerFeet() {
+  const now = performance.now();
+  const out = [];
+  for (const a of avatars.values()) if (a.lvl === levelIdx && now - a.t < 1500) out.push(a.target.clone().add(new THREE.Vector3(0, -0.9 * a.up, 0)));
+  return out;
+}
+scene.add(dyn);
+
+// ------------------------------------------------------------------ corpo do jogador (visível só pelos portais)
+const body = makeWorker({ helmet: 0xffffff, shirt: 0xe8762a, pants: 0x3a3f4a, vest: true, skin: 0xb07a52 }, 'idle');
+body.group.traverse((o) => o.layers.set(1));
+scene.add(body.group);
+
+// ------------------------------------------------------------------ arma de portais (primeira pessoa)
+const gun = new THREE.Group();
+{
+  const white = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.25, metalness: 0.1 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 });
+  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.32, 8, 20).rotateX(Math.PI / 2), white);
+  const back = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.14, 16).rotateX(Math.PI / 2).translate(0, 0, 0.24), dark);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.016, 10, 24).translate(0, 0, -0.16), dark);
+  const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.4, 3) });
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.2, 12).rotateX(Math.PI / 2).translate(0, 0.05, -0.02), coreMat);
+  gun.add(shell, back, ring, core);
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + Math.PI / 2;
+    const claw = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.13), dark);
+    claw.position.set(Math.cos(a) * 0.06, Math.sin(a) * 0.06, -0.26);
+    claw.rotation.set(-Math.sin(a) * 0.35, Math.cos(a) * 0.35, 0);
+    gun.add(claw);
+  }
+  const tip = new THREE.Object3D();
+  tip.position.set(0, 0, -0.32);
+  gun.add(tip);
+  gun.userData = { core: coreMat, tip };
+  gun.position.set(0.24, -0.22, -0.48);
+  gun.rotation.set(0.04, 0.08, 0);
+  gun.scale.setScalar(0.85);
+  gun.traverse((o) => o.layers.set(2));
+  camera.add(gun);
+  const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
+  gunLight.position.set(0.2, -0.1, -0.4);
+  camera.add(gunLight);
+}
+let recoil = 0;
+
+// rastro do tiro
+const tracer = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+  new THREE.LineBasicMaterial({ color: 0x6fc8ff, transparent: true, opacity: 0 }),
+);
+tracer.frustumCulled = false;
+scene.add(tracer);
+
+// faíscas quando o portal não gruda
+const sparkGeo = new THREE.BufferGeometry();
+const SPARKS = 40;
+sparkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SPARKS * 3), 3));
+const sparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({ color: 0xffd080, size: 0.06, transparent: true, opacity: 0 }));
+sparks.frustumCulled = false;
+scene.add(sparks);
+const sparkVel = Array.from({ length: SPARKS }, () => new THREE.Vector3());
+let sparkT = 9;
+
+// ------------------------------------------------------------------ estado
+const input = { f: false, b: false, l: false, r: false, jump: false };
+let level = null; // definição
+let data = null; // dados devolvidos por build()
+let levelIdx = 0;
+let cubes = [];
+let npcs = {};
+let npcList = [];
+let held = null;
+let running = false;
+let paused = true;
+let levelTime = 0;
+let completed = false;
+let deadFlash = 0;
+let assist = null;
+let lastGrounded = false;
+let lastVy = 0;
+let stepAcc = 0;
+let inTube = false;
+const firedHints = new Set();
+const grav = new THREE.Vector3();
+let gravityFn = DEFAULT_GRAVITY;
+let turrets = [];
+let crystals = [];
+let health = 100;
+let hurtT = 9;
+let hurtFlash = 0;
+let gemsMine = 0;
+const gemOwners = new Map(); // nome → cristais (multiplayer)
+let spottedOnce = false;
+const gravityAt = (p) => gravityFn(p, grav);
+
+const progress = (() => {
+  try {
+    return JSON.parse(localStorage.getItem('tunel-jogo') || '{}');
+  } catch {
+    return {};
+  }
+})();
+if (new URLSearchParams(location.search).has('todas')) progress.unlocked = LEVELS.length;
+progress.unlocked = Math.max(progress.unlocked || 1, 1);
+progress.best = progress.best || {};
+const saveProgress = () => {
+  try {
+    localStorage.setItem('tunel-jogo', JSON.stringify(progress));
+  } catch {}
+};
+
+// ------------------------------------------------------------------ cubo de amostra
+function cubeMesh() {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#5b5e63';
+  g.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 256; y += 14) {
+    g.fillStyle = y % 28 ? '#7e3417' : '#33353a';
+    g.fillRect(28, 28 + (y % 200), 200, 9);
+  }
+  g.strokeStyle = '#d9d9d4';
+  g.lineWidth = 22;
+  g.strokeRect(11, 11, 234, 234);
+  g.fillStyle = '#f2c200';
+  g.font = 'bold 26px Arial';
+  g.textAlign = 'center';
+  g.fillText('AMOSTRA', 128, 136);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ map: t, roughness: 0.6, metalness: 0.3 }));
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.62), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.0, 0.2), wireframe: true }));
+  m.add(edge);
+  return m;
+}
+
+// ------------------------------------------------------------------ fases
+function clearLevel() {
+  world.reset();
+  portals.reset();
+  for (const c of [...dyn.children]) dyn.remove(c);
+  cubes = [];
+  turrets = [];
+  crystals = [];
+  gemsMine = 0;
+  gemOwners.clear();
+  health = 100;
+  spottedOnce = false;
+  npcs = {};
+  npcList = [];
+  held = null;
+  assist = null;
+  firedHints.clear();
+  dialogRun++;
+  narrator.cancel();
+  $('subs').classList.remove('show');
+}
+
+const spawnOffset = () => (mp() ? [0, 1.3, -1.3, 2.6][net.slot % 4] : 0);
+
+function loadLevel(i, silent = false) {
+  clearLevel();
+  levelIdx = i;
+  level = LEVELS[i];
+  data = level.build(world);
+  gravityFn = data.gravityAt ?? DEFAULT_GRAVITY;
+  const [x, y, z, yaw] = data.spawn;
+  player.spawn(x + spawnOffset(), y, z, yaw);
+  for (const c of data.cubes ?? []) {
+    const m = cubeMesh();
+    dyn.add(m);
+    cubes.push(new Cube(m, ...c));
+  }
+  for (const b of [...(data.booths ?? []), ...(data.npcs ?? [])]) {
+    const p = PEOPLE[b.who];
+    const w = makeWorker(p.look, p.pose);
+    w.group.position.set(b.x, b.y, b.z);
+    w.group.rotation.y = b.rotY;
+    if (b.flipped) w.group.rotation.z = Math.PI;
+    dyn.add(w.group);
+    npcs[b.who] = w;
+    npcList.push(w);
+  }
+  for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, tx, ty, tz, tyaw));
+  for (const [cx, cy, cz] of data.crystals ?? []) {
+    const m = crystalMesh();
+    m.position.set(cx, cy, cz);
+    dyn.add(m);
+    crystals.push({ m, pos: new THREE.Vector3(cx, cy + 0.4, cz), taken: false });
+  }
+  $('gems').hidden = !crystals.length;
+  $('health').hidden = !turrets.length;
+  updateGems();
+  levelTime = 0;
+  completed = false;
+  inTube = false;
+  sound.setMood(level.music);
+  $('lvl-num').textContent = level.free ? 'Mapa livre' : `Câmara ${String(level.id).padStart(2, '0')}`;
+  $('lvl-name').textContent = level.name;
+  $('lvl-goal').textContent = level.lesson;
+  $('tube-hud').hidden = true;
+  $('heat').hidden = !level.heat;
+  updateCrosshair();
+  if (silent) return;
+  playLines(data.intro ?? [], 1200);
+  progress.last = i;
+  saveProgress();
+}
+
+// ------------------------------------------------------------------ diálogos (legendas + voz)
+let dialogRun = 0;
+const queue = [];
+let speakingLoop = false;
+function playLines(lines, delay = 0) {
+  queue.push(...lines.map((l) => ({ l, delay })));
+  if (!speakingLoop) runQueue(dialogRun);
+}
+async function runQueue(run) {
+  speakingLoop = true;
+  while (queue.length && run === dialogRun) {
+    const { l, delay } = queue.shift();
+    if (delay) await sleep(delay);
+    if (run !== dialogRun) break;
+    const [who, text] = l;
+    const subs = $('subs');
+    subs.innerHTML = `<span class="who">${who}</span>${text}`;
+    subs.classList.add('show');
+    const npc = npcs[SPEAKER_NPC[who]];
+    if (npc) npc.P.talking = true;
+    const t0 = performance.now();
+    const ok = await narrator.speak(spoken(text), who);
+    const min = ok ? 900 : Math.max(2600, text.length * 65);
+    const left = min - (performance.now() - t0);
+    if (left > 0) await sleep(left);
+    if (npc) npc.P.talking = false;
+    subs.classList.remove('show');
+    await sleep(300);
+  }
+  if (run !== dialogRun) queue.length = 0;
+  speakingLoop = false;
+  if (queue.length) runQueue(dialogRun);
+}
+
+// ------------------------------------------------------------------ ações
+function camForward() {
+  return new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+}
+
+function shoot(which) {
+  if (!running || paused || completed) return;
+  const blue = which === 'blue';
+  recoil = 1;
+  gun.userData.core.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
+  sfx.shot(blue);
+  const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
+  const origin = camera.getWorldPosition(new THREE.Vector3());
+  const dir = camForward();
+  const res = allowed ? portals.tryPlace(which, origin, dir) : { ok: false };
+  const tipW = gun.userData.tip.getWorldPosition(new THREE.Vector3());
+  const end = res.point ?? origin.clone().addScaledVector(dir, 40);
+  tracer.geometry.setFromPoints([tipW, end]);
+  tracer.material.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
+  tracer.material.opacity = 0.9;
+  if (res.ok) {
+    if (mp())
+      net.send({ t: 'portal', which, lvl: levelIdx, c: res.point.toArray(), n: res.normal.toArray(), u: res.up.toArray(), b: res.boxIndex });
+    sfx.open(blue);
+    updateCrosshair();
+  } else {
+    sfx.fizzle();
+    if (res.point) burst(res.point, res.normal);
+    if (!allowed) toast('Aqui dentro o campo do túnel não deixa abrir portal.');
+  }
+}
+
+function burst(p, n) {
+  const pos = sparkGeo.attributes.position;
+  for (let i = 0; i < SPARKS; i++) {
+    pos.setXYZ(i, p.x, p.y, p.z);
+    sparkVel[i]
+      .set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
+      .multiplyScalar(4)
+      .addScaledVector(n ?? new THREE.Vector3(0, 1, 0), 3);
+  }
+  pos.needsUpdate = true;
+  sparkT = 0;
+}
+
+function rayCube(origin, dir, maxD) {
+  let best = null;
+  for (const c of cubes) {
+    const min = c.pos.clone().sub(c.half);
+    const max = c.pos.clone().add(c.half);
+    let t0 = 0;
+    let t1 = maxD;
+    let ok = true;
+    for (const a of ['x', 'y', 'z']) {
+      if (Math.abs(dir[a]) < 1e-9) {
+        if (origin[a] < min[a] || origin[a] > max[a]) ok = false;
+        continue;
+      }
+      let ta = (min[a] - origin[a]) / dir[a];
+      let tb = (max[a] - origin[a]) / dir[a];
+      if (ta > tb) [ta, tb] = [tb, ta];
+      t0 = Math.max(t0, ta);
+      t1 = Math.min(t1, tb);
+    }
+    if (ok && t0 <= t1 && (!best || t0 < best.t)) best = { c, t: t0 };
+  }
+  return best;
+}
+
+function use() {
+  if (!running || paused) return;
+  if (held) {
+    held.held = false;
+    held.vel.copy(player.vel).multiplyScalar(0.8).addScaledVector(camForward(), 5.5); // arremessa
+    held = null;
+    sfx.drop();
+    return;
+  }
+  const ti = turrets.findIndex((t) => t.canDisableFrom(player.pos));
+  if (ti >= 0) {
+    turretDown(ti, true);
+    return;
+  }
+  const origin = camera.getWorldPosition(new THREE.Vector3());
+  const dir = camForward();
+  const hit = rayCube(origin, dir, 2.8);
+  if (!hit) return;
+  if (hit.c.remote?.held && performance.now() - hit.c.remote.t < 500) return toast('Outra pessoa está segurando essa amostra.');
+  const wall = world.raycast(origin, dir, hit.t);
+  if (wall) return;
+  held = hit.c;
+  held.held = true;
+  sfx.pick();
+}
+
+function turretDown(idx, byMe, pos = null) {
+  const t = turrets[idx];
+  if (!t) return;
+  if (pos) t.pos.fromArray(pos);
+  if (!t.disable(byMe ? 'desligada' : 'rede')) return;
+  sfx.click(true);
+  if (byMe && mp()) net.send({ t: 'turret', idx, p: t.pos.toArray(), lvl: levelIdx });
+  if (byMe) toast('Torreta desligada.');
+}
+
+function takeGem(idx, who) {
+  const g = crystals[idx];
+  if (!g || g.taken) return;
+  g.taken = true;
+  g.m.visible = false;
+  gemOwners.set(who, (gemOwners.get(who) ?? 0) + 1);
+  updateGems();
+  if (crystals.every((c) => c.taken)) {
+    sfx.win();
+    const ranking = [...gemOwners].sort((a, b) => b[1] - a[1]).map(([n, c]) => `${n}: ${c}`).join(' · ');
+    playLines([['Helena', 'Todos os doze cristais! A mina foi explorada de ponta a ponta.']]);
+    setTimeout(() => {
+      completed = true;
+      document.exitPointerLock?.();
+      $('done-title').textContent = 'Mina explorada!';
+      $('done-time').textContent = `Tempo: ${fmt(levelTime)}${ranking ? ` · ${ranking}` : ''}`;
+      $('next').hidden = true;
+      $('done').hidden = false;
+    }, 2500);
+  }
+}
+
+function updateGems() {
+  const n = crystals.filter((c) => c.taken).length;
+  $('gems-v').textContent = `${n}/${crystals.length}`;
+}
+
+function die() {
+  health = 100;
+  sfx.death();
+  deadFlash = 1;
+  if (held) {
+    held.held = false;
+    held = null;
+  }
+  const [x, y, z, yaw] = data.spawn;
+  player.spawn(x + spawnOffset(), y, z, yaw);
+  playLines([[level.who, ['Opa. Volta pro começo e tenta de novo.', 'Essa doeu. De novo!', 'Calma, sô. Mais uma vez.'][Math.floor(Math.random() * 3)]]]);
+}
+
+function complete(final) {
+  if (completed) return;
+  completed = true;
+  sfx.win();
+  const t = levelTime;
+  const prev = progress.best[level.id];
+  if (!prev || t < prev) progress.best[level.id] = t;
+  progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
+  saveProgress();
+  document.exitPointerLock?.();
+  if (final) {
+    showFinal(t);
+    return;
+  }
+  $('done-title').textContent = `Câmara ${String(level.id).padStart(2, '0')} concluída`;
+  $('done-time').textContent = `Tempo: ${fmt(t)}${prev && prev <= t ? ` · recorde ${fmt(prev)}` : ' · novo recorde!'}`;
+  $('done').hidden = false;
+}
+
+function showFinal(t = levelTime) {
+  completed = true;
+  document.exitPointerLock?.();
+  progress.unlocked = LEVELS.length;
+  saveProgress();
+  $('final').hidden = false;
+  $('final-time').textContent = fmt(t);
+  playLines([
+    ['Dona Cida', 'Chegou, meu filho? Eu falei que lá do outro lado era mar.'],
+    ['Helena', 'Num túnel de verdade, de um lado ao outro da Terra, essa viagem levaria quarenta e dois minutos.'],
+    ['Helena', 'Mas agora você sabe por quê. Obrigada por cavar com a gente.'],
+  ]);
+}
+
+const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+let toastT = null;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+function updateCrosshair() {
+  $('xh').classList.toggle('blue', portals.blue.placed);
+  $('xh').classList.toggle('orange', portals.orange.placed);
+}
+
+// ------------------------------------------------------------------ entrada
+const KEYS = { KeyW: 'f', ArrowUp: 'f', KeyS: 'b', ArrowDown: 'b', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
+window.addEventListener('keydown', (e) => {
+  if (KEYS[e.code]) input[KEYS[e.code]] = true;
+  if (!running || paused) return;
+  if (e.code === 'Space') {
+    input.jump = true;
+    e.preventDefault();
+  }
+  if (e.code === 'KeyE') use();
+  if (e.code === 'KeyR') loadLevel(levelIdx);
+  if (e.code === 'KeyQ') shoot('blue');
+});
+window.addEventListener('keyup', (e) => {
+  if (KEYS[e.code]) input[KEYS[e.code]] = false;
+  if (e.code === 'Space') input.jump = false;
+});
+document.addEventListener('mousemove', (e) => {
+  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX, e.movementY);
+});
+canvas.addEventListener('mousedown', (e) => {
+  if (document.pointerLockElement !== canvas) {
+    if (running && !completed) lock();
+    return;
+  }
+  if (e.button === 0) shoot('blue');
+  if (e.button === 2) shoot('orange');
+});
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function lock() {
+  sound.init();
+  if (DEBUG) {
+    paused = false;
+    document.body.classList.add('playing');
+    return;
+  }
+  canvas.requestPointerLock?.();
+}
+const DEBUG = new URLSearchParams(location.search).has('debug'); // testes automatizados sem trava do mouse
+document.addEventListener('pointerlockchange', () => {
+  const locked = DEBUG || document.pointerLockElement === canvas;
+  paused = !locked;
+  $('pause').hidden = locked || !running || completed;
+  if (!$('pause').hidden) fillMapSelect();
+  $('room-map-label').textContent = mp() ? 'Mapa da sala (muda para todos):' : 'Mapa:';
+  document.body.classList.toggle('playing', locked);
+  for (const k of Object.keys(input)) input[k] = false;
+});
+
+// ------------------------------------------------------------------ menus
+function setAudio(music, voice) {
+  sound.setMusic(music);
+  narrator.enabled = voice && narrator.available;
+  if (!narrator.enabled) narrator.cancel();
+  $('opt-music').classList.toggle('on', music);
+  $('opt-voice').classList.toggle('on', narrator.enabled);
+}
+
+function renderMenu() {
+  const grid = $('levels');
+  grid.innerHTML = '';
+  LEVELS.forEach((L, i) => {
+    const locked = !L.free && !mp() && L.id > progress.unlocked;
+    const b = document.createElement('button');
+    b.className = `lvl${locked ? ' locked' : ''}`;
+    b.innerHTML = `<span class="n">${L.free ? 'MAPA LIVRE' : String(L.id).padStart(2, '0')}</span><b>${L.name}</b><small>${L.who}</small>${
+      progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''
+    }`;
+    b.disabled = locked;
+    b.addEventListener('click', () => startLevel(i));
+    grid.appendChild(b);
+  });
+}
+
+function startLevel(i) {
+  sound.init();
+  setAudio($('opt-music').classList.contains('on'), $('opt-voice').classList.contains('on'));
+  if (mp()) {
+    $('menu').hidden = true;
+    $('done').hidden = true;
+    $('final').hidden = true;
+    $('pause').hidden = true;
+    net.send({ t: 'setLevel', level: i });
+    lock();
+    return;
+  }
+  $('menu').hidden = true;
+  $('done').hidden = true;
+  $('final').hidden = true;
+  $('pause').hidden = true;
+  running = true;
+  loadLevel(i);
+  lock();
+}
+
+try {
+  $('mp-name').value = localStorage.getItem('tunel-nome') || '';
+  $('mp-room').value = localStorage.getItem('tunel-sala') || 'mina';
+} catch {}
+$('mp-join').addEventListener('click', async () => {
+  const name = $('mp-name').value.trim() || `Mineiro ${Math.floor(Math.random() * 90 + 10)}`;
+  const room = $('mp-room').value.trim() || 'mina';
+  $('mp-name').value = name;
+  try {
+    localStorage.setItem('tunel-nome', name);
+    localStorage.setItem('tunel-sala', room);
+  } catch {}
+  if ($('mp-join').disabled) return;
+  $('mp-join').disabled = true;
+  $('mp-status').textContent = 'Conectando… (no primeiro acesso pode levar alguns segundos)';
+  sound.init();
+  setAudio($('opt-music').classList.contains('on'), $('opt-voice').classList.contains('on'));
+  try {
+    const w = await net.connect(room, name);
+    setLocalSlot(w.slot);
+    $('mp-status').textContent = `Na sala “${w.room}” com ${w.players.length} pessoa(s). Endereço para os colegas: ${location.host}`;
+    $('mp-join').hidden = true;
+    $('mp-leave').hidden = false;
+    renderPlayers();
+    // entra direto na câmara em que a sala está
+    $('menu').hidden = true;
+    running = true;
+    loadLevel(w.level);
+    fillMapSelect();
+    applyRoomFlags(w.flags);
+    toast(`Mapa da sala: ${LEVELS[w.level].name} — para trocar, aperte Esc`);
+    for (const m of w.portals) {
+      const peer = net.peers.get(m.id);
+      if (peer) portals.placeRemote(m.id, peer.slot, m.which, m.c, m.n, m.u, m.b);
+    }
+    lock();
+  } catch (e) {
+    const dev = location.port === '5173' || location.port === '5182';
+    $('mp-status').textContent = dev
+      ? 'Multiplayer indisponível no modo de desenvolvimento: abra pelo servidor da rede (npm run serve).'
+      : e.message === 'timeout'
+        ? 'O servidor demorou para responder. Clique em “Entrar na sala” de novo.'
+        : e.message === 'sem servidor'
+          ? `Não consegui falar com o servidor em ${location.host}. Ele pode ter sido desligado — tente recarregar a página.`
+          : `Não deu para entrar: ${e.message}.`;
+  } finally {
+    $('mp-join').disabled = false;
+  }
+});
+$('mp-leave').addEventListener('click', () => {
+  net.leave();
+  for (const id of [...avatars.keys()]) removeAvatar(id);
+  setLocalSlot(0);
+  $('mp-join').hidden = false;
+  $('mp-leave').hidden = true;
+  $('mp-status').textContent = 'Você saiu da sala.';
+  renderPlayers();
+});
+
+$('play').addEventListener('click', () => startLevel(Math.min(progress.last ?? 0, progress.unlocked - 1)));
+$('opt-music').addEventListener('click', (e) => e.currentTarget.classList.toggle('on'));
+$('opt-voice').addEventListener('click', (e) => e.currentTarget.classList.toggle('on'));
+$('resume').addEventListener('click', () => lock());
+$('restart').addEventListener('click', () => {
+  loadLevel(levelIdx);
+  lock();
+});
+$('to-menu').addEventListener('click', () => {
+  running = false;
+  $('pause').hidden = true;
+  $('menu').hidden = false;
+  renderMenu();
+});
+$('next').addEventListener('click', () => startLevel(Math.min(levelIdx + 1, LEVELS.length - 1)));
+$('done').addEventListener('click', (e) => {
+  if (e.target.id === 'done-menu' || e.target.id === 'again') $('next').hidden = false;
+});
+$('again').addEventListener('click', () => startLevel(levelIdx));
+$('done-menu').addEventListener('click', () => {
+  running = false;
+  $('done').hidden = true;
+  $('menu').hidden = false;
+  renderMenu();
+});
+$('final-menu').addEventListener('click', () => {
+  running = false;
+  $('final').hidden = true;
+  $('menu').hidden = false;
+  renderMenu();
+});
+$('p-music').addEventListener('click', () => setAudio(!$('opt-music').classList.contains('on'), narrator.enabled));
+$('p-voice').addEventListener('click', () => setAudio($('opt-music').classList.contains('on'), !narrator.enabled));
+if (!narrator.available) setTimeout(() => !narrator.available && $('opt-voice').classList.remove('on'), 1500);
+if (matchMedia('(pointer: coarse)').matches) $('mobile').hidden = false;
+renderMenu();
+
+// ------------------------------------------------------------------ loop
+const clock = new THREE.Clock();
+const tmpMin = new THREE.Vector3();
+const tmpMax = new THREE.Vector3();
+
+function inside(p, min, max) {
+  return p.x > min.x && p.x < max.x && p.y > min.y && p.y < max.y && p.z > min.z && p.z < max.z;
+}
+
+function update(dt, t) {
+  levelTime += dt;
+  world.update(t, dt);
+  portals.update(t, dt);
+
+  // ---- jogador
+  if (assist) {
+    assist.t += dt / 0.5;
+    const k = Math.min(assist.t, 1);
+    player.pos.lerpVectors(assist.from, assist.to, k * k * (3 - 2 * k));
+    player.vel.set(0, 0, 0);
+    if (assist.t >= 1) assist = null;
+  } else {
+    player.update(dt, input, world, portals, gravityAt, () => {
+      sfx.whoosh();
+      if (held) held.pos.copy(player.eye()).addScaledVector(player.forward(), 1.2);
+    });
+  }
+  // aterrissagem e passos
+  if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) sfx.land(Math.abs(lastVy));
+  lastGrounded = player.grounded;
+  lastVy = player.vel.y;
+  if (player.grounded && (input.f || input.b || input.l || input.r)) {
+    stepAcc += dt;
+    if (stepAcc > 0.42) {
+      stepAcc = 0;
+      sfx.step();
+    }
+  }
+
+  // ---- cubos
+  const fwd = camForward();
+  for (const c of cubes) {
+    let target = null;
+    if (c.held) {
+      const eye = player.eye();
+      const hit = world.raycast(eye, fwd, 1.7);
+      target = eye.clone().addScaledVector(fwd, hit ? Math.max(hit.dist - 0.45, 0.5) : 1.7);
+      if (c.pos.distanceTo(target) > 2.6) {
+        c.held = false;
+        held = null;
+      }
+    }
+    if (c.remote && performance.now() - c.remote.t < 400 && c !== held) {
+      c.pos.lerp(c.remote.p, 1 - Math.exp(-dt * 18));
+      c.vel.set(0, 0, 0);
+      c.mesh.position.copy(c.pos);
+    } else c.update(dt, world, portals, gravityAt, target);
+    for (const h of world.hazards) {
+      tmpMin.copy(c.pos).sub(c.half);
+      tmpMax.copy(c.pos).add(c.half);
+      if (tmpMin.x < h.max.x && tmpMax.x > h.min.x && tmpMin.y < h.max.y && tmpMax.y > h.min.y && tmpMin.z < h.max.z && tmpMax.z > h.min.z) {
+        if (held === c) held = null;
+        c.respawn();
+        sfx.fizzle();
+      }
+    }
+    if (c.pos.y < -300) c.respawn();
+  }
+
+  // ---- botões e portas
+  const feet = player.pos.clone().addScaledVector(new THREE.Vector3(0, -1, 0), 0.9 * player.upSign);
+  const peers = peerFeet();
+  for (const b of world.buttons) {
+    const near = (p, dy0, dy1) => Math.hypot(p.x - b.pos.x, p.z - b.pos.z) < 0.85 && p.y - b.pos.y > dy0 && p.y - b.pos.y < dy1;
+    const pressed = cubes.some((c) => !c.held && !c.remote?.held && near(c.pos, 0, 0.9)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
+    if (pressed !== b.pressed) {
+      b.pressed = pressed;
+      b.plate.position.y = pressed ? 0.09 : 0.16;
+      b.plate.material.color.set(pressed ? 0x27ae60 : 0xc0392b);
+      b.plate.material.emissive.set(pressed ? 0x0a4a20 : 0x5a0a05);
+      sfx.click(pressed);
+      for (const d of world.doors)
+        if (d.id === b.opens) {
+          d.target = pressed ? 1 : 0;
+          sfx.door();
+        }
+    }
+  }
+
+  // ---- torretas
+  if (turrets.length) {
+    const eye = player.eye();
+    let shotsTaken = 0;
+    let anySees = false;
+    for (const t of turrets) {
+      const shots = t.update(dt, world, portals, gravityAt, eye, cubes);
+      if (t.spottedNow) anySees = true;
+      if (shots) {
+        shotsTaken += shots;
+        sfx.turretShot(t.pos.distanceTo(eye));
+      }
+    }
+    if (anySees && !spottedOnce) {
+      spottedOnce = true;
+      playLines([['Marquinho', 'Torreta te viu! Sai da mira dela!']]);
+    }
+    if (shotsTaken) {
+      health -= shotsTaken * 6;
+      hurtT = 0;
+      hurtFlash = Math.min(1, hurtFlash + 0.25 * shotsTaken);
+    } else hurtT += dt;
+    if (hurtT > 2.5) health = Math.min(100, health + dt * 30);
+    if (health <= 0) die();
+    $('health-bar').style.width = `${Math.max(health, 0)}%`;
+    $('health').classList.toggle('low', health < 35);
+  }
+  hurtFlash = Math.max(0, hurtFlash - dt * 1.8);
+  $('hurt').style.opacity = hurtFlash;
+  // ---- cristais
+  for (const [i, g] of crystals.entries()) {
+    if (g.taken) continue;
+    g.m.rotation.y += dt * 0.8;
+    g.m.position.y = g.pos.y - 0.4 + Math.sin(t * 2 + i) * 0.08;
+    if (g.pos.distanceTo(player.pos) < 1.4) {
+      const me = mp() ? $('mp-name').value || 'você' : 'você';
+      takeGem(i, me);
+      sfx.gem();
+      gemsMine++;
+      if (mp()) net.send({ t: 'gem', idx: i, name: me, lvl: levelIdx });
+    }
+  }
+
+  // ---- perigos, gatilhos, saída
+  tmpMin.copy(player.pos).sub(player.half);
+  tmpMax.copy(player.pos).add(player.half);
+  for (const h of world.hazards)
+    if (tmpMin.x < h.max.x && tmpMax.x > h.min.x && tmpMin.y < h.max.y && tmpMax.y > h.min.y && tmpMin.z < h.max.z && tmpMax.z > h.min.z) {
+      die();
+      break;
+    }
+  if (player.pos.y < -400) die();
+  for (const tr of world.triggers) {
+    if (tr.done || !inside(player.pos, tr.min, tr.max)) continue;
+    if (tr.exit) {
+      tr.done = true;
+      if (mp()) net.send({ t: 'exit', level: levelIdx, final: !!tr.final });
+      else complete(!!tr.final);
+    } else if (tr.lines) {
+      tr.done = true;
+      playLines(tr.lines);
+    }
+  }
+  for (const [i, h] of (data.hints ?? []).entries())
+    if (!firedHints.has(i) && levelTime > h.after) {
+      firedHints.add(i);
+      playLines(h.lines);
+    }
+  if (data.stuck && player.pos.y < data.stuck.below && player.groundTime > 1.3) {
+    playLines(data.stuck.lines);
+    const [x, y, z, yaw] = data.spawn;
+    player.spawn(x + spawnOffset(), y, z, yaw);
+  }
+
+  // ---- fase final: o túnel
+  if (data.tube) {
+    const p = player.pos;
+    const nowIn = Math.abs(p.x) < 2.6 && Math.abs(p.z) < 2.6 && p.y < -0.5 && p.y > data.tube.bottom - 1;
+    if (nowIn !== inTube) {
+      inTube = nowIn;
+      $('tube-hud').hidden = !inTube;
+      sound.setMood(inTube ? 'ride' : player.upSign < 0 ? 'space' : level.music);
+      if (inTube) playLines([['Helena', 'Lá vai! Repara na gravidade diminuindo...']]);
+    }
+    const speed = player.vel.length();
+    sound.setIntensity(Math.min(speed / 28, 1));
+    sound.setWhoosh(inTube ? Math.min(speed / 28, 1) : 0);
+    if (inTube) {
+      $('t-speed').textContent = Math.round(speed * 3.6).toLocaleString('pt-BR');
+      $('t-g').textContent = Math.abs(gravityAt(p).y).toFixed(1).replace('.', ',');
+      $('t-center').textContent = Math.round(Math.abs(p.y - data.tube.center)).toLocaleString('pt-BR');
+      $('t-phase').textContent = p.y > data.tube.center ? 'caindo para o centro ↓' : 'subindo para o outro lado ↑';
+    }
+    // "agarra na borda": do outro lado, ajuda a sair da boca do túnel
+    if (!assist && player.upSign < 0 && p.y < data.tube.bottom + 3 && Math.abs(p.x) < 2.4 && Math.abs(p.z) < 2.4 && Math.abs(player.vel.y) < 3.5) {
+      const d = camForward().setY(0);
+      if (d.lengthSq() < 1e-4) d.set(0, 0, 1);
+      d.normalize();
+      const dir = Math.abs(d.x) > Math.abs(d.z) ? new THREE.Vector3(Math.sign(d.x), 0, 0) : new THREE.Vector3(0, 0, Math.sign(d.z));
+      const to = new THREE.Vector3(dir.x * 3.3, data.tube.bottom - 0.92, dir.z * 3.3);
+      assist = { from: p.clone(), to, t: 0 };
+      playLines([['Dona Cida', 'Agarra na borda, menino!']]);
+    }
+  }
+  if (level.heat) $('heat-v').textContent = `${Math.round(38 + Math.min(levelTime, 300) * 0.06)} °C`;
+
+  // ---- personagens
+  for (const w of npcList) {
+    w.P.lookAt = camera.position;
+    poseWorker(w, t, dt);
+  }
+  const moving = input.f || input.b || input.l || input.r;
+  body.P.pose = moving && player.grounded ? 'walk' : 'idle';
+  poseWorker(body, t, dt);
+  body.group.position.copy(feet);
+  body.group.rotation.set(0, player.yaw + Math.PI, player.upSign < 0 ? Math.PI : 0);
+
+  // ---- arma, rastro, faíscas
+  gun.visible = true;
+  recoil = Math.max(0, recoil - dt * 6);
+  const sway = Math.sin(player.bob) * 0.012;
+  gun.position.set(0.24 + sway, -0.22 + Math.abs(sway) * 0.6 + recoil * 0.02, -0.48 + recoil * 0.08);
+  gun.rotation.x = 0.04 + recoil * 0.25;
+  tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 5);
+  if (sparkT < 1) {
+    sparkT += dt;
+    const pos = sparkGeo.attributes.position;
+    for (let i = 0; i < SPARKS; i++) {
+      sparkVel[i].y -= 9.8 * dt;
+      pos.setXYZ(i, pos.getX(i) + sparkVel[i].x * dt, pos.getY(i) + sparkVel[i].y * dt, pos.getZ(i) + sparkVel[i].z * dt);
+    }
+    pos.needsUpdate = true;
+    sparks.material.opacity = 1 - sparkT;
+  }
+
+  // ---- câmera
+  const speed = player.vel.length();
+  camera.fov = THREE.MathUtils.lerp(camera.fov, 75 + clamp((speed - 8) / 22, 0, 1) * 16, 1 - Math.exp(-dt * 4));
+  camera.updateProjectionMatrix();
+  player.applyCamera(dt, 0);
+  deadFlash = Math.max(0, deadFlash - dt * 1.5);
+  $('flash').style.opacity = deadFlash;
+  $('timer').textContent = fmt(levelTime);
+  // dica de "E" quando olhando para um cubo
+  const look = rayCube(camera.position, fwd, 2.8);
+  $('use-hint').hidden = !(look && !held) && !held;
+  $('use-hint').textContent = held ? 'E — soltar a amostra' : 'E — pegar a amostra';
+}
+
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  if (running && level) {
+    netTick(dt);
+    updateAvatars(dt, t);
+    if (!paused && !completed) update(dt, t);
+    else {
+      world.update(t, dt);
+      portals.update(t, dt);
+      for (const w of npcList) poseWorker(w, t, dt);
+      player.applyCamera(dt);
+    }
+    portals.render();
+  } else {
+    // fundo do menu: câmara 1 girando devagar
+    gun.visible = false;
+    if (!level) loadLevel(0, true);
+    world.update(t, dt);
+    portals.update(t, dt);
+    for (const w of npcList) poseWorker(w, t, dt);
+    camera.position.set(Math.sin(t * 0.05) * 4, 5, 2 + Math.cos(t * 0.05) * 3);
+    camera.lookAt(0, 3, -14);
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  const s = renderer.getDrawingBufferSize(new THREE.Vector2());
+  portals.resize(s.x, s.y);
+});
+
+// atalho para testes: jogo.html#fase=3
+const m = location.hash.match(/fase=(\d)/);
+if (m) {
+  progress.unlocked = Math.max(progress.unlocked, Number(m[1]));
+  renderMenu();
+}
+requestAnimationFrame(frame);
+window.__jogo = { player, portals, world, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

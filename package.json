@@ -1,0 +1,21 @@
+{
+  "name": "tunel-gravitacional",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Visualização 3D cinematográfica (Three.js) explicando o que aconteceria se você pulasse num túnel que atravessa a Terra.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "node server.js",
+    "start": "vite build && node server.js"
+  },
+  "dependencies": {
+    "three": "0.170.0",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "vite": "5.4.10"
+  }
+}

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Laboratório Antípoda — jogo de portais (Parte IV do Túnel Gravitacional)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/game/game.css" />
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="vignette"></div>
+    <div id="flash"></div>
+    <div id="hurt"></div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div id="xh"><span class="l"></span><span class="r"></span><i></i></div>
+      <div id="lvl"><small id="lvl-num"></small><b id="lvl-name"></b><span id="lvl-goal"></span></div>
+      <div id="timer">0:00</div>
+      <div id="mp-list" hidden></div>
+      <div id="heat" hidden><span>temperatura do ar</span><b id="heat-v">38 °C</b></div>
+      <div id="use-hint" hidden>E — pegar a amostra</div>
+      <div id="gems" hidden><span>cristais</span><b id="gems-v">0/12</b></div>
+      <div id="health" hidden><span>vida</span><div class="bar"><i id="health-bar"></i></div></div>
+      <div id="tube-hud" hidden>
+        <div><span>velocidade</span><b id="t-speed">0</b><small>km/h</small></div>
+        <div><span>gravidade aqui</span><b id="t-g">9,8</b><small>m/s²</small></div>
+        <div><span>distância do centro</span><b id="t-center">80</b><small>m</small></div>
+        <p id="t-phase"></p>
+      </div>
+      <div id="keys">Esquerdo/Q: portal azul · Direito: portal laranja · E: pegar · Espaço: pular · R: reiniciar · Esc: pausa</div>
+    </div>
+    <div id="subs"></div>
+    <div id="toast"></div>
+
+    <!-- menu -->
+    <section id="menu">
+      <div class="menu-box">
+        <a class="back" href="./index.html">← voltar à visita</a>
+        <small>Túnel Gravitacional · Parte IV · ficção científica</small>
+        <h1>Laboratório Antípoda</h1>
+        <p class="lead">
+          Embaixo de Nova Lima, a equipe do documentário montou um laboratório secreto. Em vez de furar a rocha, a
+          nova "sonda" dobra o espaço: abre <b class="b">dois portais</b> ligados entre si. Passe pelas seis câmaras de
+          teste — e, na última, atravesse a Terra.
+        </p>
+        <div id="levels"></div>
+        <div class="mp">
+          <div class="mp-head"><b>👥 Multiplayer na rede local</b><span>até 4 pessoas por sala · cada uma com seu par de portais</span></div>
+          <div class="mp-row">
+            <input id="mp-name" maxlength="20" placeholder="Seu nome" autocomplete="nickname" />
+            <input id="mp-room" maxlength="24" placeholder="Sala" />
+            <button id="mp-join" class="chip on">Entrar na sala</button>
+            <button id="mp-leave" class="chip" hidden>Sair da sala</button>
+          </div>
+          <p id="mp-status" class="note">Quem abrir este mesmo endereço na rede e usar o mesmo nome de sala joga junto.</p>
+        </div>
+        <div class="menu-actions">
+          <button id="play" class="big">▶ Jogar sozinho</button>
+          <button id="opt-music" class="chip on">♪ Música</button>
+          <button id="opt-voice" class="chip on">🗣 Narração</button>
+        </div>
+        <div class="controls">
+          <div><kbd>W A S D</kbd> andar</div>
+          <div><kbd>Mouse</kbd> olhar</div>
+          <div><kbd>Botão esquerdo</kbd> / <kbd>Q</kbd> portal azul</div>
+          <div><kbd>Botão direito</kbd> portal laranja</div>
+          <div><kbd>Espaço</kbd> pular</div>
+          <div><kbd>E</kbd> pegar / soltar amostra</div>
+          <div><kbd>R</kbd> reiniciar câmara</div>
+          <div><kbd>Esc</kbd> pausa</div>
+        </div>
+        <p class="note">
+          Portais só abrem em concreto claro (não em rocha, metal ou vidro). O que entra rápido sai rápido. Jogo
+          original inspirado no gênero de quebra-cabeças com portais; sem nomes ou arquivos de outros jogos.
+        </p>
+        <p id="mobile" class="note warn" hidden>Este jogo precisa de teclado e mouse.</p>
+      </div>
+    </section>
+
+    <!-- pausa -->
+    <section id="pause" class="overlay" hidden>
+      <div class="box">
+        <h2>Pausado</h2>
+        <button id="resume" class="big">Continuar</button>
+        <label class="map-pick"><span id="room-map-label">Mapa:</span><select id="room-map"></select></label>
+        <div class="row">
+          <button id="restart" class="chip">↺ Reiniciar câmara</button>
+          <button id="p-music" class="chip">♪ Música</button>
+          <button id="p-voice" class="chip">🗣 Narração</button>
+          <button id="to-menu" class="chip">Menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- fim de fase -->
+    <section id="done" class="overlay" hidden>
+      <div class="box">
+        <small>teste concluído</small>
+        <h2 id="done-title"></h2>
+        <p id="done-time"></p>
+        <button id="next" class="big">Próxima câmara →</button>
+        <div class="row">
+          <button id="again" class="chip">↺ Repetir</button>
+          <button id="done-menu" class="chip">Menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- final -->
+    <section id="final" class="overlay" hidden>
+      <div class="box wide">
+        <small>câmara 06 · antípoda</small>
+        <h2>Você atravessou a Terra</h2>
+        <p>
+          Caiu, passou pelo centro sem peso nenhum, foi freando e chegou parado do outro lado — de cabeça para baixo
+          em relação a quem ficou em Minas. Tempo da câmara: <b id="final-time"></b>.
+        </p>
+        <p class="muted">
+          No túnel de verdade, de 12.742 km, essa mesma queda levaria ~42 minutos e chegaria a ~28.000 km/h no centro.
+          A física está na Parte III da visita.
+        </p>
+        <div class="row">
+          <a class="big link" href="./index.html#14">Ver a física da queda →</a>
+          <button id="final-menu" class="chip">Menu do jogo</button>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="/src/game/main.js"></script>
+  </body>
+</html>

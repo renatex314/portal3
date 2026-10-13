@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Túnel Gravitacional — e se você pulasse num buraco que atravessa a Terra?</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body class="prestart">
+    <canvas id="c"></canvas>
+    <div id="labels"></div>
+
+    <div class="letterbox top"></div>
+    <div class="letterbox bottom"></div>
+    <div id="fade"></div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <p>Carregando o planeta…</p>
+    </div>
+
+    <div id="start" hidden>
+      <div class="start-box">
+        <small>uma visita em 3 partes · ~15 minutos</small>
+        <h1>Túnel Gravitacional</h1>
+        <p>E se alguém cavasse um buraco que atravessa a Terra — e pulasse nele?</p>
+        <div class="start-parts">
+          <span><b>I</b> o planeta por dentro</span>
+          <span><b>II</b> documentário: os mineiros de Minas</span>
+          <span><b>III</b> a física da queda</span>
+          <span><b>IV</b> jogo: Laboratório Antípoda</span>
+        </div>
+        <button id="start-sound" class="nav-btn primary">▶ Começar com som e narração</button>
+        <button id="start-mute" class="start-mute">começar sem som</button>
+        <a class="start-game" href="./jogo.html">🎮 ou pular direto para o jogo de portais (Parte IV)</a>
+        <p class="start-tip">Use fones de ouvido · ← → mudam de capítulo · H esconde a interface</p>
+      </div>
+    </div>
+
+    <header id="topbar" class="ui">
+      <div class="brand"><span class="dot"></span>Túnel Gravitacional</div>
+      <nav id="dots" aria-label="Capítulos"></nav>
+      <div class="top-actions">
+        <a id="btn-game" class="chip game" href="./jogo.html" title="Parte IV: jogo de portais">🎮 Jogar</a>
+        <button id="btn-music" class="chip" title="Ligar/desligar a música">♪ Música</button>
+        <button id="btn-voice" class="chip" title="Ligar/desligar a narração">🗣 Narração</button>
+        <button id="btn-labels" class="chip on" title="Mostrar/ocultar rótulos (L)">Rótulos</button>
+        <button id="btn-cinema" class="chip" title="Modo cinema: esconde a interface (H)">Cinema</button>
+        <button id="btn-full" class="chip" title="Tela cheia (F)">⛶</button>
+      </div>
+    </header>
+
+    <section id="card" class="ui">
+      <button id="card-min" class="card-min" title="Esconder o texto">–</button>
+      <div class="kicker" id="card-kicker"></div>
+      <h1 id="card-title"></h1>
+      <div id="card-body"></div>
+      <div id="explore-panel" hidden>
+        <div class="presets" id="presets"></div>
+        <div id="pick-info" class="pick-info">Clique na Terra para escolher um ponto.</div>
+        <div class="explore-actions">
+          <button id="btn-dig" class="chip" disabled>Cavar o túnel daqui</button>
+          <button id="btn-cut" class="chip on">Corte</button>
+          <button id="btn-cam" class="chip">Câmera: livre</button>
+        </div>
+      </div>
+      <div class="card-nav">
+        <button id="prev" class="nav-btn" aria-label="Anterior">←</button>
+        <span id="card-count"></span>
+        <button id="next" class="nav-btn primary">Próximo →</button>
+      </div>
+    </section>
+
+    <aside id="hud" class="ui" hidden>
+      <div class="hud-time">
+        <span>Tempo de queda</span>
+        <b id="h-time">00:00</b>
+        <small id="h-trip"></small>
+      </div>
+      <div class="hud-grid">
+        <div class="stat"><span>Velocidade</span><b id="h-speed">0</b><small>km/h</small></div>
+        <div class="stat"><span>Profundidade</span><b id="h-depth">0</b><small>km</small></div>
+        <div class="stat g"><span>Gravidade aqui</span><b id="h-g">9,8</b><small>m/s²</small></div>
+        <div class="stat"><span>Você sente</span><b class="float">flutuando</b><small>peso zero</small></div>
+      </div>
+      <div class="chart-block">
+        <span class="chart-title">Gravidade × profundidade</span>
+        <canvas id="ch-grav"></canvas>
+      </div>
+      <div class="chart-block" id="block-pos">
+        <span class="chart-title">Posição no túnel × tempo</span>
+        <canvas id="ch-pos"></canvas>
+      </div>
+      <div class="chart-block" id="block-ramp" hidden>
+        <span class="chart-title">O "balanço": a cápsula na pista em U</span>
+        <canvas id="ch-ramp"></canvas>
+      </div>
+      <div class="chart-block">
+        <span class="chart-title">Energia (altura ↔ movimento)</span>
+        <canvas id="ch-energy"></canvas>
+      </div>
+      <div id="extra-stat"></div>
+    </aside>
+
+    <div id="simbar" class="ui" hidden>
+      <button id="sim-play" class="chip" title="Pausar/continuar (espaço)">❚❚</button>
+      <button id="sim-reset" class="chip" title="Recomeçar o pulo (R)">↺</button>
+      <div class="seg" id="sim-speed"></div>
+      <div class="seg" id="sim-model"></div>
+    </div>
+
+    <div id="ride-hud" hidden>
+      <div class="reticle"></div>
+      <div class="ride-speed"><b id="r-speed">0</b><span>km/h</span></div>
+      <div class="ride-row">
+        <div><span>profundidade</span><b id="r-depth">0 km</b></div>
+        <div><span>gravidade</span><b id="r-g">9,8 m/s²</b></div>
+        <div><span>tempo</span><b id="r-time">00:00</b></div>
+      </div>
+      <div class="ride-float">você está flutuando — sem peso</div>
+    </div>
+
+    <!-- documentário -->
+    <div id="doc-title" hidden></div>
+    <div id="lower-third" class="ui" hidden></div>
+    <div id="subs"></div>
+    <div id="rec" class="ui" hidden><span class="rec-dot"></span>REC <span class="cam">CAM A</span> <span id="rec-tc">00:00:00:00</span></div>
+    <aside id="descent-hud" class="ui" hidden>
+      <div class="d-title">Descida · poço principal</div>
+      <div class="d-depth"><b id="d-depth">0</b><span>metros de profundidade</span></div>
+      <div class="hud-grid">
+        <div class="stat wide"><span>Rocha na parede</span><b id="d-rock" class="small">—</b></div>
+        <div class="stat"><span>Temperatura da rocha</span><b id="d-temp">22 °C</b></div>
+        <div class="stat"><span>Pressão na rocha</span><b id="d-press">1 atm</b></div>
+        <div class="stat"><span>Faltam até o outro lado</span><b id="d-left" class="small">12.742 km</b></div>
+        <div class="stat"><span>Já percorrido</span><b id="d-pct" class="small">0%</b></div>
+      </div>
+      <div class="d-track"><div id="d-bar"></div><span>superfície</span><span>outro lado do mundo</span></div>
+      <ul id="d-list"></ul>
+      <p class="d-note">Tempo acelerado. A gaiola real desce a ~12 m/s: levaria ~5 minutos até 3,9 km.</p>
+    </aside>
+
+    <div id="hint" class="ui">arraste para girar · role para zoom · ← → capítulos</div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
