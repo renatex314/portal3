@@ -234,4 +234,11 @@ export class Sfx {
     });
     this._noise(t, 0.8, 'bandpass', 500, 4000, 0.08, 2);
   }
+
+  toss() {
+    if (!this.ok) return;
+    const t = this.sound.ctx.currentTime;
+    this._noise(t, 0.25, 'bandpass', 500, 2200, 0.16, 1.4);
+    this._osc('sine', 260, 120, t, 0.15, 0.06);
+  }
 }

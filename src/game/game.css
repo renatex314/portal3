@@ -159,3 +159,14 @@ body.slow-low #slow-arc { stroke: #ff6a4a; filter: drop-shadow(0 0 3px #ff6a4a);
 #slow.low .bar i { background: linear-gradient(90deg, #ff4a3a, #ffb36a); }
 #slow.low.on { animation: slow-blink 0.5s steps(2) infinite; }
 @keyframes slow-blink { 50% { box-shadow: 0 0 18px rgba(255, 90, 60, 0.7); } }
+
+/* ---- zoom (segurar Z) */
+#zoom-ui {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.18s;
+  background: radial-gradient(circle at center, transparent 38%, rgba(0, 0, 0, 0.55) 72%, rgba(0, 0, 0, 0.85) 100%);
+}
+#zoom-ui b {
+  position: absolute; left: 50%; top: calc(50% + 42px); transform: translateX(-50%);
+  font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #cfe9ff; text-shadow: 0 1px 4px #000;
+}
+body.zoomed #zoom-ui { opacity: 1; }

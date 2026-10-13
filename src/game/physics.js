@@ -66,9 +66,10 @@ export class Physics {
   /** caixa do cenário. `kinematic`: porta/plataforma que se move (empurra o que estiver em cima) */
   addBox(box, kinematic = false) {
     if (!this.world) return;
-    const c = new THREE.Vector3().addVectors(box.min, box.max).multiplyScalar(0.5);
-    const h = new THREE.Vector3().subVectors(box.max, box.min).multiplyScalar(0.5);
+    const c = box.obb ? box.obb.c : new THREE.Vector3().addVectors(box.min, box.max).multiplyScalar(0.5);
+    const h = box.obb ? box.obb.half : new THREE.Vector3().subVectors(box.max, box.min).multiplyScalar(0.5);
     const desc = RAPIER.ColliderDesc.cuboid(h.x, h.y, h.z).setFriction(0.8);
+    if (box.obb) desc.setRotation(box.obb.q);
     let col;
     if (kinematic) {
       const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(c.x, c.y, c.z));
@@ -144,7 +145,7 @@ export class Physics {
    * Move o jogador o quanto der na direção `delta`, colidindo com o cenário e
    * com os objetos (e empurrando-os). Devolve as normais das superfícies tocadas.
    */
-  movePlayer(player, delta, up) {
+  movePlayer(player, delta, up, exclude = null) {
     const col = this.playerCol;
     if (!col) {
       player.pos.add(delta);
@@ -161,7 +162,7 @@ export class Physics {
     this.cc.computeColliderMovement(col, delta, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, (c) => {
       const e = this.ents.get(c.handle);
       if (!e) return true;
-      if (e.kind === 'static') return !(mouths.length && this.portals.passes(e.box, mouths, _min, _max));
+      if (e.kind === 'static') return e.box !== exclude && !(mouths.length && this.portals.passes(e.box, mouths, _min, _max));
       if (e.kind === 'dyn') return !e.prop.held && !e.prop.gone;
       return false;
     });

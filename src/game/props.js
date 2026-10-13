@@ -6,6 +6,7 @@ import * as THREE from 'three';
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _d = new THREE.Quaternion();
+const _m = new THREE.Matrix4();
 const MAX_FALL = 40;
 
 export class Prop {
@@ -19,10 +20,15 @@ export class Prop {
     this.held = false;
     this.gone = false;
     this.cooldown = 0;
-    this.holdTarget = null; // ponto na frente da câmera enquanto segurado
-    this.holdQuat = null;
+    this.holdLocal = null; // ponto na frente da câmera enquanto segurado (lado do jogador)
+    this.holdQuatLocal = null;
+    this.holdTarget = new THREE.Vector3(); // o mesmo ponto, do lado em que o objeto está
+    this.holdQuat = new THREE.Quaternion();
     this.remote = null; // posição vinda da rede (outra pessoa segurando)
     this.meshOffset = new THREE.Vector3();
+    // segurado: leva coordenadas do lado do jogador para o lado em que o objeto
+    // está (muda quando um dos dois atravessa um portal sem o outro)
+    this.space = new THREE.Matrix4();
   }
 
   /** chamado pelo motor antes de cada passo */
@@ -40,13 +46,14 @@ export class Prop {
       b.setAngvel({ x: 0, y: 0, z: 0 }, true);
       return;
     }
-    if (this.held && this.holdTarget) {
+    if (this.held && this.holdLocal) {
       // segurado: vai até o ponto na frente da câmera e gira para ficar "de frente"
+      this.updateHold();
       const t = b.translation();
-      _v.set(this.holdTarget.x - t.x, this.holdTarget.y - t.y, this.holdTarget.z - t.z).multiplyScalar(14);
-      if (_v.length() > 14) _v.setLength(14);
+      _v.set(this.holdTarget.x - t.x, this.holdTarget.y - t.y, this.holdTarget.z - t.z).multiplyScalar(16);
+      if (_v.length() > 20) _v.setLength(20);
       b.setLinvel(_v, true);
-      if (this.holdQuat) {
+      {
         const r = b.rotation();
         _q.set(r.x, r.y, r.z, r.w);
         _d.copy(this.holdQuat).multiply(_q.invert());
@@ -73,6 +80,7 @@ export class Prop {
     if (!P) P = this.portals.stuckIn(this.pos, _v.copy(this.pos).subScalar(0.3), this.pos.clone().addScalar(0.3));
     if (!P) return;
     const { Q } = this.physics.carry(this, P);
+    if (this.held) this.space.premultiply(this.portals.transform(P, P.partner));
     const t2 = this.body.translation();
     this.pos.set(t2.x, t2.y, t2.z);
     if (!this.held) {
@@ -83,6 +91,12 @@ export class Prop {
     }
     this.cooldown = 0.15;
     this.onPortal?.(P);
+  }
+
+  /** alvo de quem segura levado para o lado do portal em que o objeto está */
+  updateHold() {
+    this.holdTarget.copy(this.holdLocal).applyMatrix4(this.space);
+    this.holdQuat.setFromRotationMatrix(_m.extractRotation(this.space)).multiply(this.holdQuatLocal);
   }
 
   /** copia o estado do corpo para os campos e para o modelo */

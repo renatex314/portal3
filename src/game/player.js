@@ -116,12 +116,30 @@ export class Player {
 
     const prevCenter = this.pos.clone();
     const gUp = g.lengthSq() > 0.01 ? g.clone().normalize().negate() : up;
-    // em cima de uma plataforma/porta que andou: o passo dela entra no movimento
-    const move = this.vel.clone().multiplyScalar(dt);
-    const carry = world.doors.find((d) => d.box === this.ground)?.delta;
-    if (carry && carry.y >= 0) move.add(carry);
-    const res = world.physics.movePlayer(this, move, gUp);
+    // em cima de uma plataforma/porta que andou: vai junto com ela (em qualquer
+    // direção, até diagonal e rápida) — o colisor dela ainda está no lugar
+    // antigo, então ele fica de fora e o jogador é assentado no topo novo
+    const plat = this.upSign > 0 ? world.doors.find((d) => d.box === this.ground) : null;
+    let onPlat = null;
+    // (mesmo parada: o controlador do Rapier trava andando em cima de corpo cinemático)
+    if (plat && this.vel.dot(gUp) <= 0.05) {
+      this.pos.add(plat.delta);
+      onPlat = plat;
+    }
+    const res = world.physics.movePlayer(this, this.vel.clone().multiplyScalar(dt), gUp, onPlat?.box);
     this.ground = res.ground;
+    if (onPlat) {
+      const b = onPlat.box;
+      const over = this.pos.x > b.min.x - this.half.x + 0.05 && this.pos.x < b.max.x + this.half.x - 0.05 && this.pos.z > b.min.z - this.half.z + 0.05 && this.pos.z < b.max.z + this.half.z - 0.05;
+      if (over && this.pos.y - this.half.y > b.max.y - 0.4) {
+        this.pos.y = b.max.y + this.half.y + 0.035; // folga maior que a margem do controlador (0,02)
+        if (this.vel.y < 0) this.vel.y = 0;
+        res.normals.push(gUp.clone());
+        this.ground = b;
+      }
+    }
+    // saiu de cima de uma plataforma em movimento: leva a velocidade dela
+    if (plat && this.ground !== plat.box && dt > 0) this.vel.addScaledVector(plat.delta, 1 / dt);
     // o que bateu tira a parte da velocidade que ia contra a superfície
     let ground = false;
     for (const n of res.normals) {
@@ -174,15 +192,17 @@ export class Player {
     const sideNow = this.vel.clone().addScaledVector(down, -vDown);
     if (sideNow.length() > 6) return;
     let best = null;
-    let bestD = 2.6;
+    let bestD = Infinity;
     for (const P of portals.list) {
       if (!portals.isLinked(P) || P.normal.dot(down) > -0.7) continue;
       const rel = this.pos.clone().sub(P.center);
       const h = rel.dot(P.normal);
-      if (h < 0.3 || h > 40) continue;
+      if (h < 0.3 || h > 60) continue;
       const lat = rel.addScaledVector(P.normal, -h);
       const d = lat.length();
-      if (d < bestD) {
+      // quanto mais alto, mais longe o funil alcança (há tempo para corrigir)
+      const reach = Math.min(6, Math.max(2.6, 1.5 + h * 0.1));
+      if (d < reach && d < bestD) {
         bestD = d;
         best = { lat, h };
       }

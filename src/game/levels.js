@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { BIG_MAP } from './bigmap.js';
 import { CLASSIC } from './classic.js';
+import { HARD } from './hard.js';
 
 const G = 9.8;
 const DIRS = {
@@ -361,6 +362,8 @@ export const LEVELS = [
 
 // bateria clássica: os testes do gênero refeitos no laboratório
 LEVELS.push(...CLASSIC);
+// desafios hardcore: salas enormes, plataformas diagonais, pistões
+LEVELS.push(...HARD);
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);
 

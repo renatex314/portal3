@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { floorButton } from './models.js';
 
 const TILE = 2; // metros por repetição de textura
+const _path = new THREE.Vector3();
 
 function canvasTex(size, draw, srgb = true) {
   const cv = document.createElement('canvas');
@@ -248,6 +249,42 @@ function worldBoxGeo(min, max) {
   return g;
 }
 
+/** raio contra caixa girada: leva o raio para o espaço da caixa e testa como caixa alinhada */
+function rayObb(origin, dir, obb, maxDist) {
+  const o = origin.clone().sub(obb.c).applyQuaternion(obb.qi);
+  const d = dir.clone().applyQuaternion(obb.qi);
+  let tmin = -Infinity;
+  let tmax = Infinity;
+  let axis = -1;
+  let sign = 0;
+  for (let i = 0; i < 3; i++) {
+    const oi = o.getComponent(i);
+    const di = d.getComponent(i);
+    const h = obb.half.getComponent(i);
+    if (Math.abs(di) < 1e-9) {
+      if (oi < -h || oi > h) return null;
+      continue;
+    }
+    let t1 = (-h - oi) / di;
+    let t2 = (h - oi) / di;
+    let s = -1;
+    if (t1 > t2) {
+      [t1, t2] = [t2, t1];
+      s = 1;
+    }
+    if (t1 > tmin) {
+      tmin = t1;
+      axis = i;
+      sign = s;
+    }
+    tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return null;
+  }
+  if (tmin < 0 || tmin > maxDist || axis < 0) return null;
+  const normal = new THREE.Vector3().setComponent(axis, sign).applyQuaternion(obb.q);
+  return { dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal };
+}
+
 export function aabbOverlap(aMin, aMax, bMin, bMax, eps = 0) {
   return aMin.x < bMax.x - eps && aMax.x > bMin.x + eps && aMin.y < bMax.y - eps && aMax.y > bMin.y + eps && aMin.z < bMax.z - eps && aMax.z > bMin.z + eps;
 }
@@ -350,6 +387,7 @@ export class World {
       speed: opts.speed ?? 1.4,
       mesh: b.mesh,
       delta: new THREE.Vector3(),
+      offset: new THREE.Vector3(),
     };
     this.doors.push(d);
     return d;
@@ -369,6 +407,71 @@ export class World {
   }
 
   /**
+   * Plataforma que vai e volta sozinha ao longo do vetor `to` (pode ser
+   * diagonal), com `speed` m/s na ida e `back` m/s na volta, parando `waits`
+   * segundos em cada ponta [início, fim]. `phase` (0..1) desencontra várias.
+   * `crush`: esmaga quem ficar embaixo/no caminho (pistão).
+   */
+  mover(id, x0, y0, z0, x1, y1, z1, { to, speed = 4, back, waits = [0.6, 0.6], always = true, phase = 0, crush = false, mat = 'metal', marks = true } = {}) {
+    const d = this.door(id, x0, y0, z0, x1, y1, z1, { mat });
+    d.path = new THREE.Vector3(...to);
+    const L = d.path.length();
+    d.speed = speed / L;
+    d.speedBack = (back ?? speed) / L;
+    d.loop = 1;
+    d.waits = waits;
+    d.always = always;
+    d.crush = crush;
+    d.mover = true;
+    d.open = phase;
+    d.target = 1;
+    d.wait = waits[1];
+    if (marks) {
+      const top = Math.max(y0, y1);
+      const [ax, bx, az, bz] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(z0, z1), Math.max(z0, z1)];
+      const color = crush ? 0xff3a2a : 0xffcc33;
+      for (const [sx0, sz0, sx1, sz1] of [
+        [ax + 0.05, az + 0.05, bx - 0.05, az + 0.15],
+        [ax + 0.05, bz - 0.15, bx - 0.05, bz - 0.05],
+        [ax + 0.05, az + 0.05, ax + 0.15, bz - 0.05],
+        [bx - 0.15, az + 0.05, bx - 0.05, bz - 0.05],
+      ])
+        this.strip(sx0, crush ? Math.min(y0, y1) - 0.02 : top + 0.005, sz0, sx1, crush ? Math.min(y0, y1) - 0.005 : top + 0.02, sz1, color, 1.6).userData.follow = d;
+    }
+    return d;
+  }
+
+  /**
+   * Rampa: caixa girada (euler `rot` em radianos), de metal — não aceita
+   * portal. O motor de física e os raios (tiros, bolas de energia) usam a
+   * caixa girada de verdade.
+   */
+  ramp(cx, cy, cz, sx, sy, sz, rot, matName = 'metal') {
+    const M = materials()[matName];
+    const half = new THREE.Vector3(sx / 2, sy / 2, sz / 2);
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot));
+    const c = new THREE.Vector3(cx, cy, cz);
+    const mesh = new THREE.Mesh(worldBoxGeo(half.clone().negate(), half), M.mat);
+    mesh.position.copy(c);
+    mesh.quaternion.copy(q);
+    this.group.add(mesh);
+    // caixa alinhada que envolve a rampa (para os testes rápidos)
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const x of [-1, 1])
+      for (const y of [-1, 1])
+        for (const z of [-1, 1]) {
+          const p = new THREE.Vector3(x * half.x, y * half.y, z * half.z).applyQuaternion(q).add(c);
+          min.min(p);
+          max.max(p);
+        }
+    const b = { min, max, mat: matName, portalable: false, mesh, solid: true, obb: { c, q, qi: q.clone().invert(), half } };
+    this.solids.push(b);
+    this.physics?.addBox(b);
+    return b;
+  }
+
+  /**
    * Grade de desintegração: um plano de luz que some com os portais de quem
    * passa por ela e desintegra objetos (que voltam ao dispensador). Também
    * barra os tiros da arma de portais.
@@ -377,10 +480,11 @@ export class World {
     const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
     const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
     const size = new THREE.Vector3().subVectors(max, min);
-    const thin = size.x < size.z ? 'x' : 'z';
+    const thin = size.y < Math.min(size.x, size.z) ? 'y' : size.x < size.z ? 'x' : 'z';
     const w = thin === 'x' ? size.z : size.x;
+    const hgt = thin === 'y' ? size.z : size.y;
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uSize: { value: new THREE.Vector2(w, size.y) } },
+      uniforms: { uTime: { value: 0 }, uSize: { value: new THREE.Vector2(w, hgt) } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: /* glsl */ `
         uniform float uTime; uniform vec2 uSize; varying vec2 vUv;
@@ -400,22 +504,32 @@ export class World {
       side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
     });
-    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, size.y), mat);
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, hgt), mat);
     plane.position.addVectors(min, max).multiplyScalar(0.5);
     if (thin === 'x') plane.rotation.y = Math.PI / 2;
+    if (thin === 'y') plane.rotation.x = -Math.PI / 2;
     this.group.add(plane);
     // emissores nas laterais
     const emit = materials().metal.mat;
-    for (const s of [-1, 1]) {
+    for (const s of thin === 'y' ? [] : [-1, 1]) {
       const post = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.25 : 0.12, size.y, thin === 'x' ? 0.12 : 0.25), emit);
       post.position.copy(plane.position);
       post.position[thin === 'x' ? 'z' : 'x'] += (s * w) / 2;
       this.group.add(post);
     }
     this.anim.push((t) => (mat.uniforms.uTime.value = t));
-    const f = { min: min.clone().sub(new THREE.Vector3(thin === 'x' ? 0.1 : 0, 0, thin === 'z' ? 0.1 : 0)), max: max.clone().add(new THREE.Vector3(thin === 'x' ? 0.1 : 0, 0, thin === 'z' ? 0.1 : 0)), axis: thin };
+    const pad = new THREE.Vector3(thin === 'x' ? 0.1 : 0, thin === 'y' ? 0.1 : 0, thin === 'z' ? 0.1 : 0);
+    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin };
     this.fizzlers.push(f);
     return f;
+  }
+
+  /** o segmento a→b passa por alguma grade? (quedas rápidas atravessam a grade fina num só quadro) */
+  segmentFizzler(a, b) {
+    const d = new THREE.Vector3().subVectors(b, a);
+    const len = d.length();
+    if (len < 1e-6) return this.fizzlers.find((f) => a.x > f.min.x && a.x < f.max.x && a.y > f.min.y && a.y < f.max.y && a.z > f.min.z && a.z < f.max.z) ?? null;
+    return this.rayFizzler(a, d.divideScalar(len), len) ? true : null;
   }
 
   /** o raio cruza uma grade de desintegração antes de `maxDist`? */
@@ -631,6 +745,11 @@ export class World {
     let best = null;
     for (const b of this.solids) {
       if (filter && !filter(b)) continue;
+      if (b.obb) {
+        const h = rayObb(origin, dir, b.obb, maxDist);
+        if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+        continue;
+      }
       let tmin = -Infinity;
       let tmax = Infinity;
       let axis = -1;
@@ -679,6 +798,11 @@ export class World {
   pointInSolid(p, except = null) {
     for (const b of this.solids) {
       if (b === except) continue;
+      if (b.obb) {
+        const l = p.clone().sub(b.obb.c).applyQuaternion(b.obb.qi);
+        if (Math.abs(l.x) < b.obb.half.x && Math.abs(l.y) < b.obb.half.y && Math.abs(l.z) < b.obb.half.z) return b;
+        continue;
+      }
       if (p.x > b.min.x && p.x < b.max.x && p.y > b.min.y && p.y < b.max.y && p.z > b.min.z && p.z < b.max.z) return b;
     }
     return null;
@@ -690,23 +814,25 @@ export class World {
     magma.offset.set(t * 0.02, t * 0.013);
     materials().magma.mat.emissiveIntensity = 1.4 + Math.sin(t * 1.7) * 0.25;
     for (const d of this.doors) {
-      const before = d.open * d.dist;
-      d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * d.speed);
-      const off = d.open * d.dist;
-      const a = d.axis;
-      d.delta.set(0, 0, 0)[a] = off - before;
-      d.box.min[a] = d.baseMin[a] + off;
-      d.box.max[a] = d.baseMax[a] + off;
-      d.mesh.position[a] = off;
-      if (d.stripe) d.stripe.position.y = d.baseMin.y + 0.4 + off;
+      // caminho: vetor qualquer (plataformas diagonais) ou um eixo × distância (portas)
+      const path = d.path ?? _path.set(0, 0, 0);
+      if (!d.path) path[d.axis] = d.dist;
+      const before = d.open;
+      const sp = d.target < d.open && d.speedBack ? d.speedBack : d.speed;
+      d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * sp);
+      d.delta.copy(path).multiplyScalar(d.open - before);
+      d.offset.copy(path).multiplyScalar(d.open);
+      d.box.min.copy(d.baseMin).add(d.offset);
+      d.box.max.copy(d.baseMax).add(d.offset);
+      d.mesh.position.copy(d.offset);
+      if (d.stripe) d.stripe.position.y = d.baseMin.y + 0.4 + d.offset.y;
       this.physics?.moveBox(d.box);
     }
     for (const c of this.group.children) {
       const f = c.userData.follow;
       if (!f) continue;
       c.userData.base ??= c.position.clone();
-      c.position.copy(c.userData.base);
-      c.position[f.axis] += f.open * f.dist;
+      c.position.copy(c.userData.base).add(f.offset);
     }
   }
 }

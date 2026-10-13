@@ -293,6 +293,8 @@ let sparkT = 9;
 
 // ------------------------------------------------------------------ estado
 const input = { f: false, b: false, l: false, r: false, jump: false };
+// zoom: segure Z; a rodinha muda o aumento enquanto segura
+const ZOOM = { on: false, level: 3, k: 1 };
 let level = null; // definição
 let data = null; // dados devolvidos por build()
 let levelIdx = 0;
@@ -322,6 +324,7 @@ let gemsMine = 0;
 let gunMode = 'both'; // 'none' | 'blue' | 'both' (a arma é achada/melhorada em algumas câmaras)
 let cycle = null; // portal da fase que troca de lugar sozinho
 let inFizzler = false;
+const lastPlayerPos = new THREE.Vector3();
 const gemOwners = new Map(); // nome → cristais (multiplayer)
 let spottedOnce = false;
 const gravityAt = (p) => gravityFn(p, grav);
@@ -336,6 +339,7 @@ const progress = (() => {
 if (new URLSearchParams(location.search).has('todas')) progress.unlocked = LEVELS.length;
 progress.unlocked = Math.max(progress.unlocked || 1, 1);
 progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
 const saveProgress = () => {
   try {
@@ -343,7 +347,7 @@ const saveProgress = () => {
   } catch {}
 };
 
-const levelLabel = (L) => (L.free ? 'Mapa livre' : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`);
+const levelLabel = (L) => (L.free ? 'Mapa livre' : L.series === 'hard' ? `Desafio ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`);
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -404,6 +408,7 @@ function loadLevel(i, silent = false) {
   cycle = data.cycle ? { ...data.cycle, i: 0, t: data.cycle.every } : null;
   if (cycle) portals.placeFixed(cycle.which, ...cycleSpot(0));
   inFizzler = false;
+  lastPlayerPos.copy(player.pos);
   toggleSlowmo(false);
   SLOW.left = SLOW.max;
   for (const [cx, cy, cz] of data.crystals ?? []) {
@@ -545,7 +550,7 @@ function rayCube(origin, dir, maxD) {
 function use() {
   if (!running || paused) return;
   if (held) {
-    release(true);
+    release(); // E só solta; o botão esquerdo é que arremessa
     return;
   }
   const origin = camera.getWorldPosition(new THREE.Vector3());
@@ -563,6 +568,8 @@ function use() {
   if (wall) return;
   held = hit.c;
   held.held = true;
+  held.farTime = 0;
+  held.space.identity(); // segurado do mesmo lado do jogador
   // segura mantendo o giro relativo ao olhar (cubo no múltiplo de 90° mais perto;
   // torreta virada para a frente, como quem aponta)
   const yawQ = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw);
@@ -575,14 +582,44 @@ function use() {
   sfx.pick();
 }
 
-/** solta o objeto segurado (`toss`: arremessa na direção do olhar) */
+/** solta o objeto segurado; `toss`: arremessa na direção da mira */
 function release(toss = false) {
   if (!held) return;
+  const c = held;
   held.held = false;
-  held.holdTarget = null;
-  if (toss) held.throw(player.vel.clone().multiplyScalar(0.8).addScaledVector(camForward(), 5.5));
+  held.holdLocal = null;
   held = null;
-  sfx.drop();
+  if (toss) {
+    // a mira e a velocidade do jogador levadas para o lado em que o objeto está
+    const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(c.space));
+    const v = player.vel.clone().multiplyScalar(0.8).addScaledVector(camForward(), 7).applyQuaternion(rot);
+    c.throw(v);
+    sfx.toss();
+  } else sfx.drop();
+}
+
+/**
+ * Até onde o objeto segurado vai à frente da mira (no máximo 1,7 m). O raio
+ * atravessa portais: se a mira passa por um, a distância continua do outro
+ * lado — o ponto pode ficar "atrás" da parede do portal, e o objeto passa por ele.
+ */
+function holdDistance(eye, fwd) {
+  const MAX = 1.7;
+  const o = eye.clone();
+  const d = fwd.clone();
+  let dist = 0;
+  for (let k = 0; k < 3; k++) {
+    const rest = MAX - dist;
+    const wall = world.raycast(o, d, rest);
+    const P = portals.crossing(o, o.clone().addScaledVector(d, wall ? wall.dist + 0.01 : rest));
+    if (!P) return wall ? Math.max(dist + wall.dist - 0.45, 0.5) : MAX;
+    const tc = P.center.clone().sub(o).dot(P.normal) / d.dot(P.normal);
+    dist += tc;
+    const M = portals.transform(P, P.partner);
+    o.addScaledVector(d, tc + 0.01).applyMatrix4(M);
+    d.transformDirection(M);
+  }
+  return MAX;
 }
 
 function turretDown(idx, byMe, pos = null) {
@@ -638,7 +675,7 @@ function complete(final) {
   const t = levelTime;
   const prev = progress.best[level.id];
   if (!prev || t < prev) progress.best[level.id] = t;
-  if (level.series === 'classic') progress.classic = Math.max(progress.classic, level.n + 2);
+  if (level.series) progress[level.series] = Math.max(progress[level.series], level.n + 2);
   else progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
   saveProgress();
   document.exitPointerLock?.();
@@ -695,28 +732,42 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyE') use();
   if (e.code === 'KeyR') loadLevel(levelIdx);
-  if (e.code === 'KeyQ') shoot('blue');
+  if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
+  if (e.code === 'KeyZ') ZOOM.on = true;
 });
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
+  if (e.code === 'KeyZ') ZOOM.on = false;
   if (e.code === 'Space') input.jump = false;
 });
 document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX, e.movementY);
+  // com zoom, a mira fica mais fina (proporcional ao campo de visão)
+  const s = camera.fov / 75;
+  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX * s, e.movementY * s);
 });
 canvas.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) {
     if (running && !completed) lock();
     return;
   }
-  if (e.button === 0) shoot('blue');
-  if (e.button === 2) shoot('orange');
+  // segurando um objeto: o botão esquerdo arremessa (e não sai portal)
+  if (e.button === 0) held ? release(true) : shoot('blue');
+  if (e.button === 2 && !held) shoot('orange');
   if (e.button === 1) {
     e.preventDefault();
     toggleSlowmo();
   }
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
+window.addEventListener(
+  'wheel',
+  (e) => {
+    if (!ZOOM.on || !running || paused) return;
+    e.preventDefault();
+    ZOOM.level = clamp(ZOOM.level * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1.5, 8);
+  },
+  { passive: false },
+);
 // botão do meio não abre a rolagem automática do navegador
 window.addEventListener('auxclick', (e) => e.button === 1 && e.preventDefault());
 
@@ -815,8 +866,9 @@ function renderMenu() {
   const grid = $('levels');
   grid.innerHTML = '';
   const groups = [
-    ['Laboratório Antípoda', 'as seis câmaras do documentário', (L) => !L.free && L.series !== 'classic'],
+    ['Laboratório Antípoda', 'as seis câmaras do documentário', (L) => !L.free && !L.series],
     ['Bateria clássica', 'os testes clássicos do gênero, refeitos aqui embaixo', (L) => L.series === 'classic'],
+    ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
     ['Exploração', '', (L) => L.free],
   ];
   for (const [title, sub, pick] of groups) {
@@ -826,7 +878,7 @@ function renderMenu() {
     grid.appendChild(h);
     LEVELS.forEach((L, i) => {
       if (!pick(L)) return;
-      const locked = !L.free && !mp() && (L.series === 'classic' ? L.n + 1 > progress.classic : L.id > progress.unlocked);
+      const locked = !L.free && !mp() && (L.series ? L.n + 1 > progress[L.series] : L.id > progress.unlocked);
       const b = document.createElement('button');
       b.className = `lvl${locked ? ' locked' : ''}`;
       b.innerHTML = `<span class="n">${L.free ? 'MAPA LIVRE' : L.code ?? String(L.id).padStart(2, '0')}</span><b>${L.name}</b><small>${L.who}</small>${
@@ -989,10 +1041,27 @@ function update(dt, t) {
     player.vel.set(0, 0, 0);
     if (assist.t >= 1) assist = null;
   } else {
-    player.update(dt, input, world, portals, gravityAt, () => {
+    player.update(dt, input, world, portals, gravityAt, (P) => {
       sfx.whoosh();
-      if (held) held.place(player.eye().addScaledVector(player.forward(), 1.2), null, player.vel);
+      // o jogador mudou de lado: o objeto segurado continua onde está e passa a
+      // seguir a mira "através" do portal (até atravessar também)
+      if (held) held.space.multiply(portals.transform(P, P.partner).invert());
     });
+  }
+  // porta/plataforma em movimento entrou no jogador: pistão esmaga; o resto empurra
+  for (const d of world.doors) {
+    if (d.delta.lengthSq() === 0 || player.ground === d.box) continue;
+    const b = d.box;
+    const pen = ['x', 'y', 'z'].map((a) => Math.min(player.pos[a] + player.half[a] - b.min[a], b.max[a] - (player.pos[a] - player.half[a])));
+    if (pen.some((v) => v <= 0.06)) continue;
+    if (d.crush) {
+      die('esmagado');
+      break;
+    }
+    const i = pen.indexOf(Math.min(...pen));
+    const a = 'xyz'[i];
+    const center = (b.min[a] + b.max[a]) / 2;
+    player.pos[a] += (player.pos[a] > center ? 1 : -1) * (pen[i] + 0.01);
   }
   // aterrissagem e passos
   if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) sfx.land(Math.abs(lastVy));
@@ -1011,9 +1080,9 @@ function update(dt, t) {
   const props = [...cubes, ...turrets];
   if (held) {
     const eye = player.eye();
-    const hit = world.raycast(eye, fwd, 1.7);
-    held.holdTarget = eye.clone().addScaledVector(fwd, hit ? Math.max(hit.dist - 0.45, 0.5) : 1.7);
-    held.holdQuat = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw).multiply(held.holdBase);
+    // alvo na frente da mira (do lado do jogador; o objeto converte para o lado em que estiver)
+    held.holdLocal = eye.clone().addScaledVector(fwd, holdDistance(eye, fwd));
+    held.holdQuatLocal = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw).multiply(held.holdBase);
   }
   physics.step(
     dt,
@@ -1021,7 +1090,12 @@ function update(dt, t) {
     (p) => p.post(gravityAt),
   );
   for (const c of props) c.sync();
-  if (held && held.pos.distanceTo(held.holdTarget) > 2.6) release();
+  if (held) {
+    // longe do alvo por um tempo = preso em algo: solta (atrasado num giro rápido, não)
+    held.updateHold();
+    held.farTime = held.pos.distanceTo(held.holdTarget) > 2.6 ? (held.farTime ?? 0) + dt : 0;
+    if (held.farTime > 0.4) release();
+  }
   const touches = (c, b) => {
     tmpMin.copy(c.pos).sub(c.half);
     tmpMax.copy(c.pos).add(c.half);
@@ -1081,7 +1155,7 @@ function update(dt, t) {
         d.wait -= dt;
         if (d.wait <= 0) {
           d.target = 1 - d.target;
-          d.wait = d.loop;
+          d.wait = d.waits ? d.waits[d.target] : d.loop;
         }
       }
       continue;
@@ -1095,7 +1169,8 @@ function update(dt, t) {
   }
 
   // ---- grade de desintegração: passar por ela some com os seus portais
-  const nowIn = world.fizzlers.some((f) => inside(player.pos, f.min, f.max));
+  const nowIn = !!world.segmentFizzler(lastPlayerPos, player.pos);
+  lastPlayerPos.copy(player.pos);
   if (nowIn && !inFizzler) {
     if (portals.fizzle()) {
       sfx.fizzle();
@@ -1259,7 +1334,7 @@ function update(dt, t) {
   body.group.rotation.set(0, player.yaw + Math.PI, player.upSign < 0 ? Math.PI : 0);
 
   // ---- arma, rastro, faíscas
-  gun.visible = gunMode !== 'none';
+  gun.visible = gunMode !== 'none' && ZOOM.k < 1.3;
   recoil = Math.max(0, recoil - dt * 6);
   const sway = Math.sin(player.bob) * 0.012;
   gun.position.set(0.21 + sway, -0.19 + Math.abs(sway) * 0.6 + recoil * 0.015, -0.44 + recoil * 0.06);
@@ -1278,7 +1353,13 @@ function update(dt, t) {
 
   // ---- câmera
   const speed = player.vel.length();
-  camera.fov = THREE.MathUtils.lerp(camera.fov, 75 + clamp((speed - 8) / 22, 0, 1) * 16 - (SLOW.on ? 7 : 0), 1 - Math.exp(-dt * (SLOW.on ? 10 : 4)));
+  // zoom com o tempo de verdade (o lento não deixa a lente lenta)
+  ZOOM.k += ((ZOOM.on ? ZOOM.level : 1) - ZOOM.k) * (1 - Math.exp(-realDt * 14));
+  const baseFov = 75 + clamp((speed - 8) / 22, 0, 1) * 16 - (SLOW.on ? 7 : 0);
+  ZOOM.fov = THREE.MathUtils.lerp(ZOOM.fov ?? 75, baseFov, 1 - Math.exp(-dt * (SLOW.on ? 10 : 4)));
+  camera.fov = ZOOM.fov / ZOOM.k;
+  document.body.classList.toggle('zoomed', ZOOM.k > 1.15);
+  $('zoom-v').textContent = `${ZOOM.k.toFixed(1).replace('.', ',')}×`;
   camera.updateProjectionMatrix();
   player.applyCamera(dt, 0);
   // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
@@ -1290,11 +1371,13 @@ function update(dt, t) {
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
   $('use-hint').hidden = !(look && !held) && !held;
-  $('use-hint').textContent = held ? 'E — soltar a amostra' : 'E — pegar a amostra';
+  $('use-hint').textContent = held ? 'E — soltar · botão esquerdo — arremessar' : 'E — pegar';
 }
 
+let realDt = 1 / 60;
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  realDt = dt;
   const t = clock.elapsedTime;
   if (running && level) {
     netTick(dt);

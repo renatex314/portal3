@@ -111,9 +111,22 @@ desintegração, dispensador de amostras, bola de energia com receptor, platafor
 | C10 Torretas | Marquinho | amostras como escudo, portal embaixo, empurrão |
 | C11 A Amostra Rosa | Dona Cida | levar a amostra rosa até a fornalha |
 
+**Desafios hardcore** — 5 salas enormes (até ~190 m) para quem quer sofrer: plataformas que voam na
+diagonal com paradas de meio segundo nas pontas, pistões que esmagam (inclusive sobre rampas), rampas
+inclinadas, chuva de bolas de energia, torretas e grades de desintegração horizontais que apagam os
+portais no meio de uma queda (é preciso abri-los no ar). Feitas para o tempo lento.
+
+| Desafio | Personagem | O que tem |
+|---------|------------|-----------|
+| H01 Pistões Diagonais | Bigode | sem arma: quatro plataformas diagonais e uma rampa com pistões |
+| H02 Esmagadores | Rodrigo | seis pistões fora de sincronia, chuva de bolas de energia, ponte |
+| H03 Queda Livre | Seu Tião | queda de 50 m: a grade apaga os portais, abra os dois no ar e voe para o túnel |
+| H04 Rampas e Torretas | Marquinho | terraços ligados por rampas sobre rocha fundida, torretas, plataforma final |
+| H05 Inferno | Dona Cida | bola de energia liga as plataformas, pistões, elevador e mergulho com grade |
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
-botão do meio tempo lento, `Espaço` pula, `E` pega/arremessa (cubo ou torreta) ou desliga torreta por
-trás, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
+botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
+segurando um objeto arremessa, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
 Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
 Original: sem nomes, marcas ou arquivos de outros jogos.
@@ -173,7 +186,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

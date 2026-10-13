@@ -402,21 +402,31 @@ export const CLASSIC = [
     build(w) {
       room(w, -8, 8, -24, 6, 8, { n: false, w: 'white', e: 'white', s: 'metal', ceil: 'white' });
       northWallWithExit(w, -8, 8, 8, -24, null);
-      // abrigos baixos
+      // antessala: parede com janela de vidro (dá para ver o salão; as torretas
+      // não enxergam através) e a passagem deslocada para a direita, fora da mira delas
+      w.box(-8, -1, -1, -6, 8, 0, 'metal');
+      w.box(-6, -1, -1, 2, 1, 0, 'metal');
+      w.box(-6, 1, -1, 2, 2.6, 0, 'glass');
+      w.box(-6, 2.6, -1, 2, 8, 0, 'metal');
+      w.box(2, -1, -1, 5, 8, 0, 'metal');
+      w.box(5, 3, -1, 8, 8, 0, 'metal');
+      // anteparo logo depois da passagem (entrada em L): de dentro da antessala não se vê o salão
+      w.box(3.5, 0, -3.4, 8, 2.6, -3, 'metal');
+      // pilares altos para se esconder no caminho
       for (const [x, z] of [
-        [-5, -4],
-        [3, -7],
-        [-2, -11],
-        [5, -14],
+        [5.5, -6.5],
+        [-1, -7.5],
+        [4, -11],
+        [-4.5, -13],
       ])
-        w.box(x - 1, 0, z - 0.4, x + 1, 1.2, z + 0.4, 'metal');
+        w.box(x - 0.7, 0, z - 0.7, x + 0.7, 2.6, z + 0.7, 'metal');
       sign(w, 7.97, 3, 3, -Math.PI / 2, 'C10', 'TORRETAS', 'mira laser · escudo · queda');
-      lights(w, [[0, 2], [0, -9], [0, -19]], 7.5, 50);
+      lights(w, [[0, 3], [0, -9], [0, -19]], 7.5, 50);
       return {
         spawn: [0, 0, 4, 0],
         cubes: [
           [-5, 0, 2],
-          [5, 0, 2],
+          [3, 0, 2.5],
         ],
         turrets: [
           [-4, 0, -18, 0],
@@ -424,7 +434,7 @@ export const CLASSIC = [
           [4, 0, -18, 0],
         ],
         intro: [
-          ['Marquinho', 'Agora é comigo. Três torretas de segurança guardando a saída.'],
+          ['Marquinho', 'Agora é comigo. Três torretas de segurança guardando a saída. Olha pela janela antes de entrar.'],
           ['Marquinho', 'Amostra na frente vira escudo. Portal embaixo delas, elas caem. Empurrão por trás, elas tombam.'],
         ],
       };
