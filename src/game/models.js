@@ -242,9 +242,17 @@ function cubeMaterials() {
 }
 
 /** cubo de amostra no estilo dos cubos de teste: cantos reforçados e janela acesa */
-export function sampleCube() {
-  const { face, corner } = cubeMaterials();
-  const m = new THREE.Mesh(new RoundedBoxGeometry(0.58, 0.58, 0.58, 3, 0.035), face.clone());
+export function sampleCube(opts = {}) {
+  const { face, corner: baseCorner } = cubeMaterials();
+  const mat = face.clone();
+  let corner = baseCorner;
+  // amostra especial (quartzo rosa): anel e cantos rosados
+  if (opts.special) {
+    mat.emissive.set(0xff6ab4);
+    mat.color.set(0xe6d6de);
+    corner = plastic(0xf3b8d4, { roughness: 0.35 });
+  }
+  const m = new THREE.Mesh(new RoundedBoxGeometry(0.58, 0.58, 0.58, 3, 0.035), mat);
   m.castShadow = true;
   const cg = new RoundedBoxGeometry(0.19, 0.19, 0.19, 3, 0.045);
   for (const x of [-1, 1])

@@ -17,7 +17,7 @@ import { WebSocketServer } from 'ws';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
 const PORT = Number(process.env.PORT) || 5181;
 const MAX_PER_ROOM = 4;
-const MAX_LEVEL = 6; // 6 câmaras + mapa livre (índices 0..6)
+const MAX_LEVEL = 40; // câmaras + bateria clássica + mapa livre (o cliente confere o índice)
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

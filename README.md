@@ -60,11 +60,18 @@ embaixo de Nova Lima. Abre pelo botão **🎮 Jogar** da visita ou direto em `jo
   (`CameraUtils.frameCorners`) e plano de recorte na saída; na tela, cada pixel do portal busca a
   imagem pelo cruzamento do raio olho→pixel com o plano do portal. Há recursão (portal dentro de
   portal) e você vê o próprio corpo pelos portais.
-- **Física:** colisão por caixas, gravidade, "o que entra rápido sai rápido": a passagem é disparada
-  pelo centro de massa e posição + velocidade passam pela mesma transformação rígida, sem empurrões
-  extras — a energia se conserva (num loop entre dois portais no chão você volta sempre à mesma
-  altura). Saindo devagar de um portal no chão, há só o mínimo para o corpo sair inteiro. Amostras
-  (cubos) e torretas seguem a mesma regra; botões e portas.
+- **Física de corpos rígidos (Rapier):** cubos e torretas tombam, giram, empilham e são empurrados; o
+  jogador é um *character controller* que colide com eles (dá para subir num cubo, empurrar, usar de
+  escudo, derrubar torreta). Enquanto um corpo está na boca de um portal, um filtro de contato desliga
+  a colisão com o que fica atrás do plano do portal (`src/game/physics.js`).
+- **"O que entra rápido sai rápido":** a passagem é disparada pelo centro de massa e posição +
+  velocidade (e giro, nos objetos) passam pela mesma transformação rígida, sem empurrões extras — a
+  energia se conserva (num loop entre dois portais no chão você volta sempre à mesma altura). Saindo
+  devagar de um portal no chão, há só o mínimo para o corpo sair inteiro; caindo quase reto em cima
+  de um portal no chão, um "funil" puxa a trajetória para o centro dele.
+- **Tempo lento (botão do meio):** desacelera tudo para ~28% (o mouse continua normal), com som
+  abafado, batida de coração, tela dessaturada com vinheta azul e um anel em volta da mira. Gasta uma
+  reserva de 6 s (de verdade) mostrada no canto da tela, que recarrega devagar; só no modo solo.
 - **Passagem contínua:** a câmera sai do portal exatamente onde a vista dele estava e volta suavemente
   a ficar de pé (giro e posição); se ela ainda estiver atrás da boca do portal, é desenhada do ponto
   equivalente do outro lado, então a imagem nunca "pula".
@@ -84,9 +91,30 @@ embaixo de Nova Lima. Abre pelo botão **🎮 Jogar** da visita ou direto em `jo
 | 06 Antípoda | Dona Cida | abrir a escotilha e atravessar um túnel onde a gravidade diminui, zera no centro e inverte — você chega de cabeça para baixo do outro lado |
 | Mapa livre · A Mina | Helena e Marquinho | mapa grande para explorar (sozinho ou em grupo): torres, cava em degraus, rio de rocha fundida com ponte vigiada, galerias, poço de 30 m e sacada — 12 cristais e 9 torretas (desligue por trás com E, derrube com uma amostra arremessada ou com um portal embaixo) |
 
+**Bateria clássica** — 12 testes que seguem a progressão clássica dos jogos de portais (estrutura dos
+quebra-cabeças; cenário, nomes e falas próprios), com mecânicas novas: arma achada num pedestal (primeiro
+só com o azul, depois a melhoria), portais fixos da fase, portal que troca de lugar sozinho, grade de
+desintegração, dispensador de amostras, bola de energia com receptor, plataformas e a fornalha.
+
+| Teste | Personagem | Desafio |
+|-------|------------|---------|
+| C00 Despertar | Helena | sem arma: amostra do dispensador no botão; a grade da saída |
+| C01 Portal Automático | Helena | sem arma: o laranja troca de sala a cada 4 s |
+| C02 A Arma | Helena | pegar a arma (só azul) e usar o laranja fixo |
+| C03 Celas de Vidro | Luciana | buscar a amostra num poço e levar ao botão no outro |
+| C04 Pelo Teto | Bigode | portal embaixo da amostra: ela cai do teto no botão da ilha |
+| C05 Dois Botões | Kelly | duas amostras, uma no alto de uma plataforma |
+| C06 Bola de Energia | Rodrigo | desviar a bola até o receptor |
+| C07 Elevador de Energia | Rodrigo | bola no receptor liga a plataforma sobre a rocha fundida |
+| C08 Voo | Bigode | queda de 12 m num portal no chão → voo por cima da rocha fundida |
+| C09 Arma Completa | Helena | a melhoria da arma; levar a amostra ao patamar |
+| C10 Torretas | Marquinho | amostras como escudo, portal embaixo, empurrão |
+| C11 A Amostra Rosa | Dona Cida | levar a amostra rosa até a fornalha |
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
-`Espaço` pula, `E` pega/solta a amostra, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
-Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras.
+botão do meio tempo lento, `Espaço` pula, `E` pega/arremessa (cubo ou torreta) ou desliga torreta por
+trás, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
+Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
 Original: sem nomes, marcas ou arquivos de outros jogos.
 
@@ -145,7 +173,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (fases/colisão), portals.js (portais), player.js (física), models.js (modelos), levels.js (câmaras), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

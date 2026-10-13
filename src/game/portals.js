@@ -355,7 +355,33 @@ export class PortalSystem {
   }
 
   reset() {
-    for (const p of this.list) p.remove();
+    for (const p of this.list) {
+      p.remove();
+      p.fixed = false;
+    }
+  }
+
+  /** grade de desintegração: some com os portais do jogador (os fixos da fase ficam) */
+  fizzle() {
+    let any = false;
+    for (const P of [this.blue, this.orange])
+      if (P.placed && !P.fixed) {
+        P.remove();
+        any = true;
+      }
+    return any;
+  }
+
+  /** portal colocado pela própria fase (não sai com a grade nem com tiro) */
+  placeFixed(which, center, normal, up) {
+    const P = which === 'blue' ? this.blue : this.orange;
+    const c = new THREE.Vector3(...center);
+    const n = new THREE.Vector3(...normal);
+    const hit = this.world.raycast(c.clone().addScaledVector(n, 0.3), n.clone().negate(), 1);
+    if (!hit) return null;
+    P.setFrame(hit.point.addScaledVector(n, 0.002), n, new THREE.Vector3(...up), hit.box);
+    P.fixed = true;
+    return P;
   }
 
   resize(w, h) {
@@ -370,6 +396,7 @@ export class PortalSystem {
   // ------------------------------------------------------------ colocar portal
   tryPlace(which, origin, dir) {
     const P = which === 'blue' ? this.blue : this.orange;
+    if (P.fixed) return { ok: false };
     const hit = this.world.raycast(origin, dir, 400);
     if (!hit) return { ok: false };
     if (!hit.box.portalable) return { ok: false, point: hit.point, normal: hit.normal };
@@ -451,30 +478,35 @@ export class PortalSystem {
 
   // ------------------------------------------------------------ física
   /**
-   * Caixas que o corpo pode atravessar porque está entrando num portal: com o
-   * centro dentro da boca do portal, tudo o que o corpo toca ATRÁS do plano do
-   * portal deixa de colidir (a parede do portal e o que houver atrás dela).
+   * Portais ligados em cuja boca está o centro de um corpo (o corpo está
+   * entrando neles). `wall`: jogador — em portal de parede precisa caber em pé.
    */
-  ignoreFor(min, max, center, wall = true) {
-    const set = new Set();
+  mouths(center, wall = false, reach = 0) {
+    const out = [];
     for (const P of this.list) {
       if (!this.isLinked(P) || !P.box) continue;
       const l = P.local(center);
-      if (l.z < -2.5 || l.z > 1.2) continue;
-      const isWall = Math.abs(P.normal.y) < 0.5;
-      const mv = isWall && wall ? 0.72 : 0.25;
-      if (Math.abs(l.x) > PORTAL_A - 0.25 || Math.abs(l.y) > PORTAL_B - mv) continue;
+      if (l.z < -2.5 || l.z > 1.2 + reach) continue;
+      const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.72 : 0.25;
+      if (Math.abs(l.x) <= PORTAL_A - 0.25 && Math.abs(l.y) <= PORTAL_B - mv) out.push(P);
+    }
+    return out;
+  }
+
+  /**
+   * A caixa `box` deixa de colidir com um corpo (caixa min..max) que está na
+   * boca de um dos portais `mouths`? Sim quando tudo o que o corpo toca dela
+   * fica ATRÁS do plano do portal (a parede do portal e o que houver atrás).
+   */
+  passes(box, mouths, min, max) {
+    if (!aabbOverlap(min, max, box.min, box.max)) return false;
+    for (const P of mouths) {
       const a = P.axis;
       const s = P.normal[a];
-      const plane = P.center[a];
-      for (const b of this.world.solids) {
-        if (set.has(b) || !aabbOverlap(min, max, b.min, b.max)) continue;
-        // ponto mais "à frente" da interseção corpo × caixa, ao longo da normal
-        const front = s > 0 ? Math.min(max[a], b.max[a]) : Math.max(min[a], b.min[a]);
-        if (s > 0 ? front <= plane + 0.01 : front >= plane - 0.01) set.add(b);
-      }
+      const front = s > 0 ? Math.min(max[a], box.max[a]) : Math.max(min[a], box.min[a]);
+      if (s > 0 ? front <= P.center[a] + 0.01 : front >= P.center[a] - 0.01) return true;
     }
-    return set;
+    return false;
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */

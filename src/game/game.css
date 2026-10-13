@@ -111,3 +111,51 @@ kbd { font-family: ui-monospace, Consolas, monospace; font-size: 11px; backgroun
 #health.low #health-bar { background: linear-gradient(90deg, #ff3b30, #ff8a3d); }
 .map-pick { display: grid; gap: 4px; font-size: 12px; color: var(--muted); width: 100%; }
 .map-pick select { background: rgba(0,0,0,0.4); color: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 8px; font: inherit; font-size: 14px; }
+
+/* ---- menu em grupos */
+.lvl-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; margin: 10px 2px 0; }
+.lvl-head b { font-family: var(--display); font-size: 15px; letter-spacing: 0.04em; }
+.lvl-head span { font-size: 12px; color: var(--muted); }
+
+/* ---- mira conforme a arma */
+#xh.no-gun span { display: none; }
+#xh.blue-only .r { display: none; }
+
+/* ---- tempo lento */
+#slow-tint {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.35s;
+  background:
+    radial-gradient(ellipse at center, transparent 42%, rgba(30, 90, 190, 0.38) 100%),
+    repeating-linear-gradient(0deg, rgba(160, 220, 255, 0.035) 0 1px, transparent 1px 3px);
+  mix-blend-mode: screen;
+}
+body.slowmo #slow-tint { opacity: 1; }
+#c { transition: filter 0.3s; }
+body.slowmo #c { filter: saturate(0.35) contrast(1.12) brightness(0.96) hue-rotate(-10deg); }
+#slow-ring { position: absolute; left: 50%; top: 50%; width: 70px; height: 70px; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; transition: opacity 0.25s; }
+#slow-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+#slow-ring circle { fill: none; stroke-width: 2.2; }
+#slow-ring .bg { stroke: rgba(255, 255, 255, 0.14); }
+#slow-arc { stroke: #7fd4ff; stroke-dasharray: 100; stroke-linecap: round; filter: drop-shadow(0 0 3px #7fd4ff); transition: stroke 0.2s; }
+body.slowmo #slow-ring { opacity: 1; }
+body.slow-low #slow-arc { stroke: #ff6a4a; filter: drop-shadow(0 0 3px #ff6a4a); }
+#slow-ring::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid #9fdcff; opacity: 0; }
+#slow-ring.pulse::after { animation: slow-pulse 0.55s ease-out; }
+@keyframes slow-pulse { from { transform: scale(0.6); opacity: 0.9; } to { transform: scale(4.5); opacity: 0; } }
+#slow {
+  position: absolute; right: 22px; bottom: 34px;
+  display: grid; grid-template-columns: auto 160px auto; grid-template-rows: auto auto; align-items: center; column-gap: 10px;
+  padding: 6px 12px; border-radius: 10px; background: rgba(8, 12, 20, 0.45); text-shadow: 0 1px 4px #000;
+  transition: background 0.2s, box-shadow 0.2s, opacity 0.4s;
+}
+#slow .lbl { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: #9fdcff; }
+#slow .bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+#slow .bar i { display: block; height: 100%; background: linear-gradient(90deg, #4fb6ff, #a8e6ff); transform-origin: left; transition: background 0.2s; }
+#slow b { font-family: ui-monospace, Consolas, monospace; font-size: 13px; min-width: 44px; text-align: right; }
+#slow small { grid-column: 1 / -1; font-size: 10px; color: var(--muted); text-align: center; margin-top: 2px; }
+#slow.full { opacity: 0.55; }
+#slow.on { background: rgba(20, 60, 110, 0.6); box-shadow: 0 0 18px rgba(80, 180, 255, 0.45); opacity: 1; }
+#slow.on small { color: #bfe8ff; }
+#slow.low .bar i { background: linear-gradient(90deg, #ff4a3a, #ffb36a); }
+#slow.low.on { animation: slow-blink 0.5s steps(2) infinite; }
+@keyframes slow-blink { 50% { box-shadow: 0 0 18px rgba(255, 90, 60, 0.7); } }

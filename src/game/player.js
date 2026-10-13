@@ -1,75 +1,16 @@
-// Jogador em primeira pessoa e cubos: colisão de caixas alinhadas aos eixos,
-// gravidade (que pode mudar de direção — fase final!) e passagem pelos portais
-// conservando o momento ("o que entra rápido, sai rápido").
+// Jogador em primeira pessoa: anda com o "character controller" do motor de
+// física (colide com o cenário e com cubos/torretas, empurrando-os), gravidade
+// que pode mudar de direção (fase final!) e passagem pelos portais conservando
+// o momento ("o que entra rápido, sai rápido").
 
 import * as THREE from 'three';
-import { aabbOverlap } from './world.js';
 
 const EYE = 0.7; // altura do olho acima do centro do corpo
 const WALK = 4.6;
 const JUMP = 4.6;
 const MAX_FALL = 32;
 
-const _min = new THREE.Vector3();
-const _max = new THREE.Vector3();
-
-const _before = new Set();
 const _ID = new THREE.Quaternion();
-
-function pushOut(body, b, contact) {
-  let best = null;
-  for (const axis of ['x', 'y', 'z']) {
-    const lo = body.pos[axis] - body.half[axis];
-    const hi = body.pos[axis] + body.half[axis];
-    const up = b.max[axis] - lo; // empurrar no sentido +
-    const down = hi - b.min[axis]; // empurrar no sentido −
-    if (!best || up < best.d) best = { axis, d: up, s: 1 };
-    if (down < best.d) best = { axis, d: down, s: -1 };
-  }
-  body.pos[best.axis] += best.s * (best.d + 1e-4);
-  if (Math.sign(body.vel[best.axis]) === -best.s) body.vel[best.axis] = 0;
-  contact[best.axis] = -best.s;
-}
-
-/** move um corpo AABB, eixo por eixo, resolvendo colisões; devolve contatos */
-export function moveBody(body, delta, world, portals, isPlayer) {
-  const steps = Math.max(1, Math.ceil(delta.length() / 0.18));
-  const d = delta.clone().divideScalar(steps);
-  const contact = { x: 0, y: 0, z: 0 };
-  for (let s = 0; s < steps; s++) {
-    for (const axis of ['y', 'x', 'z']) {
-      const dv = d[axis];
-      if (dv === 0) continue;
-      // caixas em que o corpo já estava enfiado antes deste passo (ex.: atravessando um portal)
-      _min.copy(body.pos).sub(body.half);
-      _max.copy(body.pos).add(body.half);
-      _before.clear();
-      for (const b of world.solids) if (aabbOverlap(_min, _max, b.min, b.max)) _before.add(b);
-      body.pos[axis] += dv;
-      _min.copy(body.pos).sub(body.half);
-      _max.copy(body.pos).add(body.half);
-      const ignore = portals.ignoreFor(_min, _max, body.pos, isPlayer);
-      for (const b of world.solids) {
-        if (ignore.has(b) || b === body.box) continue;
-        if (!aabbOverlap(_min, _max, b.min, b.max)) continue;
-        if (_before.has(b)) {
-          // já estava dentro: sai pelo lado de menor penetração (nunca é jogado para trás da parede)
-          pushOut(body, b, contact);
-          _min.copy(body.pos).sub(body.half);
-          _max.copy(body.pos).add(body.half);
-          continue;
-        }
-        if (dv > 0) body.pos[axis] = b.min[axis] - body.half[axis] - 1e-4;
-        else body.pos[axis] = b.max[axis] + body.half[axis] + 1e-4;
-        contact[axis] = Math.sign(dv);
-        body.vel[axis] = 0;
-        _min.copy(body.pos).sub(body.half);
-        _max.copy(body.pos).add(body.half);
-      }
-    }
-  }
-  return contact;
-}
 
 export class Player {
   constructor(camera) {
@@ -171,10 +112,24 @@ export class Player {
     }
     this.vel.copy(horiz).add(vert).addScaledVector(g, dt);
     if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
+    this.funnel(dt, portals, g);
 
     const prevCenter = this.pos.clone();
-    const contact = moveBody(this, this.vel.clone().multiplyScalar(dt), world, portals, true);
-    this.grounded = contact.y === Math.sign(g.y) && g.lengthSq() > 0.01;
+    const gUp = g.lengthSq() > 0.01 ? g.clone().normalize().negate() : up;
+    // em cima de uma plataforma/porta que andou: o passo dela entra no movimento
+    const move = this.vel.clone().multiplyScalar(dt);
+    const carry = world.doors.find((d) => d.box === this.ground)?.delta;
+    if (carry && carry.y >= 0) move.add(carry);
+    const res = world.physics.movePlayer(this, move, gUp);
+    this.ground = res.ground;
+    // o que bateu tira a parte da velocidade que ia contra a superfície
+    let ground = false;
+    for (const n of res.normals) {
+      const vn = this.vel.dot(n);
+      if (vn < 0) this.vel.addScaledVector(n, -vn);
+      if (n.dot(gUp) > 0.7) ground = true;
+    }
+    this.grounded = g.lengthSq() > 0.01 && (ground || (res.grounded && this.vel.dot(gUp) <= 0.05));
     if (this.grounded && horiz.lengthSq() < 0.01) this.groundTime += dt;
     else this.groundTime = 0;
 
@@ -202,6 +157,45 @@ export class Player {
       onTeleport?.(P);
     }
     if (input.f || input.b || input.l || input.r) this.bob += dt * (this.grounded ? 9 : 0);
+  }
+
+  /**
+   * "Funil": caindo por cima de um portal no chão, a trajetória é puxada de
+   * leve para o centro dele (como nos jogos do gênero) — dá para acertar o
+   * portal mesmo saindo da beirada andando.
+   */
+  funnel(dt, portals, g) {
+    const gm = g.length();
+    if (gm < 0.01) return;
+    const down = g.clone().divideScalar(gm);
+    const vDown = this.vel.dot(down);
+    if (vDown < 1) return;
+    // só para quem está caindo quase reto (voando de lado por cima de um portal não conta)
+    const sideNow = this.vel.clone().addScaledVector(down, -vDown);
+    if (sideNow.length() > 6) return;
+    let best = null;
+    let bestD = 2.6;
+    for (const P of portals.list) {
+      if (!portals.isLinked(P) || P.normal.dot(down) > -0.7) continue;
+      const rel = this.pos.clone().sub(P.center);
+      const h = rel.dot(P.normal);
+      if (h < 0.3 || h > 40) continue;
+      const lat = rel.addScaledVector(P.normal, -h);
+      const d = lat.length();
+      if (d < bestD) {
+        bestD = d;
+        best = { lat, h };
+      }
+    }
+    if (!best) return;
+    // velocidade lateral que leva ao centro no tempo que falta para chegar (queda acelerada)
+    const t = Math.max((-vDown + Math.sqrt(vDown * vDown + 2 * gm * best.h)) / gm, 0.05);
+    const want = best.lat.multiplyScalar(-1 / t);
+    // correção suave, com aceleração lateral limitada
+    const dv = want.sub(sideNow).multiplyScalar(1 - Math.exp(-dt * 6));
+    const maxDv = 12 * dt;
+    if (dv.length() > maxDv) dv.setLength(maxDv);
+    this.vel.add(dv);
   }
 
   teleport(portals, P, g = new THREE.Vector3(0, -9.8, 0)) {
@@ -257,51 +251,5 @@ export class Player {
     }
     this.camera.position.copy(pos);
     this.camera.quaternion.copy(quat);
-  }
-}
-
-/** Cubo de amostra (pode ser carregado e atravessar portais) */
-export class Cube {
-  constructor(mesh, x, y, z) {
-    this.mesh = mesh;
-    this.pos = new THREE.Vector3(x, y + 0.31, z);
-    this.home = this.pos.clone();
-    this.vel = new THREE.Vector3();
-    this.half = new THREE.Vector3(0.3, 0.3, 0.3);
-    this.held = false;
-    this.cooldown = 0;
-    this.prev = this.pos.clone();
-  }
-
-  respawn() {
-    this.pos.copy(this.home);
-    this.vel.set(0, 0, 0);
-    this.held = false;
-  }
-
-  update(dt, world, portals, gravityAt, holdTarget) {
-    if (this.held && holdTarget) {
-      this.vel.copy(holdTarget).sub(this.pos).multiplyScalar(16);
-      if (this.vel.length() > 25) this.vel.setLength(25);
-    } else {
-      this.vel.addScaledVector(gravityAt(this.pos), dt);
-      if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
-    }
-    this.prev.copy(this.pos);
-    const c = moveBody(this, this.vel.clone().multiplyScalar(dt), world, portals, false);
-    if (c.y && !this.held) {
-      this.vel.x *= 0.8;
-      this.vel.z *= 0.8;
-    }
-    this.cooldown -= dt;
-    let P = this.cooldown <= 0 ? portals.crossing(this.prev, this.pos) : null;
-    if (!P && this.cooldown <= 0) P = portals.stuckIn(this.pos, this.pos.clone().sub(this.half), this.pos.clone().add(this.half));
-    if (P) {
-      const { Q, rot } = portals.carry(P, this.pos, this.vel);
-      if (!this.held) portals.exitAssist(Q, this.pos, this.vel, this.half, gravityAt(this.pos), Q.up);
-      this.cooldown = 0.15;
-      this.mesh.quaternion.premultiply(rot);
-    }
-    this.mesh.position.copy(this.pos);
   }
 }
