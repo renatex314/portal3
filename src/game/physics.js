@@ -251,14 +251,14 @@ export class Physics {
   }
 
   /** primeiro objeto (ou cenário) que o raio acerta; `skip(prop)` ignora objetos */
-  castRay(origin, dir, maxDist, skip) {
+  castRay(origin, dir, maxDist, skip, propsOnly = false) {
     if (!this.world) return null;
     const ray = new RAPIER.Ray(origin, dir);
     const hit = this.world.castRay(ray, maxDist, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, undefined, (c) => {
       const e = this.ents.get(c.handle);
       if (!e || e.kind === 'player') return false;
       if (e.kind === 'dyn') return !e.prop.gone && !skip?.(e.prop);
-      return true;
+      return !propsOnly;
     });
     if (!hit) return null;
     const e = this.ents.get(hit.collider.handle);

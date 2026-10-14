@@ -1,0 +1,19 @@
+Efeitos sonoros da arma de portais
+==================================
+
+Gravações do pacote "Sci-Fi Sounds" (1.0), de Kenney (www.kenney.nl),
+obtido em https://opengameart.org/content/sci-fi-sounds
+
+Licença: Creative Commons Zero (CC0) — domínio público.
+http://creativecommons.org/publicdomain/zero/1.0/
+
+Uso no jogo (src/game/sfx.js):
+  laserLarge_*        disparo da arma (mais agudo no portal azul, mais grave no laranja)
+  forceField_*        portal abrindo; pegar/soltar objeto; arma encontrada
+  impactMetal_*       tiro numa superfície que não aceita portal
+  computerNoise_*     grade de desintegração apagando os portais (trecho)
+  spaceEngineLow_*    atravessar um portal (trecho acelerado)
+  laserRetro_*        arremesso
+  spaceEngineSmall_*  zumbido do campo da arma segurando um objeto (em laço)
+
+Não são os sons originais dos jogos Portal (Valve), que têm direitos autorais.

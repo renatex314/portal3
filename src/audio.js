@@ -7,19 +7,20 @@
 //   doc     — Minas Gerais: arpejo de viola caipira (Karplus-Strong) em ré maior
 //   descent — descida do poço: drone, "coração" e pings metálicos
 //   ride    — dentro da cápsula: baixo pulsante a 120 bpm
-//   lab       — câmaras de teste: sério e tenso — drone grave, baixo distorcido
-//               em colcheias, sequência em ré frígio, batida industrial com
-//               golpes metálicos e um motivo lento de "metais" (100 bpm)
+//   lab       — câmaras de teste: tenso — drone grave, baixo distorcido em
+//               semicolcheias, sequência em ré frígio, batida industrial com
+//               golpes metálicos, cordas em trêmolo e um motivo de "metais" (112 bpm)
 //   labTense  — desafios/torretas: caótico e dramático — baixo distorcido em
 //               semicolcheias com trítono, acordes em cluster, cordas em
 //               trêmolo subindo, sirene, viradas de tons (138 bpm)
-//   labEpic   — série Momento: ré menor a 92 bpm, cordas, tímpanos, ostinato
-//               grave e percussão industrial sob um tema sombrio
+//   labEpic   — série Momento, câmara final e o outro lado da Terra: ré menor
+//               a 100 bpm, cordas, tímpanos, pulso distorcido com trítono,
+//               trêmolo agudo e percussão industrial sob um tema sombrio
 // (composições próprias, no clima das faixas tensas de laboratório dos jogos de portal)
 // Efeitos: explosão, ronco da descida, vento da queda.
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-const BPM = { lab: 100, labTense: 138, labEpic: 92 };
+const BPM = { lab: 112, labTense: 138, labEpic: 100 };
 
 // melodias: por compasso, [semicolcheia de início, nota MIDI, duração em semicolcheias]
 // câmaras: motivo de "metais" lento sobre Ré – Ré – Si♭ – Lá (segundas menores, nada alegre)
@@ -819,11 +820,21 @@ export class Soundtrack {
     const sec = bar < 4 ? 'intro' : bar < 12 ? 'drive' : bar < 20 ? 'theme' : bar < 24 ? 'void' : 'theme2';
     const b = m.bus;
     const beat = sec === 'drive' || sec === 'theme' || sec === 'theme2';
-    // pulso: baixo distorcido abafado em colcheias (com a segunda menor no fim)
-    if (sec !== 'void' && s % 2 === 0) {
-      const n = root + (s === 12 && ci < 2 ? 1 : s === 14 ? 12 : 0);
-      this._voice(b, n, t, six * 1.2, { types: ['sawtooth', 'square'], vol: 0.06, cutoff: 200 + (sec === 'theme2' ? 160 : 0), env: 2.5, q: 6, detune: 6, dist: 0.5 });
+    // pulso: baixo distorcido abafado (colcheias na introdução, semicolcheias
+    // depois), com a segunda menor e o trítono puxando para baixo
+    if (sec === 'void' ? s % 4 === 0 : sec === 'intro' ? s % 2 === 0 : true) {
+      const n = root + [0, 0, 12, 0, 0, 0, 1, 0, 0, 0, 12, 0, 6, 0, 1, 0][s];
+      this._voice(b, n, t, six * (sec === 'intro' ? 1.2 : 0.8), { types: ['sawtooth', 'square'], vol: sec === 'void' ? 0.045 : 0.055, cutoff: 210 + (s / 16) * 220 + (sec === 'theme2' ? 200 : 0), env: 2.5, q: 6, detune: 6, dist: 0.6 });
     }
+    // cordas em trêmolo agudas, em segunda menor, subindo a cada compasso
+    if (sec === 'theme' || sec === 'theme2' || sec === 'void') {
+      const n = 74 + (bar % 4);
+      this._voice(b, n, t, six * 0.9, { types: ['sawtooth', 'sawtooth'], vol: 0.008, cutoff: 2400, detune: 14, pan: -0.35 });
+      if (sec !== 'void') this._voice(b, n + 1, t, six * 0.9, { types: ['sawtooth', 'sawtooth'], vol: 0.006, cutoff: 2400, detune: 14, pan: 0.35 });
+    }
+    // acordes em cluster no contratempo (segunda parte)
+    if (sec === 'theme2' && (s === 3 || s === 10))
+      for (const i of [24, 25, 30]) this._voice(b, root + i, t, six * 1.5, { types: ['sawtooth', 'sawtooth'], vol: 0.013, cutoff: 1200, env: 2, detune: 12, dist: 0.4, pan: ((i % 3) - 1) * 0.4 });
     // sequência em semicolcheias, filtro abrindo ao longo da seção
     const order = [0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 1, 0, 3, 2];
     if (sec !== 'intro' && sec !== 'void') {
@@ -838,7 +849,10 @@ export class Soundtrack {
         this._metal(b, t, 0.035, s === 12 ? 0.94 : 1);
       }
       if (s % 2 === 0) this._hat(b, t, s % 4 === 2 ? 0.028 : 0.012);
-    } else if (s % 4 === 0) this._voice(b, 98, t, 0.015, { types: ['sine'], vol: 0.018, cutoff: 9000 }); // tique-taque
+    } else {
+      if (s % 4 === 0) this._voice(b, 98, t, 0.015, { types: ['sine'], vol: 0.02, cutoff: 9000 }); // tique-taque
+      if (s === 0 || s === 3) this._kick(b, t, s ? 0.2 : 0.3); // "coração"
+    }
     if (sec === 'void') {
       if (s === 0 && bar % 2 === 0) this._impact(b, t, 0.35);
       if (Math.random() < 0.08) this._metal(b, t, 0.02, 0.6 + Math.random() * 0.8, 0.6);
@@ -939,7 +953,11 @@ export class Soundtrack {
         const pat = [0, 7, 12, 7, 0, 7, 12, tri[1] + 12];
         this._voice(b, root - 12 + pat[s / 2], t, six * 1.6, { types: ['sawtooth', 'sawtooth'], vol: 0.03, cutoff: 900, env: 0.8, detune: 10, attack: 0.02 });
       }
-      if (s % 4 === 0) this._voice(b, root - 24, t, six * 3.5, { types: ['sawtooth', 'square'], vol: 0.06, cutoff: 190, env: 2.5, q: 5, dist: 0.5 });
+      // pulso distorcido em semicolcheias com trítono no fim do compasso
+      const off = [0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 12, 0, 6, 6, 1, 0][s];
+      this._voice(b, root - 24 + off, t, six * 0.8, { types: ['sawtooth', 'square'], vol: 0.05, cutoff: 230 + (s / 16) * 250, env: 2.5, q: 5, dist: 0.6 });
+      // trêmolo agudo das cordas
+      if (sec === 'theme') this._voice(b, root + 24 + (bar % 2), t, six * 0.9, { types: ['sawtooth', 'sawtooth'], vol: 0.008, cutoff: 2600, detune: 14, pan: s % 2 ? 0.3 : -0.3 });
       // percussão industrial em meio tempo
       if (s === 0 || s === 10) this._kick(b, t, 0.5);
       if (s === 8) {

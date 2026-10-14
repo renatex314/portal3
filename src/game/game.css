@@ -170,3 +170,10 @@ body.slow-low #slow-arc { stroke: #ff6a4a; filter: drop-shadow(0 0 3px #ff6a4a);
   font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #cfe9ff; text-shadow: 0 1px 4px #000;
 }
 body.zoomed #zoom-ui { opacity: 1; }
+
+/* época (viagem no tempo) */
+#era { position: absolute; right: 22px; top: 200px; text-align: right; display: grid; text-shadow: 0 1px 6px #000; }
+#era span { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+#era b { font-family: var(--display); font-size: 26px; color: #7fe3c4; transition: color 0.4s; }
+#era.future b { color: #ffb070; }
+#era small { font-size: 11px; color: var(--muted); }

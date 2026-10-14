@@ -9,6 +9,7 @@ import { BIG_MAP } from './bigmap.js';
 import { CLASSIC } from './classic.js';
 import { HARD } from './hard.js';
 import { MOMENTUM } from './momentum.js';
+import { FRONTIER } from './fronteira.js';
 
 const G = 9.8;
 const DIRS = {
@@ -279,7 +280,7 @@ export const LEVELS = [
     id: 6,
     name: 'Antípoda',
     who: 'Dona Cida',
-    music: 'space',
+    music: 'labEpic',
     lesson: 'Abra a escotilha e atravesse a Terra.',
     final: true,
     build(w) {
@@ -377,6 +378,8 @@ LEVELS.push(...CLASSIC);
 LEVELS.push(...HARD);
 // série Momento: arremessos encadeados com portais abertos em pleno voo
 LEVELS.push(...MOMENTUM);
+// série Fronteira: mapas enormes com todas as mecânicas juntas (e a Lua)
+LEVELS.push(...FRONTIER);
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);
 

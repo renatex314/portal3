@@ -171,21 +171,50 @@ jogos do gênero) puxa de leve para o centro do portal quem chega voando de enco
 Todos foram resolvidos por um robô de teste que joga com a física real do jogo (pelo console:
 `__jogo.manual = true` e `__jogo.step(1/60)` avançam a simulação quadro a quadro).
 
+**Série Fronteira** — 4 mapas enormes que juntam tudo: **lasers** (atravessam portais e vidro,
+queimam o jogador e as torretas) com **cubos refletores** e receptores, **placas de lançamento**,
+**funis de excursão** (feixe que carrega sem gravidade, atravessa portais e pode ser ligado por
+sinal), **bolas de energia**, **viagem no tempo** (`T` alterna entre o passado e o futuro da mesma
+sala: paredes, chãos, rampas e pontes existem só numa época), **antigravidade** (corredor de
+gravidade invertida e torre sem peso), **buracos negros** (puxam o jogador, os objetos e até
+curvam as bolas de energia; o horizonte não devolve nada) e um **portal para a Lua** (um tiro na
+Lua pela claraboia abre o portal lá; o vácuo puxa tudo, e a Lua tem gravidade lunar).
+
+| Teste | Personagem | O que tem |
+|-------|------------|-----------|
+| F01 Feixe e Fé | Rodrigo | laser e cubo refletor, placa de lançamento, torretas queimadas atrás do vidro, funil de 84 m pelos portais, bola de energia do teto ao receptor |
+| F02 Ecos do Tempo | Dona Cida | muro rachado no futuro, rampa só no passado, queda de 16 m num buraco do futuro com arremesso pela parede, torretas por trás pelos portais |
+| F03 Horizonte de Eventos | Seu Tião | corredor de gravidade invertida com bola de energia, laser mandado pelos portais até o fundo do salão, funil por cima do buraco negro, torre sem peso |
+| F04 Mar da Tranquilidade | Helena | tudo junto: bola de energia, placa, laser e torretas, claraboia, portal na Lua, cânion lunar com a ponte de 2031, buraco negro, a base de 2187 e o funil até a saída |
+
+Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
-segurando um objeto arremessa, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
+segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
 Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
 Visual: texturas procedurais com relevo e rugosidade (paredes, pisos e tetos diferentes, chapa
 antiderrapante, sujeira e desgaste), desfoque de movimento da câmera, mais forte em alta velocidade (botão “Desfoque” no menu e
 na pausa), brilho das luzes, vinheta, poeira no ar e sombras de contato.
-Arma com garras articuladas que balança, atrasa ao virar e abre segurando objetos; torretas com
-clarão e rastro de bala; portas com indicador; objetos desintegram na grade e na fornalha.
+Arma de cara sci-fi: placas blindadas, condutos de energia com um pulso a cada tiro, anéis
+flutuando em volta da câmara, aletas de calor que abrem depois dos tiros, íris no emissor, painel
+holográfico com o estado dos portais, garras que abrem segurando objetos; balança, atrasa ao virar
+e afunda ao aterrissar. Torretas com metralhadoras giratórias, cabeça que procura e mira, LEDs de
+status, antena piscando, clarão e rastro de bala, faíscas ao cair. Grade de desintegração com malha
+hexagonal, varredura, arcos elétricos, bobinas pulsando e uma onda onde algo atravessa. Portas com
+indicador; objetos desintegram na grade e na fornalha.
 
-Música: composições próprias sintetizadas ao vivo, num clima sério e tenso de laboratório — drone
-grave, baixo distorcido e batida industrial com golpes metálicos nas câmaras; versão caótica a 138 bpm
-(trítono, acordes em cluster, cordas em trêmolo, sirene) nos desafios e com torretas; cordas, tímpanos
-e tema sombrio na série Momento.
+Música: composições próprias sintetizadas ao vivo, tensas em todos os mapas — nas câmaras, drone
+grave, baixo distorcido em semicolcheias, batida industrial com golpes metálicos e cordas em trêmolo;
+versão caótica a 138 bpm (trítono, acordes em cluster, sirene) nos desafios, com torretas e na queda
+pelo túnel; cordas, tímpanos e tema sombrio na série Momento, na câmara final e do outro lado da Terra.
+
+Efeitos sonoros de ficção científica: a **arma de portais** usa gravações reais do pacote
+"Sci-Fi Sounds" de Kenney (domínio público, CC0 — créditos em `public/sfx/LEIA-ME.txt`); o resto é
+sintetizado (FM, estalos elétricos, servos). Passos com timbre do piso (chapa, concreto, vidro),
+vento que cresce com a velocidade, zumbido do campo da arma, ambiente do laboratório, chiado do
+laser, funil, rugido do buraco negro e o vácuo do portal da Lua.
 
 Original: sem nomes, marcas ou arquivos de outros jogos.
 
@@ -245,7 +274,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

@@ -13,6 +13,56 @@ const _c = new THREE.Color();
 const RED = new THREE.Color(2.6, 0.25, 0.12);
 const GREEN = new THREE.Color(0.3, 2.6, 0.7);
 
+// campo da grade de desintegração: malha hexagonal, fluxo de ruído subindo,
+// varredura, arcos elétricos junto aos emissores, faíscas e a onda de quem passa
+const FIZZLER_FS = /* glsl */ `
+  uniform float uTime; uniform vec2 uSize; uniform vec3 uRipple; varying vec2 vUv;
+  float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+  float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
+  float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * n2(p); p = p * 2.1 + 3.7; a *= 0.5; } return s; }
+  // distância à borda da célula hexagonal
+  float hexEdge(vec2 p){
+    vec2 r = vec2(1.0, 1.7320508);
+    vec2 a = mod(p, r) - r * 0.5;
+    vec2 b = mod(p - r * 0.5, r) - r * 0.5;
+    vec2 q = abs(dot(a, a) < dot(b, b) ? a : b);
+    return 0.5 - max(dot(q, vec2(0.5, 0.8660254)), q.x);
+  }
+  void main(){
+    vec2 p = vUv * uSize;
+    vec3 blue = vec3(0.35, 0.75, 1.0);
+    // fluxo subindo
+    float flow = fbm(vec2(p.x * 1.6, p.y * 0.9 - uTime * 0.8));
+    float a = 0.05 + 0.16 * smoothstep(0.35, 0.9, flow);
+    // malha hexagonal fina, mais forte onde o fluxo passa
+    float hx = 1.0 - smoothstep(0.0, 0.035, hexEdge(p * 2.2 + vec2(0.0, uTime * 0.15)));
+    a += hx * (0.06 + 0.25 * flow);
+    // linhas verticais finas correndo de lado
+    a += pow(abs(sin(p.x * 22.0 + uTime * 3.0 + sin(p.y * 1.5) * 2.0)), 80.0) * 0.25;
+    // varredura horizontal descendo
+    float sweep = fract(uTime * 0.35);
+    a += exp(-pow((vUv.y - (1.0 - sweep)) * uSize.y * 3.0, 2.0)) * 0.55;
+    // arcos elétricos junto às bordas (emissores)
+    float edge = min(vUv.x, 1.0 - vUv.x) * uSize.x;
+    float arcN = fbm(vec2(p.y * 3.0, uTime * 6.0 + step(0.5, vUv.x) * 10.0));
+    float arc = smoothstep(0.06, 0.0, abs(edge - arcN * 0.5)) * step(edge, 0.6);
+    a += arc * 1.2 + smoothstep(0.35, 0.0, edge) * 0.3;
+    // faíscas
+    vec2 sp = p * vec2(10.0, 10.0) + vec2(0.0, uTime * 5.0);
+    vec2 cell = floor(sp);
+    float spark = step(0.988, h(cell)) * (0.5 + 0.5 * sin(uTime * 25.0 + h(cell) * 6.28)) * smoothstep(0.22, 0.0, length(fract(sp) - 0.5));
+    a += spark;
+    // onda de quem passou
+    float age = uTime - uRipple.z;
+    if (age < 1.5) {
+      float d = length((vUv - uRipple.xy) * uSize);
+      a += exp(-pow((d - age * 6.0) * 2.5, 2.0)) * (1.5 - age) * 1.4;
+    }
+    vec3 col = blue * (1.0 + spark * 2.0 + arc * 1.5);
+    gl_FragColor = vec4(col, clamp(a, 0.0, 0.95));
+  }`;
+
 let GRATE = null;
 /** grade de piso (furos quadrados transparentes) */
 function grateTexture() {
@@ -24,6 +74,91 @@ function grateTexture() {
   for (let x = 0; x < 256; x += 16) for (let y = 0; y < 256; y += 16) g.clearRect(x + 3, y + 3, 10, 10);
   GRATE = TX.tex(cv, { repeat: 4 });
   return GRATE;
+}
+
+/** superfície da Lua: cinza com mares escuros e crateras */
+let MOON_TEX = null;
+function moonTexture() {
+  if (MOON_TEX) return MOON_TEX;
+  const cv = TX.canvas(1024, 512);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#9a9a96';
+  g.fillRect(0, 0, 1024, 512);
+  TX.grain(g, 0, 0, 1024, 512, 30000, 0.12, 2);
+  for (let i = 0; i < 9; i++) {
+    const x = Math.random() * 1024;
+    const y = 120 + Math.random() * 280;
+    const r = 60 + Math.random() * 120;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(60,60,64,0.55)');
+    gr.addColorStop(1, 'rgba(60,60,64,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 1024, 512);
+  }
+  for (let i = 0; i < 260; i++) {
+    const x = Math.random() * 1024;
+    const y = Math.random() * 512;
+    const r = 2 + Math.random() ** 3 * 30;
+    g.strokeStyle = 'rgba(40,40,40,0.35)';
+    g.lineWidth = Math.max(1, r * 0.25);
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.stroke();
+    g.strokeStyle = 'rgba(230,230,225,0.25)';
+    g.beginPath();
+    g.arc(x - r * 0.15, y - r * 0.15, r, Math.PI, Math.PI * 1.6);
+    g.stroke();
+  }
+  MOON_TEX = TX.tex(cv, { wrap: false });
+  return MOON_TEX;
+}
+
+/** a Terra: oceanos, continentes e nuvens (procedural) */
+let EARTH_TEX = null;
+function earthTexture() {
+  if (EARTH_TEX) return EARTH_TEX;
+  const cv = TX.canvas(1024, 512);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#1d4f9a';
+  g.fillRect(0, 0, 1024, 512);
+  for (let i = 0; i < 40; i++) {
+    const x = Math.random() * 1024;
+    const y = 80 + Math.random() * 350;
+    g.fillStyle = Math.random() < 0.5 ? '#3f7a3a' : '#8a7a4a';
+    g.beginPath();
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * Math.PI * 2;
+      const r = 20 + Math.random() * 60;
+      g.lineTo(x + Math.cos(a) * r * 1.6, y + Math.sin(a) * r);
+    }
+    g.fill();
+  }
+  g.fillStyle = 'rgba(240,245,255,0.9)';
+  g.fillRect(0, 0, 1024, 30);
+  g.fillRect(0, 482, 1024, 30);
+  for (let i = 0; i < 120; i++) {
+    g.fillStyle = `rgba(255,255,255,${0.2 + Math.random() * 0.4})`;
+    g.beginPath();
+    g.ellipse(Math.random() * 1024, Math.random() * 512, 20 + Math.random() * 60, 4 + Math.random() * 10, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  EARTH_TEX = TX.tex(cv, { wrap: false });
+  return EARTH_TEX;
+}
+
+let HALO_TEX = null;
+function haloTexture() {
+  if (HALO_TEX) return HALO_TEX;
+  const cv = TX.canvas(128);
+  const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(64, 64, 20, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,0.8)');
+  gr.addColorStop(0.35, 'rgba(255,255,255,0.25)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 128, 128);
+  HALO_TEX = new THREE.CanvasTexture(cv);
+  return HALO_TEX;
 }
 
 let MATS = null;
@@ -66,6 +201,7 @@ export function materials() {
       portalable: false,
     },
     stripe: { mat: std({ map: TX.hazardStripe() }, { roughness: 0.6 }), portalable: false },
+    moon: { mat: std(TX.moonGround(), { roughness: 1, metalness: 0, envMapIntensity: 0.1 }), portalable: true },
   };
   const door = TX.doorPanel();
   MATS.door = std(door, { roughness: 0.55, metalness: 0.6, color: 0xd0d4dc, envMapIntensity: 0.6 });
@@ -160,6 +296,15 @@ export class World {
     this.catchers = [];
     this.incinerators = [];
     this.pedestals = [];
+    // mecânicas da série Fronteira
+    this.lasers = [];
+    this.laserCatchers = [];
+    this.plates = [];
+    this.funnels = [];
+    this.gravZones = [];
+    this.blackHoles = [];
+    this.eraItems = []; // { obj, era, box?, light?, k? }
+    this.era = 'past';
     this.physics?.reset();
   }
 
@@ -179,16 +324,22 @@ export class World {
       this.solids.push(b);
       this.physics?.addBox(b, !!opts.kinematic);
     }
+    if (opts.era) this.inEra(b, opts.era);
     return b;
   }
 
   /** volume que mata ao tocar (com superfície visível de rocha fundida) */
-  hazard(x0, y0, z0, x1, y1, z1) {
+  hazard(x0, y0, z0, x1, y1, z1, opts = {}) {
     const b = this.box(x0, y0, z0, x1, y1, z1, 'magma', { solid: false });
+    b.isHazard = true;
     this.hazards.push(b);
     const light = new THREE.PointLight(0xff6a20, 25, 18, 1.6);
     light.position.set((x0 + x1) / 2, y1 + 1.5, (z0 + z1) / 2);
     this.group.add(light);
+    if (opts.era) {
+      this.inEra(b, opts.era);
+      this.inEra(light, opts.era);
+    }
     return b;
   }
 
@@ -224,10 +375,11 @@ export class World {
     }
   }
 
-  light(x, y, z, intensity = 40, color = 0xfff4e6, dist = 30) {
+  light(x, y, z, intensity = 40, color = 0xfff4e6, dist = 30, fixture = true) {
     const l = new THREE.PointLight(color, intensity, dist, 1.5);
     l.position.set(x, y, z);
     this.group.add(l);
+    if (!fixture) return l; // luz solta (ex.: o Sol na Lua), sem luminária
     // luminária no teto: caixa escura, difusor aceso e grade de proteção
     const g = new THREE.Group();
     const M = materials();
@@ -275,6 +427,7 @@ export class World {
       baseMin: b.min.clone(),
       baseMax: b.max.clone(),
       axis: opts.axis ?? 'y',
+      latch: !!opts.latch, // uma vez aberta, fica aberta
       dist: opts.dist ?? Math.abs(y1 - y0) - 0.15,
       speed: opts.speed ?? 1.4,
       mesh: b.mesh,
@@ -427,22 +580,15 @@ export class World {
     const thin = size.y < Math.min(size.x, size.z) ? 'y' : size.x < size.z ? 'x' : 'z';
     const w = thin === 'x' ? size.z : size.x;
     const hgt = thin === 'y' ? size.z : size.y;
+    const uniforms = {
+      uTime: { value: 0 },
+      uSize: { value: new THREE.Vector2(w, hgt) },
+      uRipple: { value: new THREE.Vector3(0.5, 0.5, -99) }, // (u, v, instante) da última passagem
+    };
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uSize: { value: new THREE.Vector2(w, hgt) } },
+      uniforms,
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: /* glsl */ `
-        uniform float uTime; uniform vec2 uSize; varying vec2 vUv;
-        float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-        void main(){
-          vec2 p = vUv * uSize;
-          float lines = pow(abs(sin(p.y * 9.0 - uTime * 1.5)), 40.0) * 0.6;
-          float ripple = 0.5 + 0.5 * sin(p.x * 3.0 + uTime * 2.0 + sin(p.y * 2.0 + uTime));
-          vec2 cell = floor(p * vec2(14.0, 14.0) + vec2(0.0, uTime * 6.0));
-          float spark = step(0.985, h(cell)) * (0.6 + 0.4 * sin(uTime * 20.0 + h(cell) * 6.28));
-          float edge = smoothstep(0.08, 0.0, vUv.x) + smoothstep(0.92, 1.0, vUv.x);
-          float a = 0.08 + 0.10 * ripple + lines + spark + edge * 0.35;
-          gl_FragColor = vec4(vec3(0.45, 0.8, 1.0) * (1.0 + spark * 2.0), clamp(a, 0.0, 0.85));
-        }`,
+      fragmentShader: FIZZLER_FS,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -452,35 +598,122 @@ export class World {
     plane.position.addVectors(min, max).multiplyScalar(0.5);
     if (thin === 'x') plane.rotation.y = Math.PI / 2;
     if (thin === 'y') plane.rotation.x = -Math.PI / 2;
+    plane.renderOrder = 6;
     this.group.add(plane);
-    // emissores nas laterais
-    const emit = materials().frame;
-    const stripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 1.4, 2.6), toneMapped: false });
+    // emissores nas laterais: coluna escura com bobinas acesas que pulsam em
+    // sequência, fenda de energia virada para a grade e tampas com aletas
+    const M = materials();
+    const coilMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: uniforms.uTime },
+      vertexShader: 'varying vec3 vP; void main(){ vP = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `
+        uniform float uTime; varying vec3 vP;
+        void main(){
+          float wave = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(vP.y * 3.0 - uTime * 7.0), 6.0);
+          gl_FragColor = vec4(vec3(0.5, 1.2, 2.6) * wave, 1.0);
+        }`,
+      toneMapped: false,
+    });
+    const slitMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: uniforms.uTime },
+      vertexShader: 'varying vec2 vUv; varying vec3 vP; void main(){ vUv = uv; vP = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `
+        uniform float uTime; varying vec3 vP;
+        float h(float x){ return fract(sin(x * 91.7) * 43758.5); }
+        void main(){
+          float flick = 0.8 + 0.2 * h(floor(uTime * 30.0) + floor(vP.y * 6.0));
+          float band = 0.6 + 0.4 * sin(vP.y * 11.0 + uTime * 9.0);
+          gl_FragColor = vec4(vec3(0.7, 1.6, 3.0) * flick * band, 1.0);
+        }`,
+      toneMapped: false,
+    });
+    const along = thin === 'x' ? 'z' : 'x';
     for (const s of thin === 'y' ? [] : [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.3 : 0.14, size.y, thin === 'x' ? 0.14 : 0.3), emit);
-      post.position.copy(plane.position);
-      post.position[thin === 'x' ? 'z' : 'x'] += (s * w) / 2;
-      // fenda acesa virada para a grade
-      const slit = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.06 : 0.02, size.y - 0.2, thin === 'x' ? 0.02 : 0.06), stripMat);
-      slit.position.copy(post.position);
-      slit.position[thin === 'x' ? 'z' : 'x'] -= s * 0.07;
-      // tampas em cima e embaixo
-      for (const e of [-1, 1]) {
-        const cap = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.36 : 0.2, 0.12, thin === 'x' ? 0.2 : 0.36), materials().dark);
-        cap.position.copy(post.position);
-        cap.position.y += (e * (size.y - 0.12)) / 2;
-        this.group.add(cap);
+      const g = new THREE.Group();
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.34, size.y, 0.34), M.frame);
+      g.add(post);
+      // bobinas
+      const nCoils = Math.max(3, Math.floor(size.y / 0.55));
+      for (let i = 0; i < nCoils; i++) {
+        const y = -size.y / 2 + 0.35 + (i * (size.y - 0.7)) / Math.max(1, nCoils - 1);
+        const coil = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.035, 8, 20).rotateX(Math.PI / 2), coilMat);
+        coil.position.y = y;
+        g.add(coil);
+        const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 16), M.dark);
+        collar.position.y = y + 0.06;
+        g.add(collar);
       }
-      this.group.add(post, slit);
+      // fenda virada para o campo
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(0.06, size.y - 0.4, 0.04), slitMat);
+      slit.position.x = -s * 0.19;
+      g.add(slit);
+      // tampas com aletas
+      for (const e of [-1, 1]) {
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), M.dark);
+        cap.position.y = (e * (size.y - 0.16)) / 2;
+        g.add(cap);
+        for (let k = -1; k <= 1; k++) {
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 0.5), M.frame);
+          fin.position.set(k * 0.12, cap.position.y + e * 0.12, 0);
+          g.add(fin);
+        }
+        const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.025, 0.04), coilMat);
+        lamp.position.set(0, cap.position.y, 0.255);
+        g.add(lamp);
+      }
+      g.position.copy(plane.position);
+      g.position[along] += (s * w) / 2;
+      if (thin === 'x') g.rotation.y = Math.PI / 2;
+      this.group.add(g);
     }
+    // faíscas soltas subindo junto ao campo
+    const N = Math.min(240, Math.floor(w * hgt * 4));
+    const seeds = new Float32Array(N * 3);
+    for (let i = 0; i < seeds.length; i++) seeds[i] = Math.random();
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    pg.setAttribute('seed', new THREE.BufferAttribute(seeds, 3));
+    const motes = new THREE.Points(
+      pg,
+      new THREE.ShaderMaterial({
+        uniforms: { uTime: uniforms.uTime, uSize: uniforms.uSize, uH: { value: 800 } },
+        vertexShader: `
+          attribute vec3 seed; uniform float uTime, uH; uniform vec2 uSize; varying float vA;
+          void main(){
+            float life = fract(uTime * (0.08 + seed.z * 0.12) + seed.y);
+            vec3 p = vec3((seed.x - 0.5) * uSize.x, (life - 0.5) * uSize.y, (seed.z - 0.5) * 0.12);
+            p.x += sin(uTime * 2.0 + seed.y * 20.0) * 0.05;
+            vec4 mv = modelViewMatrix * vec4(p, 1.0);
+            gl_Position = projectionMatrix * mv;
+            gl_PointSize = 0.03 * projectionMatrix[1][1] * uH / max(-mv.z, 0.1);
+            vA = sin(life * 3.14159) * (0.4 + 0.6 * step(0.7, fract(seed.x * 13.0 + uTime * 3.0)));
+          }`,
+        fragmentShader: `
+          varying float vA;
+          void main(){ float d = length(gl_PointCoord - 0.5) * 2.0; if (d > 1.0) discard; gl_FragColor = vec4(vec3(0.7, 1.5, 3.0), vA * (1.0 - d)); }`,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    motes.position.copy(plane.position);
+    motes.rotation.copy(plane.rotation);
+    motes.frustumCulled = false;
+    this.group.add(motes);
     this.anim.push((t) => {
-      mat.uniforms.uTime.value = t;
-      stripMat.color.setRGB(0.6, 1.4, 2.6).multiplyScalar(0.85 + 0.15 * Math.sin(t * 13) * Math.sin(t * 7.3));
+      uniforms.uTime.value = t;
+      motes.material.uniforms.uH.value = window.innerHeight * 0.75;
     });
     const pad = new THREE.Vector3(thin === 'x' ? 0.1 : 0, thin === 'y' ? 0.1 : 0, thin === 'z' ? 0.1 : 0);
-    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin };
+    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin, plane, uniforms };
     this.fizzlers.push(f);
     return f;
+  }
+
+  /** onda no campo da grade no ponto `p` (algo atravessou ou foi desintegrado) */
+  fizzlerRipple(f, p, t) {
+    const l = f.plane.worldToLocal(p.clone());
+    f.uniforms.uRipple.value.set(l.x / f.uniforms.uSize.value.x + 0.5, l.y / f.uniforms.uSize.value.y + 0.5, t);
   }
 
   /** o segmento a→b passa por alguma grade? (quedas rápidas atravessam a grade fina num só quadro) */
@@ -670,7 +903,7 @@ export class World {
   }
 
   /** elevador de saída (tubo de vidro iluminado) + gatilho de fim de fase */
-  exitElevator(x, y, z, flipped = false) {
+  exitElevator(x, y, z, flipped = false, { era = null } = {}) {
     const g = new THREE.Group();
     const s = flipped ? -1 : 1;
     const tube = new THREE.Mesh(
@@ -733,7 +966,12 @@ export class World {
       }
       p.needsUpdate = true;
     });
-    return this.trigger(x - 1, flipped ? y - 3 : y, z - 1, x + 1, flipped ? y : y + 3, z + 1, { exit: true });
+    if (era) {
+      // elevador que só existe numa época (a luz dele também)
+      this.inEra(g, era);
+      this.inEra(l, era);
+    }
+    return this.trigger(x - 1, flipped ? y - 3 : y, z - 1, x + 1, flipped ? y : y + 3, z + 1, { exit: true, era });
   }
 
   sign(x, y, z, rotY, lines, w = 3.2, h = 1.6, rotZ = 0) {
@@ -813,6 +1051,401 @@ export class World {
     const blink = d.open > 0.02 && d.open < 0.98 ? 0.6 + 0.4 * Math.sin(t * 18) : 1;
     _c.lerpColors(RED, GREEN, THREE.MathUtils.smoothstep(d.open, 0.1, 0.9)).multiplyScalar(blink);
     for (const m of d.lamps) m.color.copy(_c);
+  }
+
+
+  // ================================================================== série Fronteira
+  /**
+   * Prende algo a uma época (viagem no tempo): caixa (sólida ou perigo),
+   * luz ou qualquer objeto. Na outra época a caixa some (deixa de colidir), a
+   * luz apaga e o objeto fica invisível.
+   */
+  inEra(obj, era) {
+    const item = { obj, era };
+    if (obj.isLight) item.k = obj.intensity;
+    this.eraItems.push(item);
+    this.applyEra(item);
+    return obj;
+  }
+
+  applyEra(item) {
+    const on = item.era === this.era;
+    const o = item.obj;
+    if (o.isLight) o.intensity = on ? item.k : 0;
+    else if (o.isObject3D) o.visible = on;
+    else {
+      // caixa do cenário (sólida ou de perigo)
+      o.mesh.visible = on;
+      const list = o.isHazard ? this.hazards : o.solid ? this.solids : null;
+      if (list) {
+        const i = list.indexOf(o);
+        if (on && i < 0) list.push(o);
+        if (!on && i >= 0) list.splice(i, 1);
+      }
+      o.collider?.setEnabled(on);
+      o.active = on;
+    }
+  }
+
+  setEra(era) {
+    this.era = era;
+    for (const it of this.eraItems) this.applyEra(it);
+  }
+
+  /** a caixa existe na época atual? (as sem época existem sempre) */
+  live(b) {
+    return b.active !== false;
+  }
+
+  // ------------------------------------------------------------------ laser
+  /** emissor de laser na parede/chão (`dir` = para onde o feixe sai) */
+  laser(x, y, z, dir) {
+    const d = new THREE.Vector3(...dir).normalize();
+    const M = materials();
+    const g = new THREE.Group();
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.9), M.frame);
+    plate.position.y = 0.06;
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.35, 6), M.dark);
+    body.position.y = 0.3;
+    const lensMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.3, 0.2), toneMapped: false });
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.05, 20), lensMat);
+    lens.position.y = 0.5;
+    g.add(plate, body, lens);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.32, 0.14), M.frame);
+      fin.position.set(Math.cos(a) * 0.3, 0.26, Math.sin(a) * 0.3);
+      fin.rotation.y = -a;
+      g.add(fin);
+    }
+    g.position.set(x, y, z);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    this.group.add(g);
+    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(d, 0.55), dir: d, group: g, lensMat };
+    this.lasers.push(L);
+    return L;
+  }
+
+  /** receptor de laser: liga o sinal `opens` enquanto o feixe acerta */
+  laserCatcher(x, y, z, normal, opens) {
+    const n = new THREE.Vector3(...normal).normalize();
+    const g = this.socket(n, 0xff5a3a);
+    g.position.set(x, y, z);
+    g.scale.setScalar(0.72);
+    // acerta quem bater na parede até 0,75 m do centro do receptor
+    const C = { pos: new THREE.Vector3(x, y, z), normal: n, opens, active: false, group: g };
+    this.laserCatchers.push(C);
+    return C;
+  }
+
+  // ------------------------------------------------------------------ placa de lançamento
+  /**
+   * Placa de lançamento (no chão): quem pisa (ou o que cair nela) sai voando
+   * com a velocidade `vel`. A placa abre como uma tampa ao disparar.
+   */
+  faithPlate(x, y, z, vel, { target = null } = {}) {
+    const v = new THREE.Vector3(...vel);
+    const M = materials();
+    const g = new THREE.Group();
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.16, 2.2), M.frame);
+    frame.position.y = 0.08;
+    g.add(frame);
+    const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 2.6), toneMapped: false });
+    // tampa articulada na borda de trás (oposta à direção do lançamento)
+    const flat = new THREE.Vector3(v.x, 0, v.z);
+    const yaw = flat.lengthSq() > 1e-4 ? Math.atan2(flat.x, flat.z) : 0;
+    const hinge = new THREE.Group();
+    hinge.position.set(-Math.sin(yaw) * 0.95, 0.17, -Math.cos(yaw) * 0.95);
+    hinge.rotation.y = yaw;
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 1.9), materials().white.mat);
+    lid.position.set(0, 0, 0.95);
+    hinge.add(lid);
+    // seta acesa na tampa
+    const arrow = new THREE.Shape();
+    arrow.moveTo(-0.25, -0.35);
+    arrow.lineTo(0, 0.1);
+    arrow.lineTo(0.25, -0.35);
+    arrow.lineTo(0.25, -0.15);
+    arrow.lineTo(0, 0.3);
+    arrow.lineTo(-0.25, -0.15);
+    arrow.closePath();
+    for (const dz of [0.6, 1.25]) {
+      const a = new THREE.Mesh(new THREE.ShapeGeometry(arrow), glowMat);
+      a.rotation.x = -Math.PI / 2;
+      a.position.set(0, 0.045, dz);
+      hinge.add(a);
+    }
+    g.add(hinge);
+    // pistões
+    for (const sx of [-0.6, 0.6]) {
+      const pis = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 10), M.dark);
+      pis.position.set(Math.cos(yaw) * sx, 0.12, -Math.sin(yaw) * sx);
+      g.add(pis);
+    }
+    g.position.set(x, y, z);
+    this.group.add(g);
+    const P = { pos: new THREE.Vector3(x, y, z), vel: v, hinge, glowMat, cool: 0, kick: 0 };
+    this.plates.push(P);
+    // marcador no ponto de pouso
+    if (target) {
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.85, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 2.6), transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false }));
+      ring.position.set(target[0], target[1] + 0.02, target[2]);
+      this.group.add(ring);
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.2, 24).rotateX(-Math.PI / 2), ring.material);
+      dot.position.copy(ring.position);
+      this.group.add(dot);
+      this.anim.push((t) => ring.scale.setScalar(1 + Math.sin(t * 3) * 0.06));
+    }
+    return P;
+  }
+
+  /**
+   * Placa que joga de (x, y, z) até o ponto (tx, ty, tz) passando a `apex`
+   * metros acima do mais alto dos dois (gravidade normal).
+   */
+  faithPlateTo(x, y, z, tx, ty, tz, apex = 4, g = 9.8) {
+    const top = Math.max(y, ty) + apex;
+    const vy = Math.sqrt(2 * g * (top - y));
+    const T = vy / g + Math.sqrt((2 * (top - ty)) / g);
+    return this.faithPlate(x, y, z, [(tx - x) / T, vy, (tz - z) / T], { target: [tx, ty, tz] });
+  }
+
+  // ------------------------------------------------------------------ funil de excursão
+  /**
+   * Funil de excursão: um feixe largo que carrega o que estiver dentro (sem
+   * gravidade) a 4 m/s, atravessa portais e vira de sentido com o sinal `id`
+   * (azul = para longe do emissor, laranja = puxando de volta).
+   */
+  funnel(x, y, z, dir, { id = null, reversed = false, speed = 4, power = null } = {}) {
+    const d = new THREE.Vector3(...dir).normalize();
+    const M = materials();
+    const g = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.7, 0.25, 32), M.frame);
+    base.position.y = 0.12;
+    const ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.4, 2.8), toneMapped: false });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.32, 0.07, 10, 48).rotateX(Math.PI / 2), ringMat);
+    ring.position.y = 0.28;
+    g.add(base, ring);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.4), M.dark);
+      fin.position.set(Math.cos(a) * 1.55, 0.3, Math.sin(a) * 1.55);
+      fin.rotation.y = -a;
+      g.add(fin);
+    }
+    g.position.set(x, y, z);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+    this.group.add(g);
+    const F = { pos: new THREE.Vector3(x, y, z).addScaledVector(d, 0.3), dir: d, id, reversed, startReversed: reversed, speed, power, off: !!power, group: g, ringMat, segs: [] };
+    this.funnels.push(F);
+    return F;
+  }
+
+  // ------------------------------------------------------------------ gravidade
+  /** volume com gravidade própria `g` (ex.: [0, 9.8, 0] = invertida, [0, 0, 0] = sem peso) */
+  gravZone(x0, y0, z0, x1, y1, z1, g, color = 0xb06cff) {
+    const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
+    const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
+    const size = new THREE.Vector3().subVectors(max, min);
+    const gv = new THREE.Vector3(...g);
+    const dir = gv.lengthSq() > 1e-4 ? gv.clone().normalize() : new THREE.Vector3(0, 0, 0);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uDir: { value: dir }, uColor: { value: new THREE.Color(color) } },
+      vertexShader: 'varying vec3 vP; varying vec3 vN; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vP = w.xyz; vN = normal; gl_Position = projectionMatrix * viewMatrix * w; }',
+      fragmentShader: `
+        uniform float uTime; uniform vec3 uDir, uColor; varying vec3 vP; varying vec3 vN;
+        float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+        void main(){
+          // faixas correndo no sentido da gravidade (paradas e tremendo sem gravidade)
+          float along = dot(vP, length(uDir) > 0.5 ? uDir : vec3(0.0, 1.0, 0.0));
+          float speed = length(uDir) > 0.5 ? 1.2 : 0.15;
+          float bands = pow(0.5 + 0.5 * sin(along * 3.0 - uTime * speed * 6.0), 8.0);
+          vec3 cell = floor(vP * 2.0);
+          float twinkle = step(0.97, h(cell)) * (0.5 + 0.5 * sin(uTime * 4.0 + h(cell) * 30.0));
+          float a = 0.05 + bands * 0.12 + twinkle * 0.25;
+          gl_FragColor = vec4(uColor * 1.6, a);
+        }`,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), mat);
+    mesh.position.addVectors(min, max).multiplyScalar(0.5);
+    mesh.renderOrder = 6;
+    this.group.add(mesh);
+    // contorno aceso nas arestas
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z)), new THREE.LineBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2), toneMapped: false }));
+    edges.position.copy(mesh.position);
+    this.group.add(edges);
+    this.anim.push((t) => (mat.uniforms.uTime.value = t));
+    const Z = { min, max, g: gv, mesh };
+    this.gravZones.push(Z);
+    return Z;
+  }
+
+  /**
+   * Buraco negro: puxa tudo (jogador, objetos, bolas de energia) com força
+   * `strength`/d² até `reach` metros; dentro do horizonte, nada volta.
+   */
+  blackHole(x, y, z, { strength = 900, horizon = 1.2, reach = 40 } = {}) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    const core = new THREE.Mesh(new THREE.SphereGeometry(horizon, 48, 32), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+    g.add(core);
+    // anel de fótons e brilho em volta (sempre virado para a câmera)
+    const halo = new THREE.Mesh(
+      new THREE.PlaneGeometry(horizon * 7, horizon * 7),
+      new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        vertexShader: `varying vec2 vUv; void main(){ vUv = uv; vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0); mv.xy += position.xy; gl_Position = projectionMatrix * mv; }`,
+        fragmentShader: `
+          uniform float uTime; varying vec2 vUv;
+          void main(){
+            vec2 p = (vUv - 0.5) * 7.0;
+            float r = length(p);
+            float ring = exp(-pow((r - 1.35) * 6.0, 2.0)) * 1.6;
+            float glow = exp(-(r - 1.0) * 1.2) * 0.35 * step(1.0, r);
+            float a = atan(p.y, p.x);
+            float flick = 0.85 + 0.15 * sin(a * 7.0 + uTime * 3.0);
+            vec3 col = vec3(1.0, 0.75, 0.45) * ring * flick + vec3(0.6, 0.35, 1.0) * glow;
+            gl_FragColor = vec4(col, clamp(ring + glow, 0.0, 1.0) * step(1.0, r));
+          }`,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    halo.renderOrder = 7;
+    g.add(halo);
+    // disco de acreção girando
+    const disk = new THREE.Mesh(
+      new THREE.RingGeometry(horizon * 1.6, horizon * 5.5, 96, 4),
+      new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uIn: { value: horizon * 1.6 }, uOut: { value: horizon * 5.5 } },
+        vertexShader: 'varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: `
+          uniform float uTime, uIn, uOut; varying vec2 vP;
+          float h(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
+          float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
+          void main(){
+            float r = length(vP);
+            float k = (r - uIn) / (uOut - uIn);
+            float a = atan(vP.y, vP.x);
+            float swirl = a + uTime * (2.4 / (0.4 + k * 3.0)) - log(r) * 3.0;
+            float n = n2(vec2(swirl * 3.0, r * 2.0)) * 0.6 + n2(vec2(swirl * 9.0, r * 6.0)) * 0.4;
+            vec3 hot = mix(vec3(3.0, 2.4, 1.6), vec3(2.2, 0.6, 0.15), smoothstep(0.0, 0.7, k));
+            float alpha = (1.0 - smoothstep(0.6, 1.0, k)) * smoothstep(0.0, 0.05, k) * (0.35 + 0.65 * n);
+            gl_FragColor = vec4(hot * (0.6 + 0.8 * n), alpha);
+          }`,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
+    );
+    disk.rotation.x = -Math.PI / 2 + 0.35;
+    g.add(disk);
+    // partículas caindo em espiral
+    const N = 400;
+    const pg = new THREE.BufferGeometry();
+    const seeds = Float32Array.from({ length: N * 3 }, () => Math.random());
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    pg.setAttribute('seed', new THREE.BufferAttribute(seeds, 3));
+    const motes = new THREE.Points(
+      pg,
+      new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 }, uH: { value: 800 }, uIn: { value: horizon }, uOut: { value: horizon * 9 } },
+        vertexShader: `
+          attribute vec3 seed; uniform float uTime, uH, uIn, uOut; varying float vA;
+          void main(){
+            float life = fract(uTime * (0.05 + seed.x * 0.08) + seed.y);
+            float r = mix(uOut, uIn, life * life);
+            float ang = seed.z * 6.2831 + uTime * (0.6 + 3.0 / r) * (1.0 + life * 2.0);
+            vec3 p = vec3(cos(ang) * r, (seed.x - 0.5) * r * 0.25 * (1.0 - life), sin(ang) * r);
+            vec4 mv = modelViewMatrix * vec4(p, 1.0);
+            gl_Position = projectionMatrix * mv;
+            gl_PointSize = 0.06 * projectionMatrix[1][1] * uH / max(-mv.z, 0.1);
+            vA = sin(life * 3.14159);
+          }`,
+        fragmentShader: `varying float vA; void main(){ float d = length(gl_PointCoord - 0.5) * 2.0; if (d > 1.0) discard; gl_FragColor = vec4(vec3(2.4, 1.4, 0.7), vA * (1.0 - d)); }`,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    motes.frustumCulled = false;
+    g.add(motes);
+    const light = new THREE.PointLight(0xffa060, 30, reach * 0.8, 1.6);
+    g.add(light);
+    this.group.add(g);
+    this.anim.push((t) => {
+      halo.material.uniforms.uTime.value = t;
+      disk.material.uniforms.uTime.value = t;
+      motes.material.uniforms.uTime.value = t;
+      motes.material.uniforms.uH.value = window.innerHeight * 0.75;
+    });
+    const B = { pos: new THREE.Vector3(x, y, z), strength, horizon, reach, group: g };
+    this.blackHoles.push(B);
+    return B;
+  }
+
+  // ------------------------------------------------------------------ Lua
+  /**
+   * A Lua no céu (vista por uma claraboia): atirar um portal nela abre o
+   * portal no `spot` da superfície lunar (lá longe, na área da fase com
+   * gravidade lunar). Devolve { pos, r, spot }.
+   */
+  moon(x, y, z, r, spot) {
+    const tex = moonTexture();
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 64, 48), new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 1 }));
+    m.position.set(x, y, z);
+    this.group.add(m);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTexture(), color: 0xbcd0ff, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.scale.setScalar(r * 3.4);
+    glow.position.copy(m.position);
+    this.group.add(glow);
+    this.anim.push((t) => (m.rotation.y = t * 0.01));
+    this.moonInfo = { pos: m.position.clone(), r, spot };
+    return this.moonInfo;
+  }
+
+  /** a Terra vista da Lua */
+  earth(x, y, z, r) {
+    const tex = earthTexture();
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 64, 48), new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.6, roughness: 0.8 }));
+    m.position.set(x, y, z);
+    m.rotation.z = 0.4;
+    this.group.add(m);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTexture(), color: 0x6fb0ff, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending }));
+    glow.scale.setScalar(r * 3);
+    glow.position.copy(m.position);
+    this.group.add(glow);
+    this.anim.push((t) => (m.rotation.y = t * 0.02));
+    return m;
+  }
+
+  /** céu estrelado (esfera de pontos em volta de `center`) */
+  stars(center = [0, 0, 0], radius = 900, n = 3000) {
+    const pos = new Float32Array(n * 3);
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const v = new THREE.Vector3().randomDirection().multiplyScalar(radius);
+      pos.set([v.x + center[0], v.y + center[1], v.z + center[2]], i * 3);
+      const k = 0.5 + Math.random() * 1.5;
+      const warm = Math.random();
+      col.set([k * (0.8 + warm * 0.2), k * 0.9, k * (1.1 - warm * 0.3)], i * 3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const pts = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: true, vertexColors: true, toneMapped: false, depthWrite: false }));
+    pts.frustumCulled = false;
+    this.group.add(pts);
+    return pts;
   }
 
   /** faixa de luz decorativa (não colide) */
@@ -913,6 +1546,13 @@ export class World {
       d.mesh.position.copy(d.offset);
       this.physics?.moveBox(d.box);
       if (d.plain) this.doorLamps(d, t);
+    }
+    for (const P of this.plates) {
+      // tampa abre de uma vez e volta devagar; setas piscam carregando
+      P.kick = Math.max(0, P.kick - dt * 1.6);
+      P.hinge.rotation.x = -Math.min(1, P.kick * 3) * 0.85;
+      const ready = P.cool <= 0;
+      P.glowMat.color.setRGB(0.4, 1.6, 2.6).multiplyScalar(ready ? 0.8 + 0.2 * Math.sin(t * 6) : 0.25);
     }
     for (const b of this.buttons) {
       // a placa afunda com mola e as luzes trocam de cor aos poucos

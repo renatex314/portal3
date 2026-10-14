@@ -241,6 +241,7 @@ class Portal {
     this.group.visible = true;
     this.light.position.copy(center).addScaledVector(normal, 0.6);
     this.placed = true;
+    this.moon = false; // (main marca de novo quando o tiro foi na Lua)
     this.open = 0;
     this.age = 0;
   }
@@ -474,7 +475,11 @@ export class PortalSystem {
     if (!obb && Math.abs(n.y) < 0.5) {
       const probe = center.clone().addScaledVector(n, 0.4);
       const floor = this.world.raycast(probe, new THREE.Vector3(0, -1, 0), PORTAL_B + 3.0);
-      if (floor && floor.dist - PORTAL_B < 2.5) center.y = probe.y - floor.dist + PORTAL_B + 0.01;
+      if (floor && floor.dist - PORTAL_B < 2.5) {
+        // (só se continuar cabendo na face: painel pequeno no alto não "desce")
+        const snapped = center.clone().setY(probe.y - floor.dist + PORTAL_B + 0.01);
+        if (fits(snapped)) center.copy(snapped);
+      }
     }
     let final = null;
     if (fits(center)) final = center;

@@ -173,10 +173,12 @@ function gunShellMaps() {
 }
 
 /**
- * Arma de portais em primeira pessoa: casco branco com emendas e grelhas,
- * corpo escuro, braço de cima por sobre a câmara de vidro, núcleo aceso (cor
- * do último portal) com bobina girando e três garras articuladas na frente.
- * userData: { core, tip, claws, coil, leds }.
+ * Arma de portais em primeira pessoa, de cara sci-fi: casco branco com placas
+ * blindadas e condutos de energia (um pulso corre a cada tiro), aletas de
+ * calor que abrem depois de atirar, anéis flutuando em volta da câmara de
+ * vidro, núcleo aceso (cor do último portal) com bobina girando, íris no
+ * emissor, três garras articuladas e um painel holográfico ao lado.
+ * userData: { core, tip, claws, coil, leds, rings, conduit, vents, heatMat, iris, tipGlow, holo }.
  */
 export function portalGun() {
   const g = new THREE.Group();
@@ -185,9 +187,23 @@ export function portalGun() {
   const whiteP = plastic(0xdcdcd8, { clearcoat: 0.45, envMapIntensity: 0.35 });
   const dark = metal(0x2b2d31, { roughness: 0.5, metalness: 0.55 });
   const black = metal(0x111214, { roughness: 0.6, metalness: 0.3 });
+  const chrome = metal(0xb8bcc4, { roughness: 0.2, metalness: 0.95 });
   const rubber = new THREE.MeshStandardMaterial({ color: 0x18191b, roughness: 0.9 });
   const coreMat = glow(new THREE.Color(0.5, 1.6, 3.2));
   const glass = new THREE.MeshPhysicalMaterial({ color: 0xdff4ff, roughness: 0.05, transparent: true, opacity: 0.25, envMap: ENV, envMapIntensity: 1.4, depthWrite: false, clearcoat: 1 });
+  // condutos de energia: um pulso de luz corre de trás para a frente (cor do último portal)
+  const conduit = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(0.5, 1.6, 3.2) }, uTime: { value: 0 }, uPulse: { value: -1 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `
+      uniform vec3 uColor; uniform float uTime, uPulse; varying vec2 vUv;
+      void main(){
+        float flow = 0.45 + 0.25 * sin(vUv.x * 40.0 - uTime * 6.0);
+        float pulse = uPulse < 0.0 ? 0.0 : exp(-pow((vUv.x - uPulse) * 9.0, 2.0)) * 3.0;
+        gl_FragColor = vec4(uColor * (flow + pulse), 1.0);
+      }`,
+    toneMapped: false,
+  });
 
   // casco traseiro (ovo alongado) — o eixo da arma é −z
   const shell = new THREE.Mesh(
@@ -209,6 +225,33 @@ export function portalGun() {
   );
   shell.scale.set(1, 0.92, 1);
   g.add(shell);
+  // placas blindadas chanfradas dos dois lados
+  const plateShape = new THREE.Shape();
+  plateShape.moveTo(-0.11, -0.03);
+  plateShape.lineTo(0.12, -0.035);
+  plateShape.lineTo(0.15, 0.0);
+  plateShape.lineTo(0.12, 0.04);
+  plateShape.lineTo(-0.06, 0.045);
+  plateShape.lineTo(-0.12, 0.01);
+  plateShape.closePath();
+  const plateGeo = new THREE.ExtrudeGeometry(plateShape, { depth: 0.012, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 2 });
+  for (const sx of [-1, 1]) {
+    const pl = new THREE.Mesh(plateGeo, whiteP);
+    // a forma fica no plano zy (z = ao longo da arma)
+    pl.rotation.y = sx > 0 ? Math.PI / 2 : -Math.PI / 2;
+    pl.position.set(sx * 0.108, -0.005, 0.11);
+    g.add(pl);
+    // conduto aceso na borda da placa
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(sx * 0.118, 0.035, 0.22),
+      new THREE.Vector3(sx * 0.121, 0.04, 0.08),
+      new THREE.Vector3(sx * 0.112, 0.03, -0.03),
+      new THREE.Vector3(sx * 0.095, 0.02, -0.12),
+      new THREE.Vector3(sx * 0.08, 0.012, -0.19),
+    ]);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 48, 0.0045, 6, false), conduit));
+  }
+  // conduto de cima, ao longo do braço
   // anel de borracha entre o casco e o corpo
   const band = new THREE.Mesh(new THREE.TorusGeometry(0.093, 0.012, 10, 48), rubber);
   band.position.z = -0.06;
@@ -224,6 +267,24 @@ export function portalGun() {
     fin.position.set(Math.cos(a) * 0.035, Math.sin(a) * 0.035, 0.31);
     fin.rotation.z = a;
     g.add(fin);
+  }
+  // aletas de calor: abrem depois dos tiros e mostram o brilho de dentro
+  const heatMat = glow(new THREE.Color(0, 0, 0));
+  const vents = [];
+  for (const sx of [-1, 1]) {
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.05, 0.075), heatMat);
+    back.position.set(sx * 0.1, 0.03, 0.19);
+    g.add(back);
+    for (let k = 0; k < 4; k++) {
+      const pivot = new THREE.Group();
+      pivot.position.set(sx * 0.104, 0.012 + k * 0.012, 0.19);
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.011, 0.075), dark);
+      slat.position.set(sx * 0.002, 0.0055, 0);
+      pivot.add(slat);
+      pivot.userData.side = sx;
+      g.add(pivot);
+      vents.push(pivot);
+    }
   }
 
   // corpo escuro da frente, com nervuras
@@ -265,14 +326,62 @@ export function portalGun() {
   }
   const coil = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coilPts), 160, 0.0035, 6), metal(0xc28a3a, { roughness: 0.3, metalness: 0.9 }));
   g.add(core, coreBall, coil, chamber);
-  // anéis do emissor
-  for (const [z, r, t] of [
-    [-0.2, 0.068, 0.012],
-    [-0.31, 0.062, 0.01],
+  // anéis flutuantes em volta da câmara (soltos, girando em sentidos opostos)
+  const rings = [];
+  for (const [z, r, dir] of [
+    [-0.235, 0.078, 1],
+    [-0.285, 0.072, -1],
   ]) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, t, 10, 40), dark);
+    const ring = new THREE.Group();
+    ring.add(new THREE.Mesh(new THREE.TorusGeometry(r, 0.0055, 8, 48), chrome));
+    // marcas acesas no anel
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.004, 0.006), conduit);
+      m.position.set(Math.cos(a) * r, Math.sin(a) * r, 0.004);
+      m.rotation.z = a + Math.PI / 2;
+      ring.add(m);
+    }
     ring.position.z = z;
+    ring.userData = { z, dir };
     g.add(ring);
+    rings.push(ring);
+  }
+  // anel do emissor e a íris (seis lâminas que abrem no disparo)
+  const emitterRing = new THREE.Mesh(new THREE.TorusGeometry(0.068, 0.012, 10, 40), dark);
+  emitterRing.position.z = -0.2;
+  g.add(emitterRing);
+  const dish = new THREE.Mesh(
+    latheZ(
+      [
+        [0.03, 0.31],
+        [0.062, 0.315],
+        [0.066, 0.33],
+        [0.06, 0.34],
+        [0.035, 0.335],
+      ],
+      40,
+    ),
+    dark,
+  );
+  g.add(dish);
+  const iris = [];
+  const bladeShape = new THREE.Shape();
+  bladeShape.moveTo(0, 0);
+  bladeShape.lineTo(0.034, 0.004);
+  bladeShape.lineTo(0.03, 0.02);
+  bladeShape.closePath();
+  const bladeGeo = new THREE.ShapeGeometry(bladeShape);
+  for (let k = 0; k < 6; k++) {
+    const pivot = new THREE.Group();
+    const a = (k / 6) * Math.PI * 2;
+    pivot.position.set(Math.cos(a) * 0.034, Math.sin(a) * 0.034, -0.336);
+    pivot.rotation.z = a + Math.PI * 0.62;
+    const blade = new THREE.Mesh(bladeGeo, metal(0x3a3d42, { side: THREE.DoubleSide, roughness: 0.4 }));
+    pivot.add(blade);
+    pivot.userData.a = a + Math.PI * 0.62;
+    g.add(pivot);
+    iris.push(pivot);
   }
   // três garras articuladas: cada uma gira em volta da própria base (abre/fecha)
   const claws = [];
@@ -295,15 +404,17 @@ export function portalGun() {
     const tipBall = new THREE.Mesh(new THREE.SphereGeometry(0.014, 12, 8), whiteP);
     tipBall.position.copy(curve.getPoint(1));
     const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.03, 12), dark);
-    // reforço branco no meio da garra
+    // reforço branco no meio da garra e um filete aceso por dentro
     const guard = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.05, 4, 8), whiteP);
     guard.position.copy(curve.getPoint(0.45));
     guard.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), curve.getTangent(0.45));
-    pivot.add(claw, tipBall, hinge, guard);
+    const inner = new THREE.CatmullRomCurve3(clawProfile.map(([r, z]) => new THREE.Vector3(r - 0.066 - 0.011, 0, z + 0.19)));
+    const lit = new THREE.Mesh(new THREE.TubeGeometry(inner, 20, 0.003, 5, false), conduit);
+    pivot.add(claw, tipBall, hinge, guard, lit);
     g.add(holder);
     claws.push(pivot);
   }
-  // braço de cima: sai do casco e passa por cima da câmara
+  // braço de cima: sai do casco e passa por cima da câmara, com conduto aceso
   const arm = new THREE.CatmullRomCurve3([
     new THREE.Vector3(0, 0.098, 0.04),
     new THREE.Vector3(0, 0.128, -0.08),
@@ -311,6 +422,8 @@ export function portalGun() {
     new THREE.Vector3(0, 0.098, -0.33),
   ]);
   g.add(new THREE.Mesh(new THREE.TubeGeometry(arm, 40, 0.017, 12, false), whiteP));
+  const armLit = new THREE.CatmullRomCurve3(arm.points.map((p) => p.clone().add(new THREE.Vector3(0, 0.0165, 0))));
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(armLit, 40, 0.0038, 6, false), conduit));
   const armTip = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), dark);
   armTip.position.copy(arm.getPoint(1));
   g.add(armTip);
@@ -335,12 +448,7 @@ export function portalGun() {
     new THREE.Vector3(0.07, -0.06, -0.16),
   ]);
   g.add(new THREE.Mesh(new THREE.TubeGeometry(hose, 20, 0.008, 8, false), rubber));
-  for (const sx of [-1, 1]) {
-    const panel = new THREE.Mesh(new RoundedBoxGeometry(0.02, 0.05, 0.12, 2, 0.008), dark);
-    panel.position.set(sx * 0.108, 0.0, -0.08);
-    g.add(panel);
-  }
-  // luz indicadora no topo (cor do último portal) e LEDs de carga do lado esquerdo
+  // luz indicadora no topo e LEDs de carga do lado esquerdo
   const lamp = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.06, 4, 10).rotateX(Math.PI / 2), coreMat);
   lamp.position.set(0, 0.102, -0.02);
   g.add(lamp);
@@ -348,16 +456,104 @@ export function portalGun() {
   for (let k = 0; k < 3; k++) {
     const m = glow(new THREE.Color(0.4, 1.4, 2.4));
     const led = new THREE.Mesh(new THREE.SphereGeometry(0.0055, 8, 6), m);
-    led.position.set(-0.117, 0.012, -0.05 - k * 0.028);
+    led.position.set(-0.122, 0.034, -0.0 - k * 0.022);
     g.add(led);
     leds.push(m);
   }
+  // painel holográfico flutuando ao lado esquerdo (o que o jogador vê)
+  const holoCanvas = canvas(256, 128);
+  const holoTex = new THREE.CanvasTexture(holoCanvas);
+  holoTex.colorSpace = THREE.SRGBColorSpace;
+  const holo = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.21, 0.105),
+    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+  );
+  // virado para o olho do jogador (que fica atrás e à esquerda da arma)
+  holo.position.set(-0.24, 0.07, 0.17);
+  holo.rotation.set(-0.42, -0.42, 0, "YXZ");
+  holo.renderOrder = 5;
+  const holoArm = limb(new THREE.Vector3(-0.105, 0.04, 0.15), new THREE.Vector3(-0.13, 0.055, 0.16), 0.003, 0.003, dark);
+  g.add(holo, holoArm);
+  // brilho de plasma na ponta
+  const tipGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x88ccff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  tipGlow.position.set(0, 0, -0.35);
+  tipGlow.scale.setScalar(0.06);
+  g.add(tipGlow);
 
   const tip = new THREE.Object3D();
   tip.position.set(0, 0, -0.38);
   g.add(tip);
-  g.userData = { core: coreMat, tip, claws, coil, leds };
+  g.userData = { core: coreMat, tip, claws, coil, leds, rings, conduit, vents, heatMat, iris, tipGlow, holo: { canvas: holoCanvas, tex: holoTex, t: 0 } };
   return g;
+}
+
+/**
+ * Redesenha o painel holográfico da arma: estado dos dois portais, campo de
+ * força (segurando), tempo lento e uma onda correndo. `s` = { blue, orange,
+ * holding, slow, mode, color: [cssA, cssB], t }.
+ */
+export function drawGunHolo(gun, s) {
+  const { canvas: cv, tex } = gun.userData.holo;
+  const c = cv.getContext('2d');
+  const W = cv.width;
+  const H = cv.height;
+  c.clearRect(0, 0, W, H);
+  // fundo escuro translúcido: legível em parede clara ou escura
+  c.fillStyle = 'rgba(4,18,32,0.62)';
+  c.fillRect(3, 3, W - 6, H - 6);
+  // linhas de varredura do holograma
+  c.fillStyle = 'rgba(120,200,255,0.06)';
+  for (let y = 4; y < H; y += 4) c.fillRect(3, y, W - 6, 1);
+  c.strokeStyle = 'rgba(140,210,255,0.55)';
+  c.lineWidth = 2;
+  c.strokeRect(3, 3, W - 6, H - 6);
+  // cantos
+  c.fillStyle = 'rgba(140,210,255,0.9)';
+  for (const [x, y] of [
+    [3, 3],
+    [W - 13, 3],
+    [3, H - 6],
+    [W - 13, H - 6],
+  ])
+    c.fillRect(x, y, 10, 3);
+  c.font = 'bold 18px monospace';
+  c.fillStyle = 'rgba(170,225,255,0.95)';
+  c.fillText(s.mode === 'none' ? 'SEM ARMA' : 'PORTAIS', 12, 24);
+  // indicadores dos portais
+  const dot = (x, on, col, label) => {
+    c.beginPath();
+    c.arc(x, 50, 13, 0, Math.PI * 2);
+    c.fillStyle = on ? col : 'rgba(255,255,255,0.08)';
+    c.fill();
+    c.strokeStyle = col;
+    c.lineWidth = 3;
+    c.stroke();
+    c.fillStyle = 'rgba(200,230,255,0.9)';
+    c.font = 'bold 14px monospace';
+    c.fillText(label, x + 19, 55);
+  };
+  dot(26, s.blue, s.color[0], s.blue ? 'ON' : '--');
+  if (s.mode === 'both') dot(140, s.orange, s.color[1], s.orange ? 'ON' : '--');
+  // onda de energia
+  c.beginPath();
+  for (let x = 12; x < W - 12; x += 3) {
+    const k = (x - 12) / (W - 24);
+    const y = 82 + Math.sin(k * 18 - s.t * 8) * (s.holding ? 9 : 4) * Math.sin(k * Math.PI) + Math.sin(k * 51 + s.t * 13) * 1.5;
+    if (x === 12) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  c.strokeStyle = s.holding ? 'rgba(255,220,120,0.9)' : 'rgba(120,200,255,0.8)';
+  c.lineWidth = 3;
+  c.stroke();
+  // barra do tempo lento
+  c.fillStyle = 'rgba(140,210,255,0.18)';
+  c.fillRect(12, 104, W - 24, 10);
+  c.fillStyle = s.slow < 0.25 ? 'rgba(255,120,90,0.9)' : 'rgba(150,230,255,0.85)';
+  c.fillRect(12, 104, (W - 24) * s.slow, 10);
+  c.font = '10px monospace';
+  c.fillStyle = 'rgba(200,230,255,0.7)';
+  c.fillText(s.holding ? 'CAMPO DE FORÇA' : 'TEMPO', W - 112, 100);
+  tex.needsUpdate = true;
 }
 
 // ------------------------------------------------------------------ amostra (cubo)
@@ -534,6 +730,7 @@ function cubeParts() {
     heart: faceMat(true),
     corner: plastic(0xdcdcd6, { roughness: 0.4 }),
     pink: plastic(0xf3b8d4, { roughness: 0.35 }),
+    laserCorner: plastic(0x3a3d44, { roughness: 0.35, clearcoat: 0.8 }),
     disc: metal(0x3a3d42, { roughness: 0.5 }),
     body: new RoundedBoxGeometry(0.58, 0.58, 0.58, 3, 0.035),
     corners: mergeGeometries(cg),
@@ -546,9 +743,21 @@ function cubeParts() {
 export function sampleCube(opts = {}) {
   const P = cubeParts();
   const mat = (opts.special ? P.heart : P.face).clone();
+  if (opts.laser) mat.emissive.set(0xff5030);
   const m = new THREE.Mesh(P.body, mat);
   m.castShadow = true;
-  m.add(new THREE.Mesh(P.corners, opts.special ? P.pink : P.corner), new THREE.Mesh(P.discs, P.disc));
+  m.add(new THREE.Mesh(P.corners, opts.special ? P.pink : opts.laser ? P.laserCorner : P.corner), new THREE.Mesh(P.discs, P.disc));
+  if (opts.laser) {
+    // cubo refletor: lente na face da frente (+z), por onde o feixe sai
+    const lensMat = glow(new THREE.Color(0.6, 0.08, 0.05));
+    const bezel = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.06, 32).rotateX(Math.PI / 2), metal(0x2a2c30, { roughness: 0.3 }));
+    bezel.position.z = 0.3;
+    const lens = new THREE.Mesh(new THREE.SphereGeometry(0.13, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2).rotateX(Math.PI / 2), lensMat);
+    lens.position.z = 0.31;
+    lens.scale.z = 0.5;
+    m.add(bezel, lens);
+    m.userData.lens = lensMat;
+  }
   m.userData.glow = mat;
   return m;
 }
@@ -723,16 +932,23 @@ function turretShellMaps() {
 
 /**
  * Torreta de segurança: "ovo" branco partido ao meio (as metades abrem e
- * mostram os canos quando ela mira), olho vermelho e três pernas finas com
- * pistões. userData: { lensMat, eyeGlow, halves, guns, barrels, flashes, flashLight, body }.
+ * mostram as metralhadoras giratórias quando ela mira), olho vermelho com
+ * íris, cabeça de T-rex robô, LEDs de status, antena que pisca e três pernas
+ * com pistões. Tudo acima do quadril fica num grupo `head` que se mexe
+ * (procura, mira, treme ao cair). userData: { lensMat, eyeGlow, halves, guns,
+ * barrels, flashes, flashLight, body, head, iris, antMat, ledMat, spark }.
  */
 export function turretModel() {
   const g = new THREE.Group();
+  const head = new THREE.Group();
   const white = plastic(0xffffff, { ...turretShellMaps() });
+  const whiteP = plastic(0xeeeeea, { roughness: 0.35 });
   const dark = metal(0x26282c, { roughness: 0.55 });
   const black = metal(0x121315, { roughness: 0.6, metalness: 0.4 });
   const chrome = metal(0xb8bcc4, { roughness: 0.2, metalness: 0.95 });
   const lensMat = glow(new THREE.Color(3, 0.15, 0.1));
+  const ledMat = glow(new THREE.Color(0, 0, 0));
+  const antMat = glow(new THREE.Color(2, 0.2, 0.1));
 
   const BODY_Y = 0.8;
   const S = [0.25, 0.45, 0.2];
@@ -740,7 +956,14 @@ export function turretModel() {
   const inner = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), dark);
   inner.scale.set(S[0] * 0.9, S[1] * 0.97, S[2] * 0.95);
   inner.position.y = BODY_Y;
-  g.add(inner);
+  head.add(inner);
+  // fileira de LEDs na fenda da frente (acendem conforme abre)
+  for (let k = 0; k < 6; k++) {
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.01), ledMat);
+    const y = BODY_Y - 0.22 + k * 0.04;
+    led.position.set(0, y, S[2] * 0.95 * Math.sqrt(Math.max(0, 1 - ((y - BODY_Y) / (S[1] * 0.97)) ** 2)) + 0.002);
+    head.add(led);
+  }
   const halves = [];
   const guns = [];
   const barrels = [];
@@ -755,26 +978,37 @@ export function turretModel() {
     lid.scale.set(1, S[1], S[2]);
     lid.position.x = -side * 0.001;
     half.add(shell, lid);
-    // canos que aparecem quando a metade abre
+    // nervuras de blindagem do lado de fora
+    for (const dy of [-0.12, 0.0, 0.12]) {
+      const rib = new THREE.Mesh(new RoundedBoxGeometry(0.02, 0.025, 0.2, 2, 0.008), whiteP);
+      rib.position.set(side * S[0] * Math.sqrt(Math.max(0, 1 - (dy / S[1]) ** 2)) * 0.98, dy, -0.02);
+      half.add(rib);
+    }
+    // metralhadora giratória (três canos em volta de um eixo) que aparece com a metade aberta
     const gunG = new THREE.Group();
-    const housing = new THREE.Mesh(new RoundedBoxGeometry(0.06, 0.17, 0.15, 2, 0.02), dark);
+    const housing = new THREE.Mesh(new RoundedBoxGeometry(0.07, 0.17, 0.15, 2, 0.02), dark);
     housing.position.set(side * 0.03, 0, 0.0);
     gunG.add(housing);
-    for (const dy of [0.05, 0, -0.05]) {
-      const bar = new THREE.Group();
-      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.16, 12).rotateX(Math.PI / 2), black);
-      const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.02, 12).rotateX(Math.PI / 2), chrome);
-      muzzle.position.z = 0.08;
-      bar.add(barrel, muzzle);
-      bar.position.set(side * 0.03, dy, 0.07);
-      gunG.add(bar);
-      barrels.push(bar);
-      const fl = new THREE.Sprite(flashMat);
-      fl.position.set(side * 0.03, dy, 0.18);
-      fl.visible = false;
-      gunG.add(fl);
-      flashes.push(fl);
+    const spin = new THREE.Group();
+    for (let k = 0; k < 3; k++) {
+      const a = (k / 3) * Math.PI * 2;
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.011, 0.17, 10).rotateX(Math.PI / 2), black);
+      barrel.position.set(Math.cos(a) * 0.022, Math.sin(a) * 0.022, 0);
+      spin.add(barrel);
     }
+    const front = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.015, 16).rotateX(Math.PI / 2), chrome);
+    front.position.z = 0.075;
+    const back = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.034, 0.03, 16).rotateX(Math.PI / 2), dark);
+    back.position.z = -0.07;
+    spin.add(front, back);
+    spin.position.set(side * 0.03, 0, 0.08);
+    gunG.add(spin);
+    barrels.push(spin);
+    const fl = new THREE.Sprite(flashMat);
+    fl.position.set(side * 0.03, 0, 0.2);
+    fl.visible = false;
+    gunG.add(fl);
+    flashes.push(fl);
     gunG.position.set(-side * 0.02, 0.0, 0);
     half.add(gunG);
     // trilho de abertura (aparece com a metade aberta)
@@ -782,7 +1016,7 @@ export function turretModel() {
     rail.position.set(-side * 0.05, 0.12, -0.05);
     half.add(rail);
     half.position.set(side * 0.006, BODY_Y, 0);
-    g.add(half);
+    head.add(half);
     halves.push(half);
     guns.push(gunG);
   }
@@ -803,18 +1037,29 @@ export function turretModel() {
     new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.15, roughness: 0, envMap: ENV, envMapIntensity: 2, depthWrite: false }),
   );
   glass.position.copy(socket.position).add(new THREE.Vector3(0, 0, -0.012));
-  g.add(socket, lens, iris, glass);
+  head.add(socket, lens, iris, glass);
   const eyeGlow = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff3020, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
   );
   eyeGlow.scale.setScalar(0.3);
   eyeGlow.position.copy(lens.position).add(new THREE.Vector3(0, 0, 0.03));
-  g.add(eyeGlow);
-  // antena e aleta de trás
+  head.add(eyeGlow);
+  // antena (com a ponta piscando) e aletas de refrigeração nas costas
   const ant = limb(new THREE.Vector3(0.05, BODY_Y + S[1] - 0.04, -0.06), new THREE.Vector3(0.07, BODY_Y + S[1] + 0.14, -0.08), 0.006, 0.004, black);
-  const antTip = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 6), glow(new THREE.Color(2, 0.2, 0.1)));
+  const antTip = new THREE.Mesh(new THREE.SphereGeometry(0.01, 8, 6), antMat);
   antTip.position.set(0.07, BODY_Y + S[1] + 0.145, -0.08);
-  g.add(ant, antTip);
+  head.add(ant, antTip);
+  for (const dx of [-0.05, 0, 0.05]) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.16, 0.05), dark);
+    fin.position.set(dx, BODY_Y - 0.12, -S[2] - 0.005);
+    head.add(fin);
+  }
+  // faísca de quando ela é derrubada
+  const spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: 0x9fd8ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  spark.visible = false;
+  spark.scale.setScalar(0.15);
+  spark.position.set(0.06, BODY_Y + 0.22, 0.12);
+  head.add(spark);
   // cubo do quadril (onde as pernas se prendem)
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.1, 16), dark);
   hub.position.y = 0.42;
@@ -827,28 +1072,33 @@ export function turretModel() {
   const jaw = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), dark);
   jaw.scale.set(0.09, 0.035, 0.14);
   jaw.position.set(0, TOP - 0.07, 0.16);
-  g.add(snout, jaw);
+  head.add(snout, jaw);
   const toothMat = plastic(0xf4efe0);
   for (const s of [-1, 1]) {
     for (let i = 0; i < 4; i++) {
       const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.035, 4).rotateX(Math.PI), toothMat);
       tooth.position.set(s * 0.08, TOP - 0.06, 0.12 + i * 0.045);
-      g.add(tooth);
+      head.add(tooth);
     }
     const dinoEye = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), lensMat);
     dinoEye.position.set(s * 0.08, TOP + 0.07, 0.2);
-    g.add(dinoEye);
+    head.add(dinoEye);
   }
   for (let i = 0; i < 4; i++) {
     const crest = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.1, 4), black);
     const a = 0.5 + i * 0.32;
     crest.position.set(0, BODY_Y + Math.cos(a) * S[1] * 0.98, -Math.sin(a) * S[2] * 0.98);
     crest.rotation.x = -a;
-    g.add(crest);
+    head.add(crest);
   }
   const tail = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.5, 10).rotateX(-Math.PI / 2 - 0.35), white);
   tail.position.set(0, 0.62, -0.38);
-  g.add(tail);
+  head.add(tail);
+  // a cabeça gira em volta do quadril: as peças foram montadas em coordenadas da torreta
+  const PIVOT = 0.45;
+  for (const c of head.children) c.position.y -= PIVOT;
+  head.position.y = PIVOT;
+  g.add(head);
   // três pernas (duas na frente abertas, uma atrás) com pistão hidráulico
   const legs = [
     [new THREE.Vector3(-0.1, 0.45, 0.05), new THREE.Vector3(-0.3, 0.32, 0.2), new THREE.Vector3(-0.36, 0.0, 0.3)],
@@ -871,6 +1121,6 @@ export function turretModel() {
   g.traverse((o) => {
     if (o.isMesh) o.castShadow = true;
   });
-  g.userData = { lensMat, eyeGlow, halves, guns, barrels, flashes, flashLight, body: inner };
+  g.userData = { lensMat, eyeGlow, halves, guns, barrels, flashes, flashLight, body: inner, head, iris, antMat, ledMat, spark };
   return g;
 }

@@ -186,8 +186,10 @@ export class Post {
     }
     const u = this.finish.uniforms;
     u.uTime.value = t;
-    u.uAberr.value = slow * 0.012;
-    u.uVignette.value = 0.32 + slow * 0.25;
+    // salto no tempo: aberração forte que some em ~0,7 s
+    this.warp = Math.max(0, (this.warp ?? 0) - dt * 1.5);
+    u.uAberr.value = slow * 0.012 + this.warp * this.warp * 0.08;
+    u.uVignette.value = 0.32 + slow * 0.25 + this.warp * 0.4;
     this.bloom.strength = 0.45 + slow * 0.25;
     // no tempo lento a câmera anda pouco por quadro: o rastro fica mais longo;
     // acima de ~8 m/s o rastro cresce com a velocidade e ganha o borrão radial

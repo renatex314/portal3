@@ -148,6 +148,22 @@ export class EnergySystem {
     for (const p of [...this.pellets]) {
       p.life -= dt;
       p.cooldown -= dt;
+      // buraco negro: a trajetória curva (a velocidade não muda); no horizonte, some
+      let swallowed = false;
+      for (const B of world.blackHoles ?? []) {
+        const d = B.pos.clone().sub(p.pos);
+        const r = d.length();
+        if (r < B.horizon * 1.2) swallowed = true;
+        if (r > B.reach) continue;
+        const sp = p.vel.length();
+        p.vel.addScaledVector(d.divideScalar(r), Math.min(B.strength / Math.max(r * r, 1), 60) * dt);
+        p.vel.setLength(sp);
+      }
+      if (swallowed) {
+        on.pop?.(p.pos.clone());
+        this.kill(p);
+        continue;
+      }
       // passos curtos: a bola nunca atravessa uma parede fina
       let rest = p.vel.length() * dt;
       while (rest > 1e-4) {
@@ -193,7 +209,7 @@ export class EnergySystem {
       p.sprite.material.rotation = t * 3;
       p.sprite.scale.setScalar(1.2 + Math.sin(t * 25) * 0.12);
       // receptor
-      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(p.pos) < 0.55);
+      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(p.pos) < 0.8);
       if (C) {
         C.active = true;
         p.from.done = true;

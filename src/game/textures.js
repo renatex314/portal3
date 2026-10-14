@@ -581,3 +581,39 @@ export function magma() {
   }
   return tex(cv);
 }
+
+/** regolito lunar: pó cinza com pedrinhas e crateras pequenas (aceita portal, como a rocha lunar) */
+export function moonGround() {
+  const size = 1024;
+  const cv = canvas(size);
+  const hv = canvas(size);
+  const g = cv.getContext('2d');
+  const h = hv.getContext('2d');
+  g.fillStyle = 'rgb(128,127,124)';
+  g.fillRect(0, 0, size, size);
+  h.fillStyle = '#808080';
+  h.fillRect(0, 0, size, size);
+  grain(g, 0, 0, size, size, 40000, 0.14, 2.5);
+  grain(h, 0, 0, size, size, 30000, 0.3, 3);
+  blotches(g, 0, 0, size, size, 20, '60,60,62', 0.18);
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 6 + Math.random() ** 2 * 60;
+    for (const [ctx, dark, light] of [
+      [g, 'rgba(50,50,50,0.4)', 'rgba(220,220,215,0.3)'],
+      [h, 'rgba(0,0,0,0.6)', 'rgba(255,255,255,0.6)'],
+    ]) {
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = light;
+      ctx.lineWidth = Math.max(1.5, r * 0.18);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  return { map: tex(cv, { repeat: 0.25 }), normalMap: tex(heightToNormal(hv, 3), { srgb: false, repeat: 0.25 }) };
+}

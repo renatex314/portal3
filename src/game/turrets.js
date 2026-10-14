@@ -64,6 +64,11 @@ export class Turret extends Prop {
     this.flashT = 0;
     this.barrelI = 0;
     this.eyeK = 1;
+    this.spin = 0; // velocidade dos canos giratórios
+    this.headYaw = 0;
+    this.headPitch = 0;
+    this.downT = 9; // tempo desde que desligou (faíscas e tremedeira)
+    this.target = null;
   }
 
   /** clarão no cano da vez, recuo e um rastro até perto do alvo */
@@ -116,6 +121,51 @@ export class Turret extends Prop {
     u.eyeGlow.visible = this.eyeK > 0.05;
     u.eyeGlow.material.opacity = Math.min(1, this.eyeK);
     u.eyeGlow.scale.setScalar(0.22 + this.eyeK * 0.1);
+    const now = performance.now() / 1000;
+    // íris: fecha (foco) quando trava a mira
+    u.iris.scale.setScalar(1 - this.lock * 0.45 + (this.active ? 0 : 0.3));
+    // cabeça: procura de um lado para o outro, segue o alvo, cai e treme desligada
+    let yaw = 0;
+    let pitch = 0;
+    if (this.active && this.lock > 0 && this.target) {
+      const l = this.mesh.worldToLocal(this.target.clone());
+      l.y -= 0.45;
+      yaw = THREE.MathUtils.clamp(Math.atan2(l.x, l.z), -0.3, 0.3);
+      pitch = THREE.MathUtils.clamp(-Math.atan2(l.y, Math.hypot(l.x, l.z)) * 0.5, -0.15, 0.15);
+    } else if (this.active) {
+      yaw = Math.sin(now * 0.8 + this.home.x) * 0.2;
+      pitch = Math.sin(now * 0.53) * 0.04;
+    } else {
+      this.downT += dt;
+      pitch = 0.22;
+      if (this.downT < 2.5) {
+        yaw = (Math.random() - 0.5) * 0.15 * (1 - this.downT / 2.5);
+        pitch += (Math.random() - 0.5) * 0.1;
+      }
+    }
+    const k = Math.min(1, dt * (this.active ? 5 : 12));
+    this.headYaw += (yaw - this.headYaw) * k;
+    this.headPitch += (pitch - this.headPitch) * k;
+    u.head.rotation.set(this.headPitch, this.headYaw, 0);
+    // faíscas logo depois de desligar
+    u.spark.visible = !this.active && this.downT < 2.5 && Math.random() < 0.35;
+    if (u.spark.visible) {
+      u.spark.material.rotation = Math.random() * 6.28;
+      u.spark.scale.setScalar(0.08 + Math.random() * 0.12);
+    }
+    // metralhadoras: giram mirando e disparando
+    const want = !this.active ? 0 : this.lock >= 1 ? 45 : this.lock > 0 ? 14 : 0;
+    this.spin += (want - this.spin) * Math.min(1, dt * 3);
+    u.barrels.forEach((b, i) => (b.rotation.z += this.spin * dt * (i ? 1 : -1)));
+    // metades inclinam um pouco ao abrir
+    u.halves.forEach((h, i) => (h.rotation.z = (i ? -1 : 1) * this.deploy * 0.06));
+    // LEDs da fenda: acendem conforme abre; vermelho mirando, âmbar procurando
+    const lit = this.active ? 0.3 + this.deploy * 0.7 : 0;
+    if (this.lock > 0) u.ledMat.color.setRGB(2.6 * lit, 0.15 * lit, 0.05 * lit);
+    else u.ledMat.color.setRGB(2.2 * lit * 0.4, 1.1 * lit * 0.4, 0.1 * lit * 0.4);
+    // antena: pisca uma vez por segundo ligada
+    const blink = this.active && now % 1 < 0.12;
+    u.antMat.color.setRGB(blink ? 3 : 0.15, blink ? 0.3 : 0.02, blink ? 0.15 : 0.02);
   }
 
   get eye() {
@@ -135,6 +185,7 @@ export class Turret extends Prop {
     this.active = false;
     this.laser.visible = false;
     this.downReason = reason;
+    this.downT = 0;
     // desligada à mão: dá um tranco para ela tombar para a frente
     if (push && this.body) {
       const f = this.forward().multiplyScalar(push);
@@ -174,6 +225,7 @@ export class Turret extends Prop {
       this.lock = 0;
       return 0;
     }
+    this.target = target;
     // vê o jogador? (cone à frente do corpo; cubos e paredes bloqueiam)
     const eye = this.eye;
     const fwd = this.forward();

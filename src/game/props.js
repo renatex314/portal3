@@ -145,6 +145,7 @@ export class Cube extends Prop {
     super(physics, portals, mesh);
     this.kind = 'cube';
     this.special = !!opts.special;
+    this.redirect = !!opts.laser; // cubo refletor de laser (o feixe sai pela face +z)
     this.half = new THREE.Vector3(0.3, 0.3, 0.3);
     this.home = new THREE.Vector3(x, y + 0.31, z);
     this.homeQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), opts.yaw ?? 0);
