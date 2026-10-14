@@ -204,12 +204,17 @@ export class Charts {
     ctx.fillText('energia total (sempre igual)', w / 2, pad - 3);
     const f = sim.s / sim.L;
     const u = prof(f);
-    ctx.fillStyle = '#fff';
+    // a cápsula vira o T-rex passageiro, andando de skate na pista em U
     ctx.shadowColor = '#59d0ff';
     ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.arc(X(f), Y(u) - 7, 7, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.font = '20px "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif';
+    ctx.textBaseline = 'bottom';
+    ctx.save();
+    ctx.translate(X(f), Y(u) + 2);
+    if (sim.v > 0) ctx.scale(-1, 1); // o emoji olha para a esquerda: vira para o lado em que anda
+    ctx.fillText('🦖', 0, 0);
+    ctx.restore();
     ctx.shadowBlur = 0;
+    ctx.textBaseline = 'alphabetic';
   }
 }

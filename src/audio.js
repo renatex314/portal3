@@ -147,6 +147,68 @@ export class Soundtrack {
     }
   }
 
+  /** rugido de dinossauro sintetizado: ronco grave com "rosnado" + bafo de ruído */
+  roar(vol = 1, pitch = 1) {
+    if (!this.ctx || vol <= 0.01) return;
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const dur = 2.1;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(0.9 * vol, t + 0.22);
+    out.gain.setValueAtTime(0.9 * vol, t + dur * 0.55);
+    out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    out.connect(this.sfx);
+    out.connect(this.reverb);
+    // rosnado: modulação rápida de amplitude
+    const growl = ctx.createGain();
+    growl.gain.value = 0.6;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 27;
+    const lfoG = ctx.createGain();
+    lfoG.gain.value = 0.4;
+    lfo.connect(lfoG).connect(growl.gain);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(500, t);
+    lp.frequency.exponentialRampToValueAtTime(1500, t + 0.5);
+    lp.frequency.exponentialRampToValueAtTime(350, t + dur);
+    growl.connect(lp).connect(out);
+    for (const [mult, type, g] of [
+      [1, 'sawtooth', 0.5],
+      [1.49, 'sawtooth', 0.25],
+      [0.5, 'square', 0.2],
+    ]) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      const f = 95 * pitch * mult;
+      o.frequency.setValueAtTime(f * 0.8, t);
+      o.frequency.exponentialRampToValueAtTime(f * 1.35, t + 0.45);
+      o.frequency.exponentialRampToValueAtTime(f * 0.6, t + dur);
+      const og = ctx.createGain();
+      og.gain.value = g;
+      o.connect(og).connect(growl);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    }
+    // bafo
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.4;
+    bp.frequency.setValueAtTime(500 * pitch, t);
+    bp.frequency.exponentialRampToValueAtTime(1100 * pitch, t + 0.5);
+    bp.frequency.exponentialRampToValueAtTime(300 * pitch, t + dur);
+    const ng = ctx.createGain();
+    ng.gain.value = 0.55;
+    src.connect(bp).connect(ng).connect(growl);
+    src.start(t, Math.random());
+    src.stop(t + dur + 0.05);
+    lfo.start(t);
+    lfo.stop(t + dur + 0.05);
+  }
+
   boom() {
     if (!this.ctx) return;
     const ctx = this.ctx;

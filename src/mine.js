@@ -2,13 +2,16 @@
 // Ferrífero (MG). Cava a céu aberto em bancadas, poço vertical com torre de
 // extração, sonda com trado, guindaste, escavadeiras, caminhões, ventilação,
 // geradores, escritório, a cozinha da Dona Cida e a equipe — com entrevistas.
+// E os dinossauros figurantes: T-rex de capacete na estrada dos caminhões,
+// raptores, titanossauros pastando, pterossauros e o filhote da cozinha.
 // Escala: 1 unidade = 1 metro. Centro do poço na origem; fundo da cava em y = −18.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fbm2, noise2 } from './noise.js';
 import { GLSL_NOISE } from './noise.js';
-import { PEOPLE } from './documentary.js';
+import { PEOPLE, INTERVIEW_REX } from './documentary.js';
+import { makeDino, orbit, poseDino, roar } from './dinos.js';
 
 const FLOOR_Y = -18;
 const FLOOR_R = 22;
@@ -628,6 +631,7 @@ export class MineScene {
     this._site();
     this._trees();
     this._people();
+    this._dinos();
     this._particles();
     this._cage();
   }
@@ -1178,6 +1182,7 @@ export class MineScene {
       const x = Math.cos(a) * r;
       const z = Math.sin(a) * r;
       if (x > 55 && x < 95 && z > 5 && z < 50) continue; // escritório
+      if (Math.hypot(x - INTERVIEW_REX[0], z - INTERVIEW_REX[2]) < 17) continue; // o T-rex da entrevista
       const y = groundY(x, z);
       const s = 0.7 + rnd() * 1.1;
       q.setFromEuler(new THREE.Euler((rnd() - 0.5) * 0.25, rnd() * 6, (rnd() - 0.5) * 0.25));
@@ -1230,6 +1235,53 @@ export class MineScene {
       this.scene.add(w.group);
       this.walkers.push(w);
     }
+  }
+
+  _dinos() {
+    const ground = (x, z) => groundY(x, z);
+    this.dinoWalkers = [];
+    const walk = (d, path) => {
+      this.scene.add(d.group);
+      this.dinoWalkers.push({ d, path: { ground, ...path } });
+      return d;
+    };
+    // T-rex de capacete andando no comboio dos caminhões
+    this.rexWalker = walk(makeDino('rex', { helmet: 0xf2c200 }), { rx: ROAD_R, speed: 0.06 * ROAD_R, phase: Math.PI / 4 });
+    this.rexWalker.P.pose = 'walk';
+    // raptores correndo na beira da cava, no sentido contrário
+    for (let i = 0; i < 3; i++) {
+      const d = walk(makeDino('raptor', { helmet: [0xffffff, 0xff7a1a, 0x1e88e5][i] }), { rx: 48.8, speed: 6, phase: 2 + i * 0.07, dir: -1 });
+      d.P.pose = 'run';
+    }
+    // titanossauros pastando além das árvores
+    for (let i = 0; i < 3; i++) {
+      const d = walk(makeDino('titan', { scale: 0.9 + i * 0.15 }), { rx: 150 + i * 14, rz: 135 + i * 14, speed: 1.6, phase: 1.2 + i * 0.25 });
+      d.P.pose = 'walk';
+    }
+    // pterossauros sobre a cava
+    for (let i = 0; i < 4; i++) walk(makeDino('ptero', { scale: 1.5 }), { ground: null, cx: (i - 1.5) * 8, rx: 38 + i * 10, rz: 32 + i * 9, speed: 10, phase: i * 1.6, dir: i % 2 ? 1 : -1, y: 42 + i * 6, bank: 0.35, bob: 3 });
+
+    // parados: o T-rex da entrevista da paleontóloga, um estegossauro e o filhote da cozinha
+    this.dinos = this.dinoWalkers.map((w) => w.d);
+    const place = (d, x, z, rotY, pose = 'idle') => {
+      d.group.position.set(x, groundY(x, z), z);
+      d.group.rotation.y = rotY;
+      d.P.pose = pose;
+      this.scene.add(d.group);
+      this.dinos.push(d);
+      return d;
+    };
+    const [rx, , rz, rf] = INTERVIEW_REX;
+    this.interviewRex = place(makeDino('rex', { helmet: 0xffffff, color: 0x5d6e3a }), rx, rz, rf);
+    place(makeDino('stego'), -33, 71, 2.6, 'graze');
+    place(makeDino('trice'), 118, -40, -1.2, 'graze');
+    this.cidaPet = place(makeDino('trice', { scale: 0.2 }), 64.9, 31.9, -2.2);
+    this.cidaPet.P.lookAt = V(66.2, 1.5, 30.5);
+  }
+
+  /** o T-rex da entrevista ruge (a legenda "RRROOAAR") */
+  rexRoar() {
+    roar(this.interviewRex, 2.4);
   }
 
   _particles() {
@@ -1320,6 +1372,12 @@ export class MineScene {
       g.add(wk.group);
       crew.push(wk);
     }
+    // e um raptor de capacete, que também é da equipe
+    const rap = makeDino('raptor', { helmet: 0xf2c200, vest: 0xff7a1a });
+    rap.group.position.set(-0.4, 0.05, 0.75);
+    rap.group.rotation.y = 2.6;
+    g.add(rap.group);
+    this.cageRaptor = rap;
     g.visible = false;
     this.scene.add(g);
     this.cage = g;
@@ -1421,6 +1479,10 @@ export class MineScene {
     for (const w of Object.values(this.workers)) poseWorker(w, t, dt);
     for (const w of this.extras) poseWorker(w, t, dt);
     for (const w of this.cageCrew) poseWorker(w, t, dt);
+    if (this.cage.visible) poseDino(this.cageRaptor, t, dt);
+    // dinossauros
+    for (const w of this.dinoWalkers) orbit(w.d, t, w.path);
+    for (const d of this.dinos) poseDino(d, t, dt);
     for (const w of this.walkers) {
       const { r, y, a0, sp } = w.walk;
       const a = a0 + t * sp;

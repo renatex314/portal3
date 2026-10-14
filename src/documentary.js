@@ -3,6 +3,7 @@
 //
 // As pessoas são personagens fictícios. As técnicas, equipamentos, rochas e
 // números citados são reais (ou ordens de grandeza reais da mineração).
+// Os dinossauros do canteiro são figurantes — e a paleontóloga explica isso.
 
 const V = (x, y, z) => [x, y, z];
 
@@ -86,6 +87,17 @@ export const PEOPLE = {
     facing: 1.9,
     pose: 'pointing',
   },
+  patricia: {
+    name: 'Patrícia Moura',
+    age: 41,
+    role: 'Paleontóloga (e responsável pelos figurantes)',
+    city: 'Uberaba',
+    years: '15 anos escavando dinossauros no Triângulo Mineiro',
+    look: { skin: 0xc8946a, shirt: 0xb59a6a, pants: 0x5a5040, helmet: 0xffffff, hair: 0x3a2414, female: true, vest: true },
+    pos: V(-57.4, 0, -28.3),
+    facing: 1.113,
+    pose: 'hammer',
+  },
   cida: {
     name: 'Aparecida "Dona Cida" Lopes',
     age: 66,
@@ -98,6 +110,9 @@ export const PEOPLE = {
     pose: 'thermos',
   },
 };
+
+// T-rex (figurante) que aparece atrás da paleontóloga: x, y, z, direção
+export const INTERVIEW_REX = [-76.7, 0, -52.4, 0.71];
 
 const ficha = (rows) =>
   `<div class="ficha"><span class="ficha-t">Ficha técnica</span>${rows.map(([k, v]) => `<div><b>${k}</b><span>${v}</span></div>`).join('')}</div>`;
@@ -115,16 +130,18 @@ export const DOC_CHAPTERS = [
       <p>Antes da física, uma pergunta: <b>quem</b> ia cavar esse buraco? E <b>como</b>?</p>
       <p>Viemos para o <b>Quadrilátero Ferrífero</b>, em Minas Gerais — região onde se cava há mais de 300 anos, primeiro atrás de ouro, depois de ferro. Aqui está o (imaginário) <b>Projeto Antípoda</b>: uma equipe mineira tentando furar a Terra até o outro lado.</p>
       <p>O canteiro tem três frentes: a <b>cava</b> em degraus, o <b>poço vertical</b> com a torre de extração e a <b>sonda</b> que perfura lá do fundo.</p>
-      <p class="muted">Documentário de ficção: as pessoas são personagens; as técnicas, máquinas, rochas e números são reais.</p>`,
+      <p class="muted">Documentário de ficção: as pessoas são personagens; as técnicas, máquinas, rochas e números são reais.</p>
+      <p class="muted">🦖 Sim, tem dinossauro no canteiro — de capacete, porque EPI é obrigatório. São figurantes; a paleontóloga explica tudo na Entrevista 3.</p>`,
     camFrom: V(260, 140, 330),
     cam: { pos: V(78, 46, 96), target: V(0, -12, 0), fov: 45, dur: 7 },
     autoRotate: true,
-    mineLabels: ['headframe', 'rig', 'crane', 'excavator', 'trucks', 'vent', 'winch', 'benches', 'office'],
+    mineLabels: ['headframe', 'rig', 'crane', 'excavator', 'trucks', 'vent', 'winch', 'benches', 'office', 'rex'],
     subs: [
       ['Narrador', 'Minas Gerais. Terra vermelha, cheia de ferro.'],
       ['Narrador', 'Aqui, uma equipe decidiu fazer o impossível:'],
       ['Narrador', 'cavar até o outro lado do mundo.'],
       ['Narrador', 'Faltam 12.741 quilômetros e 990 metros.'],
+      ['Narrador', 'E, sim: a equipe tem dinossauros.'],
     ],
   },
   {
@@ -183,9 +200,40 @@ export const DOC_CHAPTERS = [
     ],
   },
   {
-    id: 'doc-kelly',
+    id: 'doc-patricia',
     part: 'doc',
     kicker: 'Documentário · Entrevista 3',
+    title: 'E os dinossauros?',
+    scene: 'mine',
+    interview: 'patricia',
+    rexRoar: true,
+    body: () => `
+      ${qa([
+        ['Tem fóssil de dinossauro nessa cava?', 'Nenhum. O itabirito daqui tem uns <b>2,4 bilhões de anos</b>. Os dinossauros apareceram há uns <b>230 milhões</b> e sumiram há <b>66 milhões</b>. Essa rocha é umas <b>dez vezes mais velha</b> que o primeiro dinossauro — quando ela se formou, a vida na Terra era só micróbio.'],
+        ['Então Minas não tem dinossauro?', 'Tem, e muito! No <b>Triângulo Mineiro</b>, em <b>Peirópolis</b> (Uberaba), as rochas do <b>Grupo Bauru</b> têm uns 70 milhões de anos e guardam <b>titanossauros</b> — aqueles pescoçudos gigantes —, como o <i>Uberabatitan</i>. Em Prata (MG) acharam o <i>Maxakalisaurus</i>.'],
+        ['E esses dinossauros aqui no canteiro?', 'São figurantes do documentário! E repara nos erros: o <b>T-rex</b> viveu na <b>América do Norte</b>, não no Brasil. E o <b>estegossauro</b> sumiu uns 80 milhões de anos antes de o T-rex nascer: tem mais tempo entre os dois do que entre o T-rex e a gente.'],
+        ['E dinossauro ainda existe?', 'Existe: <b>as aves são dinossauros</b>. Quando o Bigode grita "fogo" e o passarinho voa, quem está fugindo é um dinossauro.'],
+      ])}
+      ${ficha([
+        ['Era dos dinossauros', '~230 a 66 milhões de anos atrás (Triássico, Jurássico e Cretáceo)'],
+        ['Itabirito do Quadrilátero', '~2,4 bilhões de anos: sem fósseis de animais'],
+        ['Dinossauros de Minas', 'Peirópolis (Uberaba) e Prata, no Triângulo Mineiro'],
+        ['Fim da era', 'asteroide de ~10 km em Chicxulub (México), há 66 milhões de anos'],
+        ['Onde ficam os fósseis', 'só na crosta, em rochas sedimentares — nunca no manto'],
+      ])}`,
+    subs: [
+      ['Patrícia', 'Fóssil de dinossauro nessa cava? Nenhum.'],
+      ['Patrícia', 'Essa rocha é dez vezes mais velha que o primeiro dinossauro.'],
+      ['Patrícia', 'Mas no Triângulo Mineiro tem titanossauro, aqueles pescoçudos gigantes.'],
+      ['Rex', 'RRRROOOOAAAARRR!'],
+      ['Patrícia', 'Esse aí é figurante. E nem é daqui: o T-rex viveu na América do Norte.'],
+      ['Patrícia', 'E passarinho é dinossauro. Quando o Bigode grita fogo, quem foge é dinossauro.'],
+    ],
+  },
+  {
+    id: 'doc-kelly',
+    part: 'doc',
+    kicker: 'Documentário · Entrevista 4',
     title: 'A cava: degrau por degrau',
     scene: 'mine',
     interview: 'kelly',
@@ -212,7 +260,7 @@ export const DOC_CHAPTERS = [
   {
     id: 'doc-bigode',
     part: 'doc',
-    kicker: 'Documentário · Entrevista 4',
+    kicker: 'Documentário · Entrevista 5',
     title: 'Fogo!',
     scene: 'mine',
     interview: 'bigode',
@@ -242,7 +290,7 @@ export const DOC_CHAPTERS = [
   {
     id: 'doc-tiao',
     part: 'doc',
-    kicker: 'Documentário · Entrevista 5',
+    kicker: 'Documentário · Entrevista 6',
     title: 'O poço e o guincho',
     scene: 'mine',
     interview: 'tiao',
@@ -270,7 +318,7 @@ export const DOC_CHAPTERS = [
   {
     id: 'doc-rodrigo',
     part: 'doc',
-    kicker: 'Documentário · Entrevista 6',
+    kicker: 'Documentário · Entrevista 7',
     title: 'A sonda: mais fundo que qualquer poço',
     scene: 'mine',
     interview: 'rodrigo',
@@ -297,7 +345,7 @@ export const DOC_CHAPTERS = [
   {
     id: 'doc-marquinho',
     part: 'doc',
-    kicker: 'Documentário · Entrevista 7',
+    kicker: 'Documentário · Entrevista 8',
     title: 'Calor, ar e segurança',
     scene: 'mine',
     interview: 'marquinho',
@@ -339,12 +387,13 @@ export const DOC_CHAPTERS = [
       ['Seu Tião (rádio)', 'Velocidade de cruzeiro. Doze metros por segundo.'],
       ['Rodrigo', 'Daqui pra baixo é itabirito. Olha as listras.'],
       ['Marquinho', 'Lá no fundo a rocha tá quente. Encosta não.'],
+      ['Marquinho', 'Isso vale pra você também, Pipoca.'],
     ],
   },
   {
     id: 'doc-cida',
     part: 'doc',
-    kicker: 'Documentário · Entrevista 8',
+    kicker: 'Documentário · Entrevista 9',
     title: 'Pausa pro café',
     scene: 'mine',
     interview: 'cida',
@@ -397,6 +446,7 @@ export const DOC_CHAPTERS = [
 // Referências que aparecem durante a descida do poço (profundidade em metros)
 export const DESCENT_MILESTONES = [
   { d: 30, text: 'Fim do solo vermelho: começa a rocha' },
+  { d: 150, text: 'Itabirito: 10× mais velho que os dinossauros — nenhum fóssil aqui' },
   { d: 330, text: 'Já desceu a altura da Torre Eiffel (330 m)' },
   { d: 828, text: 'Já desceu a altura do Burj Khalifa (828 m)' },
   { d: 2892, text: 'Já desceu a altura do Pico da Bandeira (2.892 m)' },

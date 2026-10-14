@@ -68,6 +68,7 @@ const mine = new MineScene();
 const sound = new Soundtrack();
 const narrator = new Narrator();
 narrator.onSpeaking = (on) => sound.duck(on);
+ground.onRoar = (v) => sound.roar(v);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let activeScene = 'ground';
 const sceneOf = (name) => ({ space: space.scene, ground: ground.scene, mine: mine.scene })[name];
@@ -165,6 +166,7 @@ addLabel('mk_kola', { title: 'Furo mais fundo já feito', sub: 'Kola · 12,3 km'
 addLabel('mk_crosta', { title: 'Fim da crosta', sub: '~35 km · faltam 12.707 km', dx: 60, dy: 50 }, space.scene, space.depthAnchors.crust);
 addLabel('mk_dot', { title: 'Tudo que a humanidade já cavou cabe neste pontinho', sub: 'faltam ~12.730 km até o outro lado', cls: 'red', dx: -40, dy: -70 }, space.scene, space.depthAnchors.surface);
 addLabel('shellOut', { title: 'Esta casca não puxa', sub: 'os puxões se cancelam', dx: -40, dy: -50 }, space.scene);
+addLabel('chicxulub', { title: 'Chicxulub (México)', sub: 'aqui caiu o asteroide que acabou com os dinossauros · 66 mi anos', cls: 'gold', dx: 80, dy: -30 }, space.chicxulub);
 
 // rótulos das camadas, ancorados no corte (plano z = 0, metade de cima)
 const LAYER_LABEL_LAYOUT = {
@@ -192,7 +194,7 @@ const layerLabels = LAYERS.map((L) => {
 const _lp = new THREE.Vector3();
 function occludeLabels() {
   const c = camera.position;
-  for (const key of ['origin', 'anti']) {
+  for (const key of ['origin', 'anti', 'chicxulub']) {
     const l = labels[key];
     if (!l.visible) continue;
     if (view.cut < R) {
@@ -215,6 +217,7 @@ function showLabels(keys = []) {
     else want.add(k);
   }
   for (const [k, l] of Object.entries(labels)) l.visible = want.has(k);
+  space.chicxulub.visible = want.has('chicxulub');
 }
 
 // ------------------------------------------------------------------ câmera
@@ -528,11 +531,18 @@ const MINE_LABEL_TEXT = {
   office: ['Escritório da obra', 'e, ao lado, a cozinha da Dona Cida'],
   blast: ['Frente de desmonte', 'furos carregados com explosivo'],
   shaft: ['Poço principal', '10 m de diâmetro, revestido de concreto'],
+  rex: ['T-rex de capacete (figurante)', 'EPI é obrigatório até pra dinossauro'],
 };
 for (const [key, [t, sub]] of Object.entries(MINE_LABEL_TEXT)) {
   const l = makeLabel({ title: t, sub, cls: 'gold', dx: 0, dy: -40 });
-  l.position.copy(mine.anchors[key]);
-  mine.scene.add(l);
+  if (key === 'rex') {
+    // anda junto com o T-rex na estrada dos caminhões
+    l.position.set(0, 6.4, 3);
+    mine.rexWalker.group.add(l);
+  } else {
+    l.position.copy(mine.anchors[key]);
+    mine.scene.add(l);
+  }
   mineLabels[key] = l;
 }
 
@@ -609,6 +619,17 @@ async function playSubs(ch) {
     subs.classList.add('show');
     // a explosão acontece junto com o grito de "FOGO!"
     if (ch.blast && /^FOGO/.test(text)) doBlast();
+    // o T-rex não fala: ruge
+    if (who === 'Rex') {
+      mine.rexRoar();
+      sound.roar(1);
+      shake = 0.35;
+      await sleep(2800);
+      if (run !== subsRun) return;
+      subs.classList.remove('show');
+      await sleep(350);
+      continue;
+    }
     const t0 = performance.now();
     const spokenOk = await narrator.speak(spoken(text), who);
     const minMs = spokenOk ? minGap * 0.5 : Math.max(minGap, text.length * 70);
@@ -1070,11 +1091,16 @@ function updateSpace(dt, t) {
   space.satellite.visible = view.satellite;
   space.orbitLine.visible = view.satellite;
   space.projLine.visible = view.satellite && tunnelReady;
+  space.satPtero.group.visible = view.satellite;
   if (view.satellite) {
     const th = ORBIT.omega * sim.t;
     const sp = new THREE.Vector3(-Math.cos(th) * R * 1.04, Math.sin(th) * R * 1.04, 0);
     space.satellite.position.copy(sp);
     space.satellite.rotation.z = th;
+    // o pterossauro voa ao lado do satélite, de frente para onde ele vai
+    const vel = new THREE.Vector3(Math.sin(th), Math.cos(th), 0);
+    space.satPtero.group.position.copy(sp).add(new THREE.Vector3(0, 0, 6)).addScaledVector(vel, 3);
+    space.satPtero.group.lookAt(space.satPtero.group.position.clone().add(vel));
     space.projLine.geometry.setFromPoints([sp, p]);
     space.projLine.computeLineDistances();
   }
@@ -1190,7 +1216,7 @@ function frame() {
   if (activeScene === 'space') updateSpace(dt, t);
   else if (activeScene === 'mine') mine.update(t, dt);
   else {
-    ground.update(t);
+    ground.update(t, dt);
   }
   updateCamera(dt);
   if (controls.enabled && rig.mode !== 'tween' && rig.mode !== 'ride' && rig.mode !== 'hold' && rig.mode !== 'descent') controls.update();

@@ -129,6 +129,19 @@ export class Sfx {
     this._osc('square', 180, 90, t, 0.05, v * 0.4);
   }
 
+  roar(dist = 0) {
+    if (!this.ok) return;
+    this.sound.roar(Math.max(0.15, 1 - dist / 45), 1);
+  }
+
+  /** guincho de raptor (mascote) */
+  chirp() {
+    if (!this.ok) return;
+    const t = this.sound.ctx.currentTime;
+    this._osc('sawtooth', 900, 1500, t, 0.12, 0.05);
+    this._osc('sawtooth', 1400, 700, t + 0.12, 0.18, 0.05);
+  }
+
   gem() {
     if (!this.ok) return;
     const t = this.sound.ctx.currentTime;

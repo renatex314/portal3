@@ -26,7 +26,8 @@ const PHYSICS = [
       <p>Imagine um buraco <b>reto</b>, atravessando a Terra inteira, de um lado ao outro.</p>
       <p>Agora imagine que você <b>pula</b> nele.</p>
       <p class="big-q">Você cairia para sempre? Pararia no meio? Sairia do outro lado?</p>
-      <p class="muted">Nesta visita você vai descobrir a resposta — sem fórmulas, só olhando.</p>`,
+      <p class="muted">Nesta visita você vai descobrir a resposta — sem fórmulas, só olhando.</p>
+      <p class="muted">🦖 E cuidado com os dinossauros: eles estão em toda parte (inclusive aqui).</p>`,
     cam: { pos: V(16, 7.5, 13), target: V(0, -3, 0), fov: 50, dur: 0 },
     next: 'Pular no buraco',
   },
@@ -38,13 +39,14 @@ const PHYSICS = [
     body: (c) => `
       <p>Um túnel reto, passando pelo centro, liga dois pontos <b>exatamente opostos</b> do planeta. Esse ponto oposto se chama <b>antípoda</b>.</p>
       <p>Saindo de <b>${c.originName}</b>, você <u>não</u> chegaria na China: sairia no <b>${c.antiName}</b>.</p>
-      <p class="muted">Curiosidade: quem quer sair na China tem que cavar na <b>Argentina</b>. E como ~70% da Terra é oceano, a maioria dos túneis termina... no mar.</p>`,
+      <p class="muted">Curiosidade: quem quer sair na China tem que cavar na <b>Argentina</b>. E como ~70% da Terra é oceano, a maioria dos túneis termina... no mar.</p>
+      <p class="muted">🦖 O pino laranja é <b>Chicxulub</b>, no México: ali caiu o asteroide de ~10 km que acabou com os dinossauros, há 66 milhões de anos. A cratera tem ~180 km.</p>`,
     cam: { pos: V(-210, 85, 175), target: V(0, 0, 0), fov: 45, dur: 3.2 },
     cut: 0,
     tunnel: 0,
     through: true,
     pins: true,
-    labels: ['origin', 'anti'],
+    labels: ['origin', 'anti', 'chicxulub'],
   },
   {
     id: 'camadas',
@@ -59,7 +61,8 @@ const PHYSICS = [
         <li><i style="--c:#ff9a2e"></i><span><b>Núcleo externo</b> — ferro <b>líquido</b>, ~4.500 °C</span></li>
         <li><i style="--c:#fff0b0"></i><span><b>Núcleo interno</b> — bola de ferro sólido, ~5.400 °C</span></li>
       </ul>
-      <p class="muted">O centro <b>não é oco</b>: é a parte mais densa e pesada do planeta.</p>`,
+      <p class="muted">O centro <b>não é oco</b>: é a parte mais densa e pesada do planeta.</p>
+      <p class="muted">🦖 Todo fóssil de dinossauro já encontrado veio da <b>crosta</b> — de rochas que se formaram na superfície. No manto e no núcleo não existe fóssil nenhum.</p>`,
     cam: { pos: V(170, 175, 265), target: V(0, 28, 0), fov: 42, dur: 3.5 },
     cut: 1,
     tunnel: 0,
@@ -74,7 +77,8 @@ const PHYSICS = [
     body: (c) => `
       <p>Agora vamos <b>fazer de conta que os mineiros conseguiram</b>: um túnel de <b>12.742 km</b>, passando bem pelo centro.</p>
       <p>Vamos tirar <b>todo o ar</b> de dentro dele (vácuo). Assim nada te freia: só a gravidade age.</p>
-      <p class="muted">⚠️ O túnel e a cápsula estão desenhados <b>gigantes</b> para dar para ver. Na escala real eles seriam mais finos que um fio de cabelo nesta imagem.</p>`,
+      <p>🦖 Passageiro desta viagem: um <b>T-rex de ~8 toneladas</b>, de capacete, em cima da cápsula.</p>
+      <p class="muted">⚠️ O túnel e a cápsula (e o T-rex) estão desenhados <b>gigantes</b> para dar para ver. Na escala real eles seriam mais finos que um fio de cabelo nesta imagem.</p>`,
     cam: { pos: V(35, 125, 255), target: V(0, 5, 0), fov: 42, dur: 3 },
     cut: 1,
     tunnel: 1,
@@ -91,6 +95,7 @@ const PHYSICS = [
     body: (c) => `
       <p>Você entra na cápsula e <b>se solta</b>. No começo é uma queda normal: a cada segundo você fica <b>~35 km/h mais rápido</b> (9,8 m/s²).</p>
       <p>Olhe o painel à direita: a velocidade não para de subir... mas a <span class="hl-g">gravidade</span> vai <b>diminuindo</b> conforme você desce.</p>
+      <p class="muted">🦖 E o T-rex de 8 toneladas? Cai <b>exatamente junto</b> com a cápsula e com você: no vácuo, o peso não muda a queda (Galileu já sabia).</p>
       <p class="muted">A simulação está acelerada ${c.speed}× — arraste para girar, role para dar zoom.</p>`,
     camMode: 'follow',
     cam: { pos: V(-75, 40, 85), target: V(-100, 0, 0), fov: 45, dur: 2.5 },
@@ -194,7 +199,7 @@ const PHYSICS = [
     body: (c) => `
       <p>Um satélite voando em órbita <b>rente ao chão</b> dá uma volta na Terra em <b>~84 minutos</b>.</p>
       <p>Veja a linha pontilhada: a cápsula fica <b>sempre exatamente embaixo</b> do satélite! Os dois saem juntos e chegam juntos ao outro lado, em ~${c.tOneWayUni} minutos.</p>
-      <p class="muted">A cápsula é a "sombra" do satélite projetada no túnel. Por isso a velocidade máxima dela (${c.vmaxUniKmh} km/h) é igual à velocidade orbital. (Modelo: Terra uniforme.)</p>`,
+      <p class="muted">🦖 O pterossauro ao lado do satélite não conta: ele só pegou carona. A cápsula é a "sombra" do satélite projetada no túnel. Por isso a velocidade máxima dela (${c.vmaxUniKmh} km/h) é igual à velocidade orbital. (Modelo: Terra uniforme.)</p>`,
     cam: { pos: V(0, 55, 340), target: V(0, 25, 0), fov: 40, dur: 3 },
     cut: 1,
     tunnel: 1,
@@ -213,7 +218,7 @@ const PHYSICS = [
     body: (c) => `
       <p>E se o túnel não passar pelo centro? Por exemplo, um túnel reto ligando duas cidades mais próximas (a <b>laranja</b>).</p>
       <p>Ele é mais curto, mas fica mais "deitado": a gravidade empurra menos ao longo dele. Uma coisa compensa a outra e... <b>as duas cápsulas chegam ao mesmo tempo!</b></p>
-      <p class="muted">Em teoria, São Paulo → Rio ou São Paulo → Tóquio: ~${c.tOneWayUni} minutos, qualquer que seja a distância. Esse é o famoso "trem gravitacional".</p>`,
+      <p class="muted">Em teoria, São Paulo → Rio ou São Paulo → Tóquio: ~${c.tOneWayUni} minutos, qualquer que seja a distância. Esse é o famoso "trem gravitacional". (Na cápsula laranja vai um tricerátops — que chega junto com o T-rex.)</p>`,
     cam: { pos: V(0, 95, 300), target: V(0, 30, 0), fov: 40, dur: 3 },
     cut: 1,
     tunnel: 1,
@@ -230,7 +235,7 @@ const PHYSICS = [
     title: 'Agora, a viagem em primeira pessoa',
     scene: 'space',
     body: () => `
-      <p>Você está <b>dentro da cápsula</b>. Repare: durante a viagem inteira você <b>flutua</b>, sem peso — você e a cápsula caem juntos, como os astronautas na Estação Espacial.</p>
+      <p>Você está <b>dentro da cápsula</b>. Repare: durante a viagem inteira você <b>flutua</b>, sem peso — você, a cápsula e o T-rex lá em cima caem juntos, como os astronautas na Estação Espacial.</p>
       <p>As luzes passam cada vez mais rápido até o anel <span class="hl-red">vermelho</span> (o centro), depois vão desacelerando até a saída.</p>`,
     camMode: 'ride',
     cut: 1,
@@ -252,6 +257,7 @@ const PHYSICS = [
         <div><b>"Você sentiria o peso aumentar/diminuir"</b><span>Não: em queda livre você flutua a viagem inteira.</span></div>
         <div><b>"São exatos ${c.tOneWayUni} minutos"</b><span>Na Terra real (núcleo denso) é ainda mais rápido: ~${c.tOneWayPrem} min, chegando a ${c.vmaxPremKmh} km/h.</span></div>
         <div><b>"Dá para fazer de verdade"</b><span>Não: calor de ~5.400 °C, pressão 3,6 milhões de vezes a do ar, e a rotação da Terra jogaria você contra a parede (só um túnel de polo a polo escaparia disso).</span></div>
+        <div><b>"Um T-rex cairia mais rápido que você"</b><span>Não: no vácuo, um T-rex de 8 toneladas e uma pena caem juntos. Os dois chegam do outro lado nos mesmos ~${c.tOneWayUni} minutos.</span></div>
         <div><b>"Com ar dentro, daria certo"</b><span>O ar te freia: você chegaria a ~200 km/h, iria e voltaria cada vez menos e terminaria parado... no centro.</span></div>
       </div>`,
     cam: { pos: V(-160, 150, 230), target: V(0, 0, 0), fov: 42, dur: 3.5 },
@@ -268,7 +274,7 @@ const PHYSICS = [
     title: 'Explore você mesmo',
     scene: 'space',
     body: () => `
-      <p><b>Clique em qualquer lugar da Terra</b> para ver onde fica a antípoda — e cave o túnel de lá, se quiser.</p>
+      <p><b>Clique em qualquer lugar da Terra</b> para ver onde fica a antípoda — e cave o túnel de lá, se quiser. (O pino laranja é Chicxulub, a cratera do asteroide dos dinossauros.)</p>
       <p>Use os controles para mudar o modelo (Terra uniforme × real), a velocidade e o tipo de câmera.</p>
       <p class="muted">Arraste para girar · role/pinça para zoom · botão direito para mover.</p>
       <p><a class="chip game" href="./jogo.html">🎮 Parte IV: jogue o Laboratório Antípoda →</a></p>`,
@@ -278,7 +284,7 @@ const PHYSICS = [
     capsule: true,
     hud: true,
     pins: true,
-    labels: ['origin', 'anti', 'capsule'],
+    labels: ['origin', 'anti', 'capsule', 'chicxulub'],
     explore: true,
     sim: { mode: 'run', speed: 120 },
   },

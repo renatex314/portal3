@@ -1,5 +1,7 @@
 // Mapa livre "A Mina": um mapa grande para explorar (sozinho ou em grupo),
-// com obstáculos, rocha fundida, torretas de segurança e 12 cristais.
+// com obstáculos, rocha fundida, torretas de segurança, 12 cristais e
+// dinossauros: o T-rex do pátio (empurra quem fica na frente), raptores,
+// um estegossauro pastando e pterossauros no teto.
 //
 // Planta (vista de cima, norte = +z):
 //   norte  → pátio de chegada, salão com torres de rocha, sacada alta (oeste)
@@ -165,10 +167,19 @@ export const BIG_MAP = {
         [30, -8, -30],
         [47, 0, -47],
       ],
+      dinos: [
+        { s: 'rex', helmet: 0xf2c200, rex: true, orbit: { cx: 0, cz: 32, rx: 24, rz: 4, speed: 3 } },
+        { s: 'raptor', helmet: 0xffffff, pose: 'run', orbit: { cx: -2, cz: -21, rx: 5, rz: 4, speed: 6.5 } },
+        { s: 'raptor', helmet: 0xff7a1a, pose: 'run', orbit: { cx: -2, cz: -21, rx: 5, rz: 4, speed: 6.5, phase: 0.9 } },
+        { s: 'stego', x: 42, y: 0, z: 42, rotY: -Math.PI / 2, pose: 'graze' },
+        { s: 'ptero', scale: 0.8, orbit: { cx: 0, cz: 14, rx: 22, rz: 14, y: 22, speed: 7, bank: 0.35, bob: 1 } },
+        { s: 'ptero', scale: 0.8, orbit: { cx: 28, cz: -30, rx: 12, rz: 10, y: 16, speed: 6, bank: 0.35, bob: 1, dir: -1 } },
+      ],
       intro: [
         ['Helena', 'Mapa livre: a mina inteira é sua. Tem doze cristais de quartzo rosa escondidos por aí.'],
         ['Marquinho', 'E cuidado com as torretas de segurança. Elas não perdoam.'],
         ['Marquinho', 'Chega por trás e aperta E pra desligar, ou derruba com uma amostra, ou abre um portal embaixo delas.'],
+        ['Marquinho', 'E o T-rex do pátio é da equipe. Só não fica na frente dele.'],
       ],
       hints: [{ after: 90, lines: [['Helena', 'Dica: um portal no topo de uma torre e outro na parede aqui embaixo levam você lá pra cima.']] }],
     };

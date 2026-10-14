@@ -223,6 +223,20 @@ function cubeMaterials() {
       g.font = 'bold 22px Arial';
       g.textAlign = 'center';
       g.fillText('AMOSTRA', c, s - 64);
+      // pegada de terópode (três dedos) carimbada no alto da face
+      g.fillStyle = 'rgba(213,138,42,0.85)';
+      g.beginPath();
+      g.ellipse(c, 80, 9, 7, 0, 0, Math.PI * 2);
+      g.fill();
+      for (const a of [-0.55, 0, 0.55]) {
+        g.save();
+        g.translate(c, 77);
+        g.rotate(a);
+        g.beginPath();
+        g.ellipse(0, -13, 3.5, 10, 0, 0, Math.PI * 2);
+        g.fill();
+        g.restore();
+      }
     }
   };
   const face = new THREE.MeshPhysicalMaterial({
@@ -408,6 +422,36 @@ export function turretModel() {
   // antena
   const ant = limb(new THREE.Vector3(0.05, BODY_Y + S[1] - 0.04, -0.06), new THREE.Vector3(0.07, BODY_Y + S[1] + 0.14, -0.08), 0.006, 0.004, black);
   g.add(ant);
+  // "T-rex robô": cabeça de dinossauro no topo, dentes, crista nas costas e rabinho
+  const TOP = BODY_Y + S[1];
+  const snout = new THREE.Mesh(new THREE.SphereGeometry(1, 18, 12), white);
+  snout.scale.set(0.13, 0.09, 0.2);
+  snout.position.set(0, TOP + 0.02, 0.12);
+  const jaw = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), dark);
+  jaw.scale.set(0.09, 0.035, 0.14);
+  jaw.position.set(0, TOP - 0.07, 0.16);
+  g.add(snout, jaw);
+  const toothMat = plastic(0xf4efe0);
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 4; i++) {
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.009, 0.035, 4).rotateX(Math.PI), toothMat);
+      tooth.position.set(s * 0.08, TOP - 0.06, 0.12 + i * 0.045);
+      g.add(tooth);
+    }
+    const dinoEye = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), lensMat);
+    dinoEye.position.set(s * 0.08, TOP + 0.07, 0.2);
+    g.add(dinoEye);
+  }
+  for (let i = 0; i < 4; i++) {
+    const crest = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.1, 4), black);
+    const a = 0.5 + i * 0.32;
+    crest.position.set(0, BODY_Y + Math.cos(a) * S[1] * 0.98, -Math.sin(a) * S[2] * 0.98);
+    crest.rotation.x = -a;
+    g.add(crest);
+  }
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.5, 10).rotateX(-Math.PI / 2 - 0.35), white);
+  tail.position.set(0, 0.62, -0.38);
+  g.add(tail);
   // três pernas (duas na frente abertas, uma atrás)
   const legs = [
     [new THREE.Vector3(-0.1, 0.45, 0.05), new THREE.Vector3(-0.3, 0.32, 0.2), new THREE.Vector3(-0.36, 0.0, 0.3)],

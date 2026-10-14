@@ -10,6 +10,7 @@
 // caia em −X; as camadas internas são esféricas, então não precisam girar.
 
 import * as THREE from 'three';
+import { makeDino, poseDino, roar } from './dinos.js';
 import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { GLSL_NOISE } from './noise.js';
 import { R_EARTH } from './physics.js';
@@ -103,6 +104,42 @@ export class SpaceScene {
     this._chord();
     this._markers();
     this._depthMarkers();
+    this._dinos();
+  }
+
+  // ---------------------------------------------------------------- dinossauros
+  _dinos() {
+    // o passageiro: um T-rex de capacete surfando em cima da cápsula
+    this.rider = makeDino('rex', { helmet: 0xf2c200, scale: 0.26 });
+    this.rider.group.position.set(-0.3, 1.5, 0);
+    this.rider.group.rotation.y = Math.PI / 2; // olha para +X (sentido da queda)
+    this.capsuleGroup.add(this.rider.group);
+    // tricerátops na cápsula do túnel em corda
+    this.chordRider = makeDino('trice', { scale: 0.36 });
+    this.chordRider.group.position.set(0, 1.15, 0);
+    this.chordRider.group.rotation.y = Math.PI / 2;
+    this.chordCapsule.add(this.chordRider.group);
+    // pterossauro voando junto com o satélite rasante
+    this.satPtero = makeDino('ptero', { scale: 1.3 });
+    this.satPtero.group.visible = false;
+    this.scene.add(this.satPtero.group);
+    this.spaceDinos = [this.rider, this.chordRider, this.satPtero];
+    this.nextRoar = 6;
+
+    // Chicxulub (México): onde caiu o asteroide que acabou com os dinossauros
+    const g = new THREE.Group();
+    const c = new THREE.Color(0xff8a2a);
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(1.1, 18, 12), new THREE.MeshBasicMaterial({ color: c.clone().multiplyScalar(2.2) })));
+    // a cratera tem ~180 km de diâmetro: em escala, um anel de ~1,4 de raio
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(1.4 * 1.2, 1.4 * 1.7, 40),
+      new THREE.MeshBasicMaterial({ color: c.clone().multiplyScalar(1.8), transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    g.add(ring);
+    g.userData.halo = ring;
+    g.visible = false;
+    this.chicxulub = g;
+    this.scene.add(g);
   }
 
   // riscos em escala REAL: mina mais funda, furo mais fundo e fim da crosta
@@ -849,6 +886,18 @@ export class SpaceScene {
   }
 
   update(t) {
+    const dt = Math.min(Math.max(t - (this._lastT ?? t), 0), 0.1);
+    this._lastT = t;
+    for (const d of this.spaceDinos) poseDino(d, t, dt);
+    if (t > this.nextRoar && this.capsuleGroup.visible) {
+      this.nextRoar = t + 14 + Math.random() * 10;
+      roar(this.rider);
+    }
+    if (this.chicxulub.visible) {
+      const p = this.geoToScene(21.3, -89.5, R * 1.005);
+      this.placePin(this.chicxulub, p);
+      this.chicxulub.userData.halo.scale.setScalar(1 + 0.2 * Math.sin(t * 3));
+    }
     this.u.uTime.value = t;
     this.capY.position.y = Math.min(this.u.uCutY.value, R * 1.5);
     const pulse = 1 + 0.25 * Math.sin(t * 4);

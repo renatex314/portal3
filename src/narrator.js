@@ -7,6 +7,7 @@ const SPEAKERS = {
   Helena: { g: 'f', pitch: 1.0, rate: 1.0 },
   Luciana: { g: 'f', pitch: 1.08, rate: 1.02 },
   Kelly: { g: 'f', pitch: 1.15, rate: 1.06 },
+  Patrícia: { g: 'f', pitch: 1.04, rate: 1.04 },
   'Dona Cida': { g: 'f', pitch: 0.88, rate: 0.9 },
   Bigode: { g: 'm', pitch: 0.82, rate: 1.0 },
   'Seu Tião': { g: 'm', pitch: 0.72, rate: 0.86 },
@@ -62,7 +63,7 @@ export class Narrator {
     const voice = this._voice(sp.g);
     const sameVoice = voice === this._voice(sp.g === 'f' ? 'm' : 'f');
     const sentences = text
-      .replace(/[⚠️💥🌊⛰️]/gu, '')
+      .replace(/[⚠️💥🌊⛰️🦖🦕]/gu, '')
       .split(/(?<=[.!?…])\s+/)
       .map((s) => s.trim())
       .filter(Boolean);

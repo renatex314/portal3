@@ -13,6 +13,7 @@ import { Sfx } from './sfx.js';
 import { Soundtrack } from '../audio.js';
 import { Narrator, spoken } from '../narrator.js';
 import { makeWorker, poseWorker } from '../mine.js';
+import { makeDino, poseDino, orbit, roar, makeFossil } from '../dinos.js';
 import { PEOPLE } from '../documentary.js';
 import { Net } from './net.js';
 import { Turret, crystalMesh } from './turrets.js';
@@ -89,7 +90,8 @@ function avatarFor(id) {
   const peer = net.peers.get(id);
   if (!peer) return null;
   if (!avatars.has(id)) {
-    const w = makeWorker({ helmet: 0xffffff, shirt: SLOT_COLORS[peer.slot % 4][0].getHex(), pants: 0x3a3f4a, vest: true, skin: 0xb07a52 }, 'idle');
+    // os outros jogadores aparecem como raptores de capacete, com colete da cor dos portais
+    const w = makeDino('raptor', { helmet: 0xffffff, vest: SLOT_COLORS[peer.slot % 4][0].getHex(), color: [0x8a5a34, 0x5e7a3a, 0x6a5a8a, 0x9a7a3a][peer.slot % 4] });
     w.group.add(nameTag(peer.name, slotHex(peer.slot, 0)));
     scene.add(w.group);
     avatars.set(id, { w, target: new THREE.Vector3(), yaw: 0, up: 1, moving: false, lvl: -1, t: 0 });
@@ -241,7 +243,7 @@ function updateAvatars(dt, t) {
     a.w.group.position.lerp(feet, 1 - Math.exp(-dt * 14));
     a.w.group.rotation.set(0, a.yaw + Math.PI, a.up < 0 ? Math.PI : 0);
     a.w.P.pose = a.moving ? 'walk' : 'idle';
-    poseWorker(a.w, t, dt);
+    poseDino(a.w, t, dt);
   }
 }
 
@@ -254,7 +256,8 @@ function peerFeet() {
 scene.add(dyn);
 
 // ------------------------------------------------------------------ corpo do jogador (visível só pelos portais)
-const body = makeWorker({ helmet: 0xffffff, shirt: 0xe8762a, pants: 0x3a3f4a, vest: true, skin: 0xb07a52 }, 'idle');
+// você é um raptor de capacete e colete (dá para se ver pelos portais)
+const body = makeDino('raptor', { helmet: 0xffffff, vest: 0xe8762a });
 body.group.traverse((o) => o.layers.set(1));
 scene.add(body.group);
 
@@ -301,6 +304,10 @@ let levelIdx = 0;
 let cubes = [];
 let npcs = {};
 let npcList = [];
+let dinoList = []; // { d, orbit? }
+let rex = null; // o T-rex do mapa livre
+let rexCooldown = 0;
+let rexWarned = false;
 let held = null;
 let running = false;
 let paused = true;
@@ -368,6 +375,10 @@ function clearLevel() {
   spottedOnce = false;
   npcs = {};
   npcList = [];
+  dinoList = [];
+  rex = null;
+  rexCooldown = 3;
+  rexWarned = false;
   held = null;
   assist = null;
   firedHints.clear();
@@ -401,6 +412,34 @@ function loadLevel(i, silent = false) {
     dyn.add(w.group);
     npcs[b.who] = w;
     npcList.push(w);
+  }
+  // cada cabine de observação tem um raptor-mascote de capacete (o Pipoca)
+  for (const b of data.booths ?? []) {
+    // em cima da bancada, de lado, ao lado do personagem
+    const d = makeDino('raptor', { helmet: 0xf2c200, scale: 0.55 });
+    const [lx, lz] = [-Math.cos(b.rotY), Math.sin(b.rotY)];
+    d.group.position.set(b.x - 1.8 * lx + 0.95 * Math.sin(b.rotY), b.y + 0.95, b.z - 1.8 * lz + 0.95 * Math.cos(b.rotY));
+    d.group.rotation.y = Math.atan2(lx, lz);
+    dyn.add(d.group);
+    dinoList.push({ d, look: true });
+  }
+  for (const o of data.dinos ?? []) {
+    const d = makeDino(o.s, { helmet: o.helmet, scale: o.scale });
+    d.P.pose = o.pose ?? (o.s === 'ptero' ? 'fly' : o.orbit ? 'walk' : 'idle');
+    if (!o.orbit) {
+      d.group.position.set(o.x, o.y, o.z);
+      d.group.rotation.set(0, o.rotY ?? 0, o.flipped ? Math.PI : 0);
+    }
+    dyn.add(d.group);
+    const e = { d, orbit: o.orbit, look: !o.orbit && !o.flipped };
+    dinoList.push(e);
+    if (o.rex) rex = e;
+  }
+  for (const f of data.fossils ?? []) {
+    const m = makeFossil(f.len ?? 5, 0xd8ccb0);
+    m.position.set(f.x, f.y, f.z);
+    m.rotation.set(f.rotX ?? 0, f.rotY ?? 0, f.rotZ ?? 0);
+    dyn.add(m);
   }
   for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, physics, portals, tx, ty, tz, tyaw));
   gunMode = data.gun ?? 'both';
@@ -1015,6 +1054,49 @@ function inside(p, min, max) {
   return p.x > min.x && p.x < max.x && p.y > min.y && p.y < max.y && p.z > min.z && p.z < max.z;
 }
 
+function updateDinos(t, dt) {
+  for (const e of dinoList) {
+    if (e.orbit) orbit(e.d, t, e.orbit);
+    e.d.P.lookAt = e.look ? camera.position : null;
+    poseDino(e.d, t, dt);
+  }
+}
+
+// o T-rex do mapa livre: ruge quando você chega perto e empurra quem fica na frente
+const _rf = new THREE.Vector3();
+const _rp = new THREE.Vector3();
+function updateRex(dt) {
+  if (!rex) return;
+  rexCooldown -= dt;
+  const g = rex.d.group;
+  _rf.set(Math.sin(g.rotation.y), 0, Math.cos(g.rotation.y));
+  _rp.copy(player.pos).sub(g.position);
+  const along = _rp.dot(_rf);
+  const side = Math.hypot(_rp.x - _rf.x * along, _rp.z - _rf.z * along);
+  const dist = Math.hypot(_rp.x, _rp.z);
+  // corpo: da ponta da cauda (−8 m) até o focinho (+6 m), ~1,8 m de cada lado, até 6 m de altura
+  if (along > -8 && along < 6 && side < 1.8 && player.pos.y < g.position.y + 6) {
+    const push = _rp.clone().setY(0).sub(_rf.clone().multiplyScalar(along)).normalize();
+    if (push.lengthSq() < 0.5) push.copy(_rf);
+    player.vel.copy(push.multiplyScalar(11).add(_rf.clone().multiplyScalar(along > 0 ? 6 : -3))).setY(7);
+    player.grounded = false;
+    if (rexCooldown < 1) {
+      roar(rex.d);
+      sfx.roar(0);
+      rexCooldown = 6;
+      hurtFlash = Math.min(1, hurtFlash + 0.4);
+      if (!rexWarned) {
+        rexWarned = true;
+        playLines([['Marquinho', 'Eu falei! Não fica na frente do Rex!']]);
+      }
+    }
+  } else if (dist < 14 && rexCooldown <= 0) {
+    roar(rex.d);
+    sfx.roar(dist);
+    rexCooldown = 9 + Math.random() * 5;
+  }
+}
+
 function update(dt, t) {
   levelTime += dt;
   world.update(t, dt);
@@ -1325,9 +1407,12 @@ function update(dt, t) {
     w.P.lookAt = camera.position;
     poseWorker(w, t, dt);
   }
+  updateDinos(t, dt);
+  updateRex(dt);
   const moving = input.f || input.b || input.l || input.r;
   body.P.pose = moving && player.grounded ? 'walk' : 'idle';
-  poseWorker(body, t, dt);
+  body.P.speed = 4.5;
+  poseDino(body, t, dt);
   body.group.position.copy(feet);
   body.group.rotation.set(0, player.yaw + Math.PI, player.upSign < 0 ? Math.PI : 0);
 
@@ -1388,6 +1473,7 @@ function frame() {
       world.update(t, dt);
       portals.update(t, dt);
       for (const w of npcList) poseWorker(w, t, dt);
+      updateDinos(t, dt);
       player.applyCamera(dt);
     }
     portals.render();
@@ -1398,6 +1484,7 @@ function frame() {
     world.update(t, dt);
     portals.update(t, dt);
     for (const w of npcList) poseWorker(w, t, dt);
+    updateDinos(t, dt);
     camera.position.set(Math.sin(t * 0.05) * 4, 5, 2 + Math.cos(t * 0.05) * 3);
     camera.lookAt(0, 3, -14);
   }

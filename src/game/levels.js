@@ -1,6 +1,8 @@
 // As seis câmaras de teste do Laboratório Antípoda — cada uma ligada a um
 // personagem e a uma técnica do documentário (Parte II da visita).
 // Coordenadas em metros; o chão "normal" de cada sala fica em y = 0.
+// `dinos`: dinossauros decorativos da câmara (cada cabine ainda ganha um
+// raptor-mascote automaticamente).
 
 import * as THREE from 'three';
 import { BIG_MAP } from './bigmap.js';
@@ -103,7 +105,9 @@ export const LEVELS = [
           ['Helena', 'Bem-vindo ao Laboratório Antípoda. Aqui embaixo de Nova Lima a gente testa o que não dá pra testar no poço.'],
           ['Helena', 'Essa é a arma de portais: botão esquerdo abre o portal azul, botão direito abre o laranja.'],
           ['Helena', 'Portal só gruda em concreto claro. Rocha e metal, não. Leva você até o elevador do outro lado.'],
+          ['Helena', 'Ah: o raptor de capacete aqui do lado é o Pipoca, nosso mascote. Ele não morde. Muito.'],
         ],
+        dinos: [{ s: 'ptero', scale: 0.5, orbit: { cx: 0, cz: -7, rx: 3.5, rz: 5, y: 6, speed: 4, bank: 0.3, bob: 0.5 } }],
         hints: [{ after: 50, lines: [['Helena', 'Dica: mira a parede branca da esquerda, perto de você, e depois a parede branca da esquerda, depois do vão.']] }],
       };
     },
@@ -138,6 +142,7 @@ export const LEVELS = [
         spawn: [0, 0, 5, 0],
         cubes: [[6.2, 7, -3]],
         booths,
+        dinos: [{ s: 'trice', scale: 0.3, x: -6, y: 0, z: 4.5, rotY: Math.PI / 2 }],
         intro: [
           ['Luciana', 'Lá em cima daquele pilar listrado tem uma amostra de itabirito. Ferro e quartzo de 2,4 bilhões de anos.'],
           ['Luciana', 'Eu preciso dela no botão vermelho pra liberar a porta. A tecla E pega e solta a amostra.'],
@@ -174,6 +179,7 @@ export const LEVELS = [
       return {
         spawn: [0, 12, 3.5, 0],
         booths,
+        dinos: [{ s: 'ptero', scale: 0.6, orbit: { cx: 0, cz: -14, rx: 4, rz: 10, y: 16, speed: 5, bank: 0.3, bob: 0.6 } }],
         intro: [
           ['Bigode', 'Aqui a regra é a mesma do explosivo: velocidade que entra, velocidade que sai.'],
           ['Bigode', 'Vai até a beirada, põe um portal no chão logo abaixo dela e outro bem alto na parede atrás de você. Depois é só dar um passinho pra frente.'],
@@ -219,9 +225,11 @@ export const LEVELS = [
       return {
         spawn: [0, 0, 7, 0],
         booths,
+        fossils: [{ x: -2.96, y: -24, z: 0, rotY: Math.PI / 2, len: 4.6 }],
         intro: [
           ['Seu Tião', 'Esse poço tem quarenta metros. Quarenta! Lá embaixo a gaiola chega a doze metros por segundo.'],
           ['Seu Tião', 'Você vai chegar mais rápido que a gaiola. Um portal lá no fundo, outro na parede branca do alto, e pula.'],
+          ['Seu Tião', 'E repara no esqueleto na parede do poço. A paleontóloga jura que foi alguém que pôs ali de brincadeira.'],
         ],
         hints: [{ after: 55, lines: [['Seu Tião', 'O fundo do poço é branco. Mira lá embaixo. E o outro portal na parede branca atrás de você, em cima.']] }],
         stuck: { below: -30, lines: [['Seu Tião', 'Caiu sem portal, né? Segura que eu te puxo de volta no guincho.']] },
@@ -256,6 +264,7 @@ export const LEVELS = [
         spawn: [0, 0, 6, 0],
         cubes: [[5, 0, 3]],
         booths,
+        fossils: [{ x: 6, y: -1.42, z: -15, rotX: -Math.PI / 2, rotZ: 0.5, len: 6 }],
         intro: [
           ['Marquinho', 'Aqui embaixo o chão é rocha fundida. Encostou, já era. Eu sou da segurança, então presta atenção.'],
           ['Marquinho', 'O botão que abre a porta tá na ilha do meio. Leva a amostra até lá pelos portais.'],
@@ -340,6 +349,7 @@ export const LEVELS = [
         cubes: [[6.5, 6, -9]],
         booths,
         npcs: [{ who: 'cida', x: 4.5, y: -160, z: 4.5, rotY: -2.4, flipped: true }],
+        dinos: [{ s: 'trice', scale: 0.28, x: -4.5, y: -160, z: 4, rotY: 2.3, flipped: true }],
         portalsAllowed: (p) => p.y > -1,
         gravityAt(p, out) {
           const inTube = Math.abs(p.x) < 2.6 && Math.abs(p.z) < 2.6;

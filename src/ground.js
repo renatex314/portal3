@@ -1,10 +1,13 @@
 // Cena "superfície": um deserto com o buraco que atravessa a Terra, uma
 // exploradora na borda e a placa — a imagem que inspirou o projeto, em 3D.
+// E dinossauros: um T-rex rondando o buraco, raptores correndo, titanossauros
+// no horizonte, pterossauros no céu e um fóssil exposto na parede do buraco.
 // Escala: 1 unidade = 1 metro.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fbm2, noise2, rand } from './noise.js';
+import { makeDino, makeFossil, orbit, poseDino, roar } from './dinos.js';
 
 export const HOLE_R = 7;
 export const HOLE_DEPTH = 220;
@@ -44,6 +47,7 @@ export class GroundScene {
     this._person();
     this._sign();
     this._dust();
+    this._dinos();
   }
 
   _sky() {
@@ -348,7 +352,99 @@ export class GroundScene {
     this.scene.add(this.dust);
   }
 
-  update(t) {
+  _dinos() {
+    const ground = (x, z) => terrainHeight(x, z) - 0.05;
+    this.ground = ground;
+    // o T-rex que ronda o buraco
+    this.rex = makeDino('rex');
+    this.rex.P.pose = 'walk';
+    this.walkers = [{ d: this.rex, path: { cx: -21, cz: -11, rx: 8.5, rz: 6, speed: 2.2, ground } }];
+    // raptores dando voltas largas, em bando
+    for (let i = 0; i < 3; i++) {
+      const d = makeDino('raptor', { color: [0x8a5a34, 0x6e5a3a, 0x9a6a3a][i] });
+      d.P.pose = 'run';
+      this.walkers.push({ d, path: { rx: 34 + i * 1.5, rz: 30 + i * 1.5, speed: 6.5, phase: 2.2 + i * 0.09, dir: -1, ground } });
+    }
+    // titanossauros passeando no horizonte
+    for (let i = 0; i < 4; i++) {
+      const d = makeDino('titan', { scale: 0.85 + i * 0.12 });
+      d.P.pose = 'walk';
+      this.walkers.push({ d, path: { rx: 190 + i * 9, rz: 170 + i * 9, speed: 2.2, phase: 3.6 + i * 0.12, ground } });
+    }
+    // pterossauros no céu
+    for (let i = 0; i < 5; i++) {
+      const d = makeDino('ptero', { scale: 1.4 });
+      this.walkers.push({ d, path: { cx: (rand() - 0.5) * 30, cz: (rand() - 0.5) * 30, rx: 30 + i * 9, rz: 26 + i * 8, speed: 9, phase: i * 1.7, dir: i % 2 ? 1 : -1, y: 24 + i * 5, bank: 0.35, bob: 2 } });
+    }
+    // filhote de tricerátops: o "cachorro" da exploradora
+    this.pet = makeDino('trice', { scale: 0.22 });
+    const px = 10.3;
+    const pz = -5.2;
+    this.pet.group.position.set(px, ground(px, pz), pz);
+    this.pet.group.rotation.y = Math.atan2(-px, -pz) + 0.3;
+    this.pet.P.lookAt = new THREE.Vector3(0, -3, 0);
+    for (const w of this.walkers) this.scene.add(w.d.group);
+    this.scene.add(this.pet.group);
+    this.dinos = [...this.walkers.map((w) => w.d), this.pet];
+    this.nextRoar = 9;
+    this.onRoar = () => {};
+
+    // fóssil exposto na parede do buraco (do lado oposto à câmera)
+    const a = Math.atan2(13, 16) + Math.PI + 0.25;
+    const r = holeRadiusAt(a) * 1.06;
+    const f = makeFossil(5.5, 0x9a8a70);
+    f.position.set(Math.cos(a) * r, -4.2, Math.sin(a) * r);
+    f.lookAt(0, -4.2, 0);
+    f.rotateZ(-0.2);
+    this.scene.add(f);
+
+    // placa de aviso
+    const cv = document.createElement('canvas');
+    cv.width = 512;
+    cv.height = 512;
+    const x = cv.getContext('2d');
+    x.fillStyle = '#f2c200';
+    x.beginPath();
+    x.moveTo(256, 18);
+    x.lineTo(494, 494);
+    x.lineTo(18, 494);
+    x.closePath();
+    x.fill();
+    x.lineWidth = 22;
+    x.strokeStyle = '#1b1b1b';
+    x.stroke();
+    x.fillStyle = '#1b1b1b';
+    x.font = '190px serif';
+    x.textAlign = 'center';
+    x.fillText('🦖', 256, 360);
+    x.font = 'bold 44px "Arial Black", Impact, sans-serif';
+    x.fillText('CUIDADO', 256, 440);
+    x.font = 'bold 30px Arial, sans-serif';
+    x.fillText('DINOSSAUROS', 256, 478);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const g = new THREE.Group();
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.2, 0.12), new THREE.MeshStandardMaterial({ color: 0x8a8d92, metalness: 0.6, roughness: 0.4 }));
+    post.position.y = 1.1;
+    const board = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.6 }));
+    board.position.set(0, 2.2, 0.08);
+    post.castShadow = board.castShadow = true;
+    g.add(post, board);
+    const sx = 12.8;
+    const sz = -0.8;
+    g.position.set(sx, terrainHeight(sx, sz) - 0.05, sz);
+    g.rotation.y = Math.atan2(16 - sx, 13 - sz);
+    this.scene.add(g);
+  }
+
+  update(t, dt = 1 / 60) {
+    for (const w of this.walkers) orbit(w.d, t, w.path);
+    for (const d of this.dinos) poseDino(d, t, dt);
+    if (t > this.nextRoar) {
+      this.nextRoar = t + 20 + Math.random() * 12;
+      roar(this.rex);
+      this.onRoar(0.55);
+    }
     this.dust.position.x = Math.sin(t * 0.1) * 3 + ((t * 1.2) % 30) - 15;
     this.dust.position.z = Math.cos(t * 0.13) * 2;
   }

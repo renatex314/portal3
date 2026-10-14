@@ -19,7 +19,32 @@ npm run build      # gera dist/ (site estático, abre em qualquer hospedagem)
 
 Links diretos para um capítulo: `http://localhost:5173/#5` (0 = prólogo).
 
-## O que tem na visita (25 capítulos, 3 partes)
+## 🦖 Dinossauros (em tudo)
+
+Todos os dinossauros são procedurais (`src/dinos.js`): elipsoides e cilindros com pivôs nas
+articulações, animados por código (andar, correr, pastar, voar, rugir). Espécies: T-rex, raptor,
+titanossauro, tricerátops, estegossauro e pterossauro, além de esqueletos fósseis. O rugido é
+sintetizado (`Soundtrack.roar` em `src/audio.js`).
+
+- **Deserto (prólogo):** um T-rex ronda o buraco e ruge, raptores correm em bando, titanossauros
+  passeiam no horizonte, pterossauros voam, a exploradora tem um filhote de tricerátops, há um
+  fóssil exposto na parede do buraco e uma placa "CUIDADO: DINOSSAUROS".
+- **Documentário:** T-rex de capacete andando no comboio dos caminhões, raptores de capacete na
+  borda da cava, titanossauros, estegossauro e tricerátops pastando, pterossauros sobre a cava, um
+  raptor (o Pipoca) na gaiola da descida e um filhote de tricerátops na cozinha. Nova entrevista com
+  a paleontóloga **Patrícia** (personagem fictícia; fatos reais): o itabirito é ~10× mais velho que
+  os dinossauros, os dinossauros de Minas (Peirópolis/Uberaba e Prata), os erros dos figurantes e
+  "aves são dinossauros" — com o T-rex rugindo atrás dela.
+- **Física:** um T-rex de capacete surfa em cima da cápsula (e cai junto: no vácuo, peso não muda a
+  queda), um tricerátops vai na cápsula do túnel em corda, um pterossauro voa com o satélite, o pino
+  de **Chicxulub** marca o asteroide que extinguiu os dinossauros, o gráfico do "balanço" virou um
+  🦖 de skate e o "Mito × realidade" ganhou o mito do T-rex que cai mais rápido.
+- **Jogo:** você e os outros jogadores são raptores de capacete (aparecem pelos portais), cada
+  cabine tem um raptor-mascote, as torretas viraram "T-rex robôs", as amostras têm pegada de
+  dinossauro, as câmaras têm pterossauros, tricerátops e fósseis, e o mapa livre tem um T-rex no
+  pátio que ruge e **empurra** quem fica na frente dele.
+
+## O que tem na visita (26 capítulos, 3 partes)
 
 Ao abrir, a tela inicial oferece **começar com som e narração** (recomendado) ou sem som.
 
@@ -35,13 +60,14 @@ guindaste, escavadeiras, caminhões, ventilação, geradores, escritório e a co
 | Abertura | voo de drone com rótulos | o Projeto Antípoda e suas 3 frentes |
 | Entrevista 1 | Helena, engenheira de minas | o plano |
 | Entrevista 2 | Luciana, geóloga | laterita, itabirito (2,4 bi anos), embasamento, gradiente térmico |
-| Entrevista 3 | Kelly, operadora de escavadeira | lavra em bancadas |
-| Entrevista 4 | Bigode, blaster | plano de fogo, emulsão, retardos — com detonação no "FOGO!" |
-| Entrevista 5 | Seu Tião, maquinista do guincho | abertura de poço, torre, skip, gaiola, cabo |
-| Entrevista 6 | Rodrigo, sondador | sondagem rotativa, broca diamantada/PDC, lama, Kola (12.262 m) |
-| Entrevista 7 | Marquinho, técnico de segurança | calor, ventilação, gelo, autorresgatador |
+| Entrevista 3 | Patrícia, paleontóloga | por que não há fósseis aqui, dinossauros de Minas, aves são dinossauros — e o T-rex ruge |
+| Entrevista 4 | Kelly, operadora de escavadeira | lavra em bancadas |
+| Entrevista 5 | Bigode, blaster | plano de fogo, emulsão, retardos — com detonação no "FOGO!" |
+| Entrevista 6 | Seu Tião, maquinista do guincho | abertura de poço, torre, skip, gaiola, cabo |
+| Entrevista 7 | Rodrigo, sondador | sondagem rotativa, broca diamantada/PDC, lama, Kola (12.262 m) |
+| Entrevista 8 | Marquinho, técnico de segurança | calor, ventilação, gelo, autorresgatador |
 | Descida | dentro da gaiola | 0 → 3.900 m com rocha, temperatura, pressão e marcos |
-| Entrevista 8 | Dona Cida, cozinheira | pão de queijo e a marmita pelo buraco |
+| Entrevista 9 | Dona Cida, cozinheira | pão de queijo e a marmita pelo buraco |
 | Epílogo | zoom real na crosta | Mponeng (4 km), Kola (12,3 km), fim da crosta (35 km) |
 
 Cada entrevista tem crédito na tela, legendas faladas, transcrição completa e **ficha técnica** no cartão.
@@ -184,6 +210,7 @@ src/
   main.js      orquestração: câmera cinematográfica, capítulos, HUD, pós-processamento
   chapters.js  roteiro (textos e o que cada capítulo liga/desliga)
   documentary.js  Parte II: personagens, entrevistas, fichas técnicas
+  dinos.js     dinossauros procedurais (montagem, animação, trajetos) e fósseis
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
