@@ -19,6 +19,7 @@ import { Net } from './net.js';
 import { Turret, crystalMesh } from './turrets.js';
 import { SLOT_COLORS, SLOT_CSS } from './portals.js';
 import { initEnvironment, portalGun, sampleCube } from './models.js';
+import { Post, dust, ContactShadows, Dissolver } from './fx.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
@@ -40,6 +41,14 @@ scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x4a3a30, 1.0));
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.03, 700);
 camera.layers.enable(2); // a arma em primeira pessoa
 scene.add(camera);
+
+const post = new Post(renderer, scene, camera);
+const motes = dust();
+scene.add(motes);
+const shadows = new ContactShadows(scene);
+const dissolver = new Dissolver(scene);
+const FIZZLE = new THREE.Color(0.45, 0.8, 1.0);
+const BURN = new THREE.Color(1.0, 0.45, 0.1);
 
 const world = new World(scene);
 const portals = new PortalSystem(renderer, scene, camera, world);
@@ -270,11 +279,49 @@ const gun = portalGun();
   gun.traverse((o) => o.layers.set(2));
   camera.add(gun);
   const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
-  gunLight.position.set(0.2, -0.1, -0.4);
+  gunLight.position.set(0.16, -0.04, -1.2); // na frente da arma (encostada, estouraria o casco branco)
   camera.add(gunLight);
   gun.userData.light = gunLight;
 }
 let recoil = 0;
+gun.userData.base = gun.userData.core.color.clone();
+// estado da animação da arma: atraso ao girar a câmera, passos, aterrissagem, garras
+const GUN = { look: new THREE.Vector2(), sway: new THREE.Vector2(), swayV: new THREE.Vector2(), land: 0, landV: 0, open: 0, walk: 0 };
+
+function animateGun(dt, t) {
+  const u = gun.userData;
+  recoil = Math.max(0, recoil - dt * 6);
+  // mola: a arma fica um pouco para trás quando a câmera gira e volta balançando
+  const tx = clamp(-GUN.look.x * 0.0007, -0.05, 0.05);
+  const ty = clamp(GUN.look.y * 0.0007, -0.04, 0.04);
+  GUN.look.set(0, 0);
+  GUN.swayV.x += ((tx - GUN.sway.x) * 160 - GUN.swayV.x * 16) * dt;
+  GUN.swayV.y += ((ty - GUN.sway.y) * 160 - GUN.swayV.y * 16) * dt;
+  GUN.sway.addScaledVector(GUN.swayV, dt);
+  GUN.landV += (-GUN.land * 220 - GUN.landV * 15) * dt;
+  GUN.land += GUN.landV * dt;
+  const moving = (input.f || input.b || input.l || input.r) && player.grounded;
+  GUN.walk += ((moving ? 1 : 0) - GUN.walk) * Math.min(1, dt * 8);
+  GUN.open += ((held ? 1 : 0) - GUN.open) * Math.min(1, dt * 9);
+  const b = player.bob * 0.5;
+  const bx = Math.sin(b) * 0.012 * GUN.walk;
+  const by = -Math.abs(Math.cos(b)) * 0.01 * GUN.walk;
+  const breathe = Math.sin(t * 1.7) * 0.0025;
+  gun.position.set(0.21 + GUN.sway.x + bx, -0.19 + GUN.sway.y + by + breathe + GUN.land + recoil * 0.015 + GUN.open * 0.01, -0.44 + recoil * 0.06 - GUN.open * 0.02);
+  gun.rotation.set(0.05 + recoil * 0.22 + GUN.sway.y * 1.5 - GUN.land * 1.2, 0.09 + GUN.sway.x * 2, -GUN.sway.x * 2.5 + Math.sin(t * 1.1) * 0.008 + bx * 0.8);
+  // garras: abrem ao atirar e ao segurar algo (tremendo com a força do campo)
+  const jitter = GUN.open * Math.sin(t * 47) * 0.025;
+  u.claws.forEach((c, i) => (c.rotation.y = -(GUN.open * 0.16 + recoil * 0.4 + jitter * (i % 2 ? 1 : -1))));
+  u.coil.rotation.z += dt * (1.5 + GUN.open * 14 + recoil * 25);
+  const k = 1 + Math.sin(t * 5) * 0.12 + recoil * 1.6 + GUN.open * (0.5 + 0.4 * Math.sin(t * 31));
+  u.core.color.copy(u.base).multiplyScalar(0.55 * k);
+  u.light.intensity = 0.3 * k;
+  // LEDs de carga: correm quando segurando, ficam acesos parados
+  u.leds.forEach((m, i) => {
+    const on = GUN.open > 0.5 ? (Math.floor(t * 10) % 3 === i ? 1.6 : 0.3) : 1;
+    m.color.copy(u.base).multiplyScalar(0.5 * on);
+  });
+}
 
 // rastro do tiro
 const tracer = new THREE.Line(
@@ -367,6 +414,7 @@ function clearLevel() {
   world.reset();
   portals.reset();
   energy.reset();
+  dissolver.clear();
   for (const c of [...dyn.children]) dyn.remove(c);
   cubes = [];
   turrets = [];
@@ -522,7 +570,7 @@ function shoot(which) {
   if (gunMode === 'none') return;
   if (gunMode === 'blue' && !blue) return sfx.denied();
   recoil = 1;
-  gun.userData.core.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
+  gun.userData.base.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
   gun.userData.light.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
   sfx.shot(blue);
   const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
@@ -784,7 +832,11 @@ window.addEventListener('keyup', (e) => {
 document.addEventListener('mousemove', (e) => {
   // com zoom, a mira fica mais fina (proporcional ao campo de visão)
   const s = camera.fov / 75;
-  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX * s, e.movementY * s);
+  if (document.pointerLockElement === canvas && running && !paused) {
+    player.look(e.movementX * s, e.movementY * s);
+    GUN.look.x += e.movementX;
+    GUN.look.y += e.movementY;
+  }
 });
 canvas.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) {
@@ -1147,7 +1199,10 @@ function update(dt, t) {
     player.pos[a] += (player.pos[a] > center ? 1 : -1) * (pen[i] + 0.01);
   }
   // aterrissagem e passos
-  if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) sfx.land(Math.abs(lastVy));
+  if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) {
+    sfx.land(Math.abs(lastVy));
+    GUN.landV -= Math.min(0.6, Math.abs(lastVy) * 0.03);
+  }
   lastGrounded = player.grounded;
   lastVy = player.vel.y;
   if (player.grounded && (input.f || input.b || input.l || input.r)) {
@@ -1190,6 +1245,7 @@ function update(dt, t) {
     const I = world.incinerators.find((f) => inside(c.pos, f.min, f.max));
     if (I) {
       if (held === c) release();
+      dissolver.add(c.mesh, BURN);
       c.vanish();
       I.active = true;
       sfx.burn();
@@ -1198,6 +1254,7 @@ function update(dt, t) {
     // rocha fundida ou grade de desintegração: a amostra volta ao dispensador; a torreta é destruída
     if (world.hazards.some((h) => touches(c, h)) || world.fizzlers.some((f) => inside(c.pos, f.min, f.max))) {
       if (held === c) release();
+      dissolver.add(c.mesh, world.hazards.some((h) => touches(c, h)) ? BURN : FIZZLE);
       if (c.kind === 'cube') c.respawn();
       else c.vanish();
       sfx.fizzle();
@@ -1213,11 +1270,7 @@ function update(dt, t) {
     const near = (p, dy0, dy1) => Math.hypot(p.x - b.pos.x, p.z - b.pos.z) < 0.85 && p.y - b.pos.y > dy0 && p.y - b.pos.y < dy1;
     const pressed = props.some((c) => !c.held && !c.gone && !c.remote?.held && near(c.pos, 0, 1.0)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
     if (pressed !== b.pressed) {
-      b.pressed = pressed;
-      b.plate.position.y = pressed ? 0.09 : 0.16;
-      b.plate.material.color.set(pressed ? 0x27ae60 : 0xc0392b);
-      b.plate.material.emissive.set(pressed ? 0x0a4a20 : 0x5a0a05);
-      b.lights?.color.setRGB(...(pressed ? [0.3, 2.4, 0.8] : [2.4, 0.35, 0.15]));
+      b.pressed = pressed; // a placa e as luzes se animam em world.update
       sfx.click(pressed);
     }
   }
@@ -1262,6 +1315,7 @@ function update(dt, t) {
     if (held) {
       const c = held;
       release();
+      dissolver.add(c.mesh, FIZZLE);
       if (c.kind === 'cube') c.respawn();
       else c.vanish();
     }
@@ -1421,10 +1475,7 @@ function update(dt, t) {
 
   // ---- arma, rastro, faíscas
   gun.visible = gunMode !== 'none' && ZOOM.k < 1.3;
-  recoil = Math.max(0, recoil - dt * 6);
-  const sway = Math.sin(player.bob) * 0.012;
-  gun.position.set(0.21 + sway, -0.19 + Math.abs(sway) * 0.6 + recoil * 0.015, -0.44 + recoil * 0.06);
-  gun.rotation.x = 0.05 + recoil * 0.22;
+  animateGun(dt, t);
   tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 5);
   if (sparkT < 1) {
     sparkT += dt;
@@ -1497,7 +1548,10 @@ function frame() {
     camera.position.set(Math.sin(t * 0.05) * 4, 5, 2 + Math.cos(t * 0.05) * 3);
     camera.lookAt(0, 3, -14);
   }
-  renderer.render(scene, camera);
+  dissolver.update(dt);
+  shadows.update(level ? [...cubes, ...turrets] : [], world, gravityAt);
+  motes.userData.update(t, camera, window.innerHeight * renderer.getPixelRatio());
+  post.render(dt, t, clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), scene, camera);
   requestAnimationFrame(frame);
 }
 
@@ -1505,6 +1559,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post.resize();
   const s = renderer.getDrawingBufferSize(new THREE.Vector2());
   portals.resize(s.x, s.y);
 });
@@ -1528,4 +1583,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  THREE, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  THREE, post, gun, GUN, dissolver, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

@@ -176,6 +176,11 @@ botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento �
 segurando um objeto arremessa, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
 Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
+Visual: texturas procedurais com relevo e rugosidade (paredes, pisos e tetos diferentes, chapa
+antiderrapante, sujeira e desgaste), brilho das luzes, vinheta, poeira no ar e sombras de contato.
+Arma com garras articuladas que balança, atrasa ao virar e abre segurando objetos; torretas com
+clarão e rastro de bala; portas com indicador; objetos desintegram na grade e na fornalha.
+
 Original: sem nomes, marcas ou arquivos de outros jogos.
 
 ### Multiplayer na rede local
@@ -234,7 +239,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

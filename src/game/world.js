@@ -4,228 +4,73 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { floorButton } from './models.js';
+import { floorButton, envMap } from './models.js';
+import * as TX from './textures.js';
 
 const TILE = 2; // metros por repetição de textura
 const _path = new THREE.Vector3();
+const _c = new THREE.Color();
+const RED = new THREE.Color(2.6, 0.25, 0.12);
+const GREEN = new THREE.Color(0.3, 2.6, 0.7);
 
-function canvasTex(size, draw, srgb = true) {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  draw(cv.getContext('2d'), size);
-  const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
-  return t;
-}
-
-function noiseFill(g, s, base, amp, n = 2600) {
-  g.fillStyle = base;
-  g.fillRect(0, 0, s, s);
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * amp;
-    g.fillStyle = Math.random() < 0.5 ? `rgba(0,0,0,${a})` : `rgba(255,255,255,${a})`;
-    const r = 1 + Math.random() * 3;
-    g.fillRect(Math.random() * s, Math.random() * s, r, r);
-  }
-}
-
-/**
- * Textura de painéis (cor + relevo). `n` placas por lado; a textura cobre
- * 4 m (repeat 0.5), então a variação de tom entre placas só se repete de 4 em 4 m.
- */
-function paneled(size, n, o) {
-  const t = size / n;
-  const cv = document.createElement('canvas');
-  const hv = document.createElement('canvas');
-  cv.width = cv.height = hv.width = hv.height = size;
+let GRATE = null;
+/** grade de piso (furos quadrados transparentes) */
+function grateTexture() {
+  if (GRATE) return GRATE;
+  const cv = TX.canvas(256);
   const g = cv.getContext('2d');
-  const h = hv.getContext('2d');
-  h.fillStyle = '#000';
-  h.fillRect(0, 0, size, size);
-  for (let i = 0; i < n; i++)
-    for (let j = 0; j < n; j++) {
-      const x = i * t;
-      const y = j * t;
-      const d = (Math.random() - 0.5) * 2 * o.vary;
-      const [r, gg, b] = o.base.map((c) => Math.round(c + d));
-      g.fillStyle = `rgb(${r},${gg},${b})`;
-      g.fillRect(x, y, t, t);
-      // grão do concreto/chapa e um leve degradê
-      for (let k = 0; k < (t * t) / 90; k++) {
-        const a = Math.random() * o.grain;
-        g.fillStyle = Math.random() < 0.5 ? `rgba(0,0,0,${a})` : `rgba(255,255,255,${a})`;
-        g.fillRect(x + Math.random() * t, y + Math.random() * t, 1 + Math.random() * 2.5, 1 + Math.random() * 2.5);
-      }
-      const gr = g.createLinearGradient(x, y, x, y + t);
-      gr.addColorStop(0, 'rgba(255,255,255,0.03)');
-      gr.addColorStop(1, 'rgba(0,0,0,0.04)');
-      g.fillStyle = gr;
-      g.fillRect(x, y, t, t);
-      // relevo: placa alta com chanfro até a junta
-      const gp = o.gap / 2;
-      for (let k = 0; k <= o.bevel; k++) {
-        const v = Math.round(255 * (k / o.bevel));
-        h.fillStyle = `rgb(${v},${v},${v})`;
-        h.fillRect(x + gp + k, y + gp + k, t - 2 * (gp + k), t - 2 * (gp + k));
-      }
-      // luz/sombra do chanfro na cor
-      g.fillStyle = 'rgba(255,255,255,0.10)';
-      g.fillRect(x + gp, y + gp, t - 2 * gp, o.bevel * 0.6);
-      g.fillRect(x + gp, y + gp, o.bevel * 0.6, t - 2 * gp);
-      g.fillStyle = 'rgba(0,0,0,0.09)';
-      g.fillRect(x + gp, y + t - gp - o.bevel * 0.6, t - 2 * gp, o.bevel * 0.6);
-      g.fillRect(x + t - gp - o.bevel * 0.6, y + gp, o.bevel * 0.6, t - 2 * gp);
-      o.detail?.(g, x, y, t, h);
-    }
-  // juntas
-  g.fillStyle = 'rgba(60,60,62,0.6)';
-  for (let i = 0; i <= n; i++) {
-    g.fillRect(i * t - o.gap / 2, 0, o.gap, size);
-    g.fillRect(0, i * t - o.gap / 2, size, o.gap);
-  }
-  const map = new THREE.CanvasTexture(cv);
-  map.colorSpace = THREE.SRGBColorSpace;
-  const normal = heightToNormal(hv, 1.5);
-  for (const tx of [map, normal]) {
-    tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
-    tx.repeat.set(0.5, 0.5);
-    tx.anisotropy = 8;
-  }
-  return [map, normal];
-}
-
-/** mapa de normais (espaço tangente) a partir de um mapa de altura em tons de cinza */
-function heightToNormal(cv, strength) {
-  const w = cv.width;
-  const hgt = cv.getContext('2d').getImageData(0, 0, w, w).data;
-  const out = document.createElement('canvas');
-  out.width = out.height = w;
-  const og = out.getContext('2d');
-  const img = og.createImageData(w, w);
-  const H = (x, y) => hgt[(((y + w) % w) * w + ((x + w) % w)) * 4] / 255;
-  for (let y = 0; y < w; y++)
-    for (let x = 0; x < w; x++) {
-      const dx = (H(x + 1, y) - H(x - 1, y)) * strength;
-      const dy = (H(x, y + 1) - H(x, y - 1)) * strength;
-      const l = Math.hypot(dx, dy, 1);
-      const i = (y * w + x) * 4;
-      img.data[i] = ((-dx / l) * 0.5 + 0.5) * 255;
-      img.data[i + 1] = ((dy / l) * 0.5 + 0.5) * 255;
-      img.data[i + 2] = ((1 / l) * 0.5 + 0.5) * 255;
-      img.data[i + 3] = 255;
-    }
-  og.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(out);
-  t.colorSpace = THREE.NoColorSpace;
-  return t;
+  g.fillStyle = '#9aa0a8';
+  g.fillRect(0, 0, 256, 256);
+  for (let x = 0; x < 256; x += 16) for (let y = 0; y < 256; y += 16) g.clearRect(x + 3, y + 3, 10, 10);
+  GRATE = TX.tex(cv, { repeat: 4 });
+  return GRATE;
 }
 
 let MATS = null;
+/**
+ * Materiais do cenário. `faces` (quando existe) dá um material para cada face
+ * da caixa na ordem do BoxGeometry: +x, −x, +y (topo/piso), −y (teto), +z, −z.
+ */
 export function materials() {
   if (MATS) return MATS;
-  // painel branco (aceita portal): placas de concreto claro de 1 m, cada uma
-  // com um tom levemente diferente, juntas fundas e cantos chanfrados
-  const [white, whiteN] = paneled(1024, 4, {
-    base: [220, 219, 213],
-    vary: 8,
-    gap: 3,
-    bevel: 3,
-    grain: 0.05,
-    detail(g, x, y, t) {
-      // marcas de fixação nos cantos de algumas placas
-      if (Math.random() < 0.5) {
-        g.fillStyle = 'rgba(0,0,0,0.10)';
-        for (const [u, v] of [
-          [14, 14],
-          [t - 24, 14],
-          [14, t - 24],
-          [t - 24, t - 24],
-        ])
-          g.fillRect(x + u, y + v, 10, 10);
-      }
-    },
-  });
-  // metal escuro (não aceita portal): painéis de chapa com frisos e parafusos
-  const [metal, metalN] = paneled(1024, 2, {
-    base: [58, 61, 66],
-    vary: 6,
-    gap: 4,
-    bevel: 6,
-    grain: 0.09,
-    detail(g, x, y, t, h) {
-      // frisos horizontais e parafusos (também no relevo)
-      for (const ctx of [g, h]) {
-        const hm = ctx === h;
-        ctx.fillStyle = hm ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.28)';
-        for (let k = 1; k < 8; k++) ctx.fillRect(x + 40, y + (k * t) / 8 - 2, t - 80, 4);
-        ctx.fillStyle = hm ? '#fff' : 'rgba(200,205,210,0.4)';
-        for (const [u, v] of [
-          [22, 22],
-          [t - 22, 22],
-          [22, t - 22],
-          [t - 22, t - 22],
-        ]) {
-          ctx.beginPath();
-          ctx.arc(x + u, y + v, 6, 0, 7);
-          ctx.fill();
-        }
-      }
-    },
-  });
-  // rocha laterítica / itabirito (não aceita portal)
-  const rock = canvasTex(512, (g, s) => {
-    noiseFill(g, s, '#7c3519', 0.12, 6000);
-    for (let y = 0; y < s; y += 6) {
-      g.fillStyle = `rgba(${Math.random() < 0.4 ? '40,38,44' : '150,60,30'},${0.15 + Math.random() * 0.25})`;
-      g.fillRect(0, y + Math.sin(y) * 2, s, 2 + Math.random() * 4);
-    }
-  });
-  // lama/rocha fundida: emissiva, animada pelo deslocamento da textura
-  const magma = canvasTex(256, (g, s) => {
-    noiseFill(g, s, '#ff6a10', 0.4, 5000);
-    for (let i = 0; i < 40; i++) {
-      g.strokeStyle = `rgba(60,10,0,${0.4 + Math.random() * 0.4})`;
-      g.lineWidth = 2 + Math.random() * 5;
-      g.beginPath();
-      let x = Math.random() * s;
-      let y = Math.random() * s;
-      g.moveTo(x, y);
-      for (let k = 0; k < 5; k++) g.lineTo((x += (Math.random() - 0.5) * 60), (y += (Math.random() - 0.5) * 60));
-      g.stroke();
-    }
-  });
-  const stripe = canvasTex(256, (g, s) => {
-    g.fillStyle = '#f2c200';
-    g.fillRect(0, 0, s, s);
-    g.fillStyle = '#1a1a1a';
-    for (let i = -s; i < s * 2; i += 64) {
-      g.beginPath();
-      g.moveTo(i, 0);
-      g.lineTo(i + 32, 0);
-      g.lineTo(i + 32 - s, s);
-      g.lineTo(i - s, s);
-      g.fill();
-    }
-  });
+  const ENV = envMap();
+  const std = (maps, o = {}) => new THREE.MeshStandardMaterial({ ...maps, envMap: ENV, envMapIntensity: 0.25, ...o });
+  const wall = std(TX.whiteWall(), { roughness: 1, metalness: 0, normalScale: new THREE.Vector2(1, 1) });
+  const floor = std(TX.whiteFloor(), { roughness: 1, metalness: 0, envMapIntensity: 0.35 });
+  const ceil = std(TX.ceiling(), { roughness: 1, metalness: 0, color: 0xc8c8c8 });
+  const mWall = std(TX.metalWall(), { roughness: 1, metalness: 0.65, color: 0xc4c8d0, envMapIntensity: 0.6, normalScale: new THREE.Vector2(1.2, 1.2) });
+  const mFloor = std(TX.metalFloor(), { roughness: 1, metalness: 0.7, color: 0xc8ccd2, envMapIntensity: 0.6 });
+  const magma = TX.magma();
+  magma.repeat.set(0.3, 0.3); // a crosta repetindo de 2 em 2 m vira um xadrez de longe
+  const side6 = (side, top, bottom) => [side, side, top, bottom, side, side];
   MATS = {
-    white: { mat: new THREE.MeshStandardMaterial({ map: white, normalMap: whiteN, normalScale: new THREE.Vector2(1.2, 1.2), roughness: 0.78, metalness: 0.0 }), portalable: true },
-    metal: {
-      mat: new THREE.MeshStandardMaterial({ map: metal, normalMap: metalN, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.5, metalness: 0.6, color: 0xb8bcc4 }),
-      portalable: false,
-    },
-    rock: { mat: new THREE.MeshStandardMaterial({ map: rock, roughness: 0.95 }), portalable: false },
+    white: { mat: wall, faces: side6(wall, floor, ceil), portalable: true },
+    metal: { mat: mWall, faces: side6(mWall, mFloor, mWall), portalable: false },
+    rock: { mat: std(TX.rock(), { roughness: 0.95, envMapIntensity: 0.1 }), portalable: false },
     glass: {
-      mat: new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.2, depthWrite: false }),
+      mat: new THREE.MeshPhysicalMaterial({
+        color: 0xa8dcff,
+        transparent: true,
+        opacity: 0.16,
+        roughness: 0.04,
+        metalness: 0.1,
+        clearcoat: 1,
+        envMap: ENV,
+        envMapIntensity: 1.4,
+        depthWrite: false,
+      }),
       portalable: false,
     },
     magma: {
-      mat: new THREE.MeshStandardMaterial({ map: magma, emissiveMap: magma, emissive: 0xff5a10, emissiveIntensity: 1.6, roughness: 0.6 }),
+      mat: new THREE.MeshStandardMaterial({ map: magma, color: 0x8a3a18, emissiveMap: magma, emissive: 0xff6a1a, emissiveIntensity: 1, roughness: 0.6 }),
       portalable: false,
     },
-    stripe: { mat: new THREE.MeshStandardMaterial({ map: stripe, roughness: 0.6 }), portalable: false },
+    stripe: { mat: std({ map: TX.hazardStripe() }, { roughness: 0.6 }), portalable: false },
   };
+  const door = TX.doorPanel();
+  MATS.door = std(door, { roughness: 0.55, metalness: 0.6, color: 0xd0d4dc, envMapIntensity: 0.6 });
+  MATS.frame = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.45, metalness: 0.8, envMap: ENV, envMapIntensity: 0.6 });
+  MATS.dark = new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.5, metalness: 0.6, envMap: ENV, envMapIntensity: 0.5 });
   return MATS;
 }
 
@@ -322,9 +167,12 @@ export class World {
     const M = materials()[matName];
     const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
     const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
-    const mesh = new THREE.Mesh(worldBoxGeo(min, max), M.mat);
+    const mesh = new THREE.Mesh(worldBoxGeo(min, max), M.faces ?? M.mat);
     mesh.receiveShadow = true;
-    if (matName === 'glass') mesh.renderOrder = 5;
+    if (matName === 'glass') {
+      mesh.renderOrder = 5;
+      this.glassFrame(mesh, min, max);
+    }
     this.group.add(mesh);
     const b = { min, max, mat: matName, portalable: M.portalable && !opts.noPortal, mesh, solid: opts.solid !== false };
     if (b.solid) {
@@ -355,30 +203,73 @@ export class World {
     return t;
   }
 
+  /** cantoneiras escuras nas 12 arestas de uma caixa de vidro (filhas da malha: acompanham portas) */
+  glassFrame(mesh, min, max) {
+    const s = new THREE.Vector3().subVectors(max, min);
+    const c = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
+    const t = 0.06;
+    const mat = materials().frame;
+    for (const ax of ['x', 'y', 'z']) {
+      const [a, b] = ['x', 'y', 'z'].filter((k) => k !== ax);
+      for (const sa of [-1, 1])
+        for (const sb of [-1, 1]) {
+          const size = { x: t, y: t, z: t };
+          size[ax] = s[ax] + t;
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), mat);
+          bar.position.copy(c);
+          bar.position[a] += (sa * s[a]) / 2;
+          bar.position[b] += (sb * s[b]) / 2;
+          mesh.add(bar);
+        }
+    }
+  }
+
   light(x, y, z, intensity = 40, color = 0xfff4e6, dist = 30) {
     const l = new THREE.PointLight(color, intensity, dist, 1.5);
     l.position.set(x, y, z);
     this.group.add(l);
-    // luminária no teto
-    const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.35), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.2) }));
-    lamp.position.set(x, y + 0.3, z);
-    this.group.add(lamp);
+    // luminária no teto: caixa escura, difusor aceso e grade de proteção
+    const g = new THREE.Group();
+    const M = materials();
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.14, 0.52), M.frame);
+    housing.position.y = 0.07;
+    const diffuser = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.03, 0.36), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.6), toneMapped: false }));
+    diffuser.position.y = -0.005;
+    g.add(housing, diffuser);
+    for (let i = -3; i <= 3; i++) {
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.42), M.dark);
+      slat.position.set(i * 0.24, -0.025, 0);
+      g.add(slat);
+    }
+    for (const sx of [-1, 1]) {
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.5, 6), M.dark);
+      rod.position.set(sx * 0.7, 0.38, 0);
+      g.add(rod);
+    }
+    g.position.set(x, y + 0.27, z);
+    this.group.add(g);
     return l;
   }
 
   /** porta que sobe quando aberta */
   door(id, x0, y0, z0, x1, y1, z1, opts = {}) {
     const b = this.box(x0, y0, z0, x1, y1, z1, opts.mat ?? (opts.axis ? 'stripe' : 'metal'), { kinematic: true });
-    let stripe = null;
-    if (!opts.axis && !opts.mat) {
-      stripe = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) + 0.02, 0.25, Math.abs(z1 - z0) + 0.02), materials().stripe.mat);
-      stripe.position.set((x0 + x1) / 2, Math.min(y0, y1) + 0.4, (z0 + z1) / 2);
-      this.group.add(stripe);
+    const plain = !opts.axis && !opts.mat;
+    if (plain) {
+      // porta de verdade: textura própria (UV de 0 a 1 na folha) nas duas faces largas
+      const size = new THREE.Vector3().subVectors(b.max, b.min);
+      const geo = new THREE.BoxGeometry(size.x, size.y, size.z).translate(...new THREE.Vector3().addVectors(b.min, b.max).multiplyScalar(0.5).toArray());
+      const M = materials();
+      const thinX = size.x < size.z;
+      b.mesh.geometry.dispose();
+      b.mesh.geometry = geo;
+      b.mesh.material = [0, 1, 2, 3, 4, 5].map((i) => ((thinX ? i < 2 : i >= 4) ? M.door : M.frame));
     }
     const d = {
       id,
       box: b,
-      stripe,
+      plain,
+      lamps: null,
       open: 0,
       target: 0,
       baseMin: b.min.clone(),
@@ -452,7 +343,7 @@ export class World {
     const half = new THREE.Vector3(sx / 2, sy / 2, sz / 2);
     const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot));
     const c = new THREE.Vector3(cx, cy, cz);
-    const mesh = new THREE.Mesh(worldBoxGeo(half.clone().negate(), half), M.mat);
+    const mesh = new THREE.Mesh(worldBoxGeo(half.clone().negate(), half), M.faces ?? M.mat);
     mesh.position.copy(c);
     mesh.quaternion.copy(q);
     this.group.add(mesh);
@@ -563,14 +454,29 @@ export class World {
     if (thin === 'y') plane.rotation.x = -Math.PI / 2;
     this.group.add(plane);
     // emissores nas laterais
-    const emit = materials().metal.mat;
+    const emit = materials().frame;
+    const stripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 1.4, 2.6), toneMapped: false });
     for (const s of thin === 'y' ? [] : [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.25 : 0.12, size.y, thin === 'x' ? 0.12 : 0.25), emit);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.3 : 0.14, size.y, thin === 'x' ? 0.14 : 0.3), emit);
       post.position.copy(plane.position);
       post.position[thin === 'x' ? 'z' : 'x'] += (s * w) / 2;
-      this.group.add(post);
+      // fenda acesa virada para a grade
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.06 : 0.02, size.y - 0.2, thin === 'x' ? 0.02 : 0.06), stripMat);
+      slit.position.copy(post.position);
+      slit.position[thin === 'x' ? 'z' : 'x'] -= s * 0.07;
+      // tampas em cima e embaixo
+      for (const e of [-1, 1]) {
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.36 : 0.2, 0.12, thin === 'x' ? 0.2 : 0.36), materials().dark);
+        cap.position.copy(post.position);
+        cap.position.y += (e * (size.y - 0.12)) / 2;
+        this.group.add(cap);
+      }
+      this.group.add(post, slit);
     }
-    this.anim.push((t) => (mat.uniforms.uTime.value = t));
+    this.anim.push((t) => {
+      mat.uniforms.uTime.value = t;
+      stripMat.color.setRGB(0.6, 1.4, 2.6).multiplyScalar(0.85 + 0.15 * Math.sin(t * 13) * Math.sin(t * 7.3));
+    });
     const pad = new THREE.Vector3(thin === 'x' ? 0.1 : 0, thin === 'y' ? 0.1 : 0, thin === 'z' ? 0.1 : 0);
     const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin };
     this.fizzlers.push(f);
@@ -623,6 +529,19 @@ export class World {
       rib.position.set(Math.cos(a) * 0.64, -1.1, Math.sin(a) * 0.64);
       g.add(rib);
     }
+    // anel aceso no colar e luz de aviso
+    const lampMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.6, 0.3), toneMapped: false });
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.76, 0.025, 8, 40).rotateX(Math.PI / 2), lampMat);
+    band.position.y = -0.3;
+    const hatch = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.04, 8, 32).rotateX(Math.PI / 2), materials().dark);
+    hatch.position.y = -2.1;
+    g.add(band, hatch);
+    for (let i = 0; i < 3; i++) {
+      const hoop = new THREE.Mesh(new THREE.TorusGeometry(0.645, 0.02, 6, 32).rotateX(Math.PI / 2), metal);
+      hoop.position.y = -0.6 - i * 0.6;
+      g.add(hoop);
+    }
+    this.anim.push((t) => lampMat.color.setRGB(2.4, 1.6, 0.3).multiplyScalar(0.7 + 0.3 * Math.sin(t * 2.2)));
     g.position.set(x, top, z);
     this.group.add(g);
     return [x, top - 1.6, z];
@@ -694,8 +613,30 @@ export class World {
       g.add(fin);
     }
     g.add(plate, cup, ring);
+    // anel interno com aletas, girando (mais rápido quando ativo)
+    const spin = new THREE.Group();
+    const inner = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.025, 8, 32).rotateX(Math.PI / 2), materials().frame);
+    spin.add(inner);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const vane = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.05), glowMat);
+      vane.position.set(Math.cos(a) * 0.2, 0, Math.sin(a) * 0.2);
+      vane.rotation.y = -a;
+      spin.add(vane);
+    }
+    spin.position.y = 0.15;
+    const hub = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 10), materials().dark);
+    hub.position.y = 0.12;
+    g.add(spin, hub);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.03, 6), materials().frame);
+      bolt.position.set(Math.cos(a) * 0.7, 0.13, Math.sin(a) * 0.7);
+      g.add(bolt);
+    }
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
     g.userData.glow = glowMat;
+    g.userData.spin = spin;
     this.group.add(g);
     return g;
   }
@@ -720,10 +661,10 @@ export class World {
   }
 
   button(x, y, z, opens) {
-    const { group: g, plate, lights } = floorButton();
+    const { group: g, plate, lights, spin } = floorButton();
     g.position.set(x, y, z);
     this.group.add(g);
-    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, group: g };
+    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, spin, group: g };
     this.buttons.push(btn);
     return btn;
   }
@@ -746,6 +687,34 @@ export class World {
     const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 0.15, 40), materials().metal.mat);
     base.position.y = 0.075 * s;
     g.add(tube, ring(0.18), ring(3.2), base);
+    const M = materials();
+    // colunas da estrutura, tampa de cima e piso de grade
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const col = new THREE.Mesh(new THREE.BoxGeometry(0.1, 3.2, 0.16), M.frame);
+      col.position.set(Math.cos(a) * 1.3, 1.6 * s, Math.sin(a) * 1.3);
+      col.rotation.y = -a;
+      g.add(col);
+    }
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.45, 0.22, 40), M.frame);
+    cap.position.y = 3.3 * s;
+    g.add(cap);
+    const grate = new THREE.Mesh(
+      new THREE.RingGeometry(0.25, 1.2, 40, 1).rotateX(-Math.PI / 2 * s),
+      new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.5, metalness: 0.8, map: grateTexture(), transparent: true, alphaTest: 0.5 }),
+    );
+    grate.position.y = 0.16 * s;
+    g.add(grate);
+    // anel de luz que sobe pelo tubo e partículas subindo
+    const scan = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.025, 6, 48).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 2.4, 1.3), transparent: true, toneMapped: false }));
+    g.add(scan);
+    const N = 60;
+    const pg = new THREE.BufferGeometry();
+    const seeds = Float32Array.from({ length: N * 3 }, () => Math.random());
+    pg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    const motes = new THREE.Points(pg, new THREE.PointsMaterial({ color: new THREE.Color(0.5, 2.2, 1.2), size: 0.05, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    motes.frustumCulled = false;
+    g.add(motes);
     const l = new THREE.PointLight(0x7dffb0, 14, 8, 1.5);
     l.position.y = 2 * s;
     g.add(l);
@@ -753,6 +722,16 @@ export class World {
     this.group.add(g);
     this.anim.push((t) => {
       tube.material.opacity = 0.18 + Math.sin(t * 3) * 0.06;
+      const k = (t * 0.45) % 1;
+      scan.position.y = (0.2 + k * 3) * s;
+      scan.material.opacity = Math.sin(k * Math.PI);
+      const p = pg.attributes.position;
+      for (let i = 0; i < N; i++) {
+        const a = seeds[i * 3] * Math.PI * 2 + t * 0.3;
+        const r = 0.3 + seeds[i * 3 + 1] * 0.85;
+        p.setXYZ(i, Math.cos(a) * r, (((seeds[i * 3 + 2] * 3 + t * (0.4 + seeds[i * 3 + 1] * 0.5)) % 3) + 0.2) * s, Math.sin(a) * r);
+      }
+      p.needsUpdate = true;
     });
     return this.trigger(x - 1, flipped ? y - 3 : y, z - 1, x + 1, flipped ? y : y + 3, z + 1, { exit: true });
   }
@@ -780,6 +759,60 @@ export class World {
     m.rotation.set(0, rotY, rotZ);
     this.group.add(m);
     return m;
+  }
+
+  /**
+   * Indicadores acima da porta (vermelho fechada, verde aberta), dos dois
+   * lados. Ficam na face da parede acima da porta, achada com um raio (por
+   * isso são montados no primeiro quadro, com a fase toda construída).
+   */
+  doorLamps(d, t) {
+    if (!d.lamps) {
+      d.lamps = [];
+      const size = new THREE.Vector3().subVectors(d.baseMax, d.baseMin);
+      const thin = size.x < size.z ? 'x' : 'z';
+      const wide = thin === 'x' ? 'z' : 'x';
+      const c = new THREE.Vector3().addVectors(d.baseMin, d.baseMax).multiplyScalar(0.5);
+      const M = materials();
+      for (const s of [-1, 1]) {
+        const dir = new THREE.Vector3().setComponent(thin === 'x' ? 0 : 2, -s);
+        const from = c.clone().setY(d.baseMax.y + 0.32);
+        from[thin] += s * 2;
+        const hit = this.raycast(from, dir, 2.2, (b) => b !== d.box && !this.doors.some((o) => o.box === b));
+        if (!hit) continue;
+        const g = new THREE.Group();
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.05), M.frame);
+        g.add(plate);
+        const mat = new THREE.MeshBasicMaterial({ color: RED.clone(), toneMapped: false });
+        for (const k of [-1, 0, 1]) {
+          const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.04, 20).rotateX(Math.PI / 2), mat);
+          lens.position.set(k * 0.26, 0, 0.03);
+          g.add(lens);
+        }
+        g.position.copy(hit.point).addScaledVector(hit.normal, 0.025);
+        g.lookAt(g.position.clone().add(hit.normal));
+        this.group.add(g);
+        d.lamps.push(mat);
+        // moldura dos dois lados da abertura (na mesma face)
+        for (const e of [-1, 1]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, size.y + 0.14, 0.06), M.frame);
+          post.position.copy(c);
+          post.position[wide] += (e * (size[wide] + 0.14)) / 2;
+          post.position.y += 0.07;
+          post.position[thin] = hit.point[thin] + hit.normal.getComponent(thin === 'x' ? 0 : 2) * 0.03;
+          post.lookAt(post.position.clone().add(hit.normal));
+          this.group.add(post);
+        }
+        const lintel = new THREE.Mesh(new THREE.BoxGeometry(size[wide] + 0.42, 0.14, 0.06), M.frame);
+        lintel.position.copy(c).setY(d.baseMax.y + 0.07);
+        lintel.position[thin] = hit.point[thin] + hit.normal.getComponent(thin === 'x' ? 0 : 2) * 0.03;
+        lintel.lookAt(lintel.position.clone().add(hit.normal));
+        this.group.add(lintel);
+      }
+    }
+    const blink = d.open > 0.02 && d.open < 0.98 ? 0.6 + 0.4 * Math.sin(t * 18) : 1;
+    _c.lerpColors(RED, GREEN, THREE.MathUtils.smoothstep(d.open, 0.1, 0.9)).multiplyScalar(blink);
+    for (const m of d.lamps) m.color.copy(_c);
   }
 
   /** faixa de luz decorativa (não colide) */
@@ -865,7 +898,7 @@ export class World {
     for (const f of this.anim) f(t, dt);
     const magma = materials().magma.mat.map;
     magma.offset.set(t * 0.02, t * 0.013);
-    materials().magma.mat.emissiveIntensity = 1.4 + Math.sin(t * 1.7) * 0.25;
+    materials().magma.mat.emissiveIntensity = 0.95 + Math.sin(t * 1.7) * 0.2;
     for (const d of this.doors) {
       // caminho: vetor qualquer (plataformas diagonais) ou um eixo × distância (portas)
       const path = d.path ?? _path.set(0, 0, 0);
@@ -878,8 +911,20 @@ export class World {
       d.box.min.copy(d.baseMin).add(d.offset);
       d.box.max.copy(d.baseMax).add(d.offset);
       d.mesh.position.copy(d.offset);
-      if (d.stripe) d.stripe.position.y = d.baseMin.y + 0.4 + d.offset.y;
       this.physics?.moveBox(d.box);
+      if (d.plain) this.doorLamps(d, t);
+    }
+    for (const b of this.buttons) {
+      // a placa afunda com mola e as luzes trocam de cor aos poucos
+      const k = b.pressed ? 1 : 0;
+      b.v = (b.v ?? 0) + ((k - (b.k ?? 0)) * 260 - (b.v ?? 0) * 18) * dt;
+      b.k = (b.k ?? 0) + b.v * dt;
+      b.plate.position.y = 0.16 - 0.07 * THREE.MathUtils.clamp(b.k, -0.3, 1.3);
+      b.c = (b.c ?? 0) + (k - (b.c ?? 0)) * Math.min(1, dt * 8);
+      b.plate.material.color.lerpColors(_c.set(0xc0392b), new THREE.Color(0x27ae60), b.c);
+      b.plate.material.emissive.lerpColors(_c.set(0x5a0a05), new THREE.Color(0x0a4a20), b.c);
+      b.lights.color.lerpColors(RED, GREEN, b.c);
+      if (b.spin) b.spin.rotation.y += dt * (0.4 + b.c * 2.5);
     }
     for (const c of this.group.children) {
       const f = c.userData.follow;

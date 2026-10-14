@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { PORTAL_A, PORTAL_B } from './portals.js';
 
 const R = 0.16;
+const TRAIL = 14;
 
 function glowTexture() {
   const cv = document.createElement('canvas');
@@ -28,16 +29,42 @@ export class EnergySystem {
     this.glow = glowTexture();
     this.coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 2.2, 1.0) });
     this.coreGeo = new THREE.SphereGeometry(R, 20, 14);
+    this.shellGeo = new THREE.IcosahedronGeometry(R * 1.45, 1);
+    this.shellMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 1.2, 0.3), wireframe: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.trailMat = new THREE.ShaderMaterial({
+      uniforms: { uH: { value: 800 } },
+      vertexShader: /* glsl */ `
+        attribute float k; uniform float uH; varying float vK;
+        void main(){
+          vK = k;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          gl_PointSize = ${(R * 2.2).toFixed(3)} * k * projectionMatrix[1][1] * uH / max(-mv.z, 0.05);
+        }`,
+      fragmentShader: /* glsl */ `
+        varying float vK;
+        void main(){
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          if (d > 1.0) discard;
+          gl_FragColor = vec4(vec3(2.6, 1.3, 0.4) * vK, vK * vK * (1.0 - d * d));
+        }`,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
   }
 
   reset() {
-    for (const p of this.pellets) this.scene.remove(p.group);
+    for (const p of this.pellets) this.scene.remove(p.group, p.trail);
     this.pellets = [];
   }
 
   spawn(L) {
     const g = new THREE.Group();
     g.add(new THREE.Mesh(this.coreGeo, this.coreMat));
+    // casca de plasma girando em volta do núcleo
+    const shell = new THREE.Mesh(this.shellGeo, this.shellMat);
+    g.add(shell);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     sp.scale.setScalar(1.3);
     g.add(sp);
@@ -45,14 +72,24 @@ export class EnergySystem {
     g.add(light);
     g.position.copy(L.pos);
     this.scene.add(g);
-    const p = { pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, cooldown: 0 };
+    // rastro: as últimas posições, cada vez menores e mais apagadas
+    const trail = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3)),
+      this.trailMat,
+    );
+    trail.geometry.setAttribute('k', new THREE.BufferAttribute(Float32Array.from({ length: TRAIL }, (_, i) => 1 - i / TRAIL), 1));
+    trail.frustumCulled = false;
+    this.scene.add(trail);
+    const hist = Array.from({ length: TRAIL }, () => L.pos.clone());
+    const p = { pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, cooldown: 0 };
     L.pellet = p;
     this.pellets.push(p);
     return p;
   }
 
   kill(p) {
-    this.scene.remove(p.group);
+    this.scene.remove(p.group, p.trail);
+    p.trail.geometry.dispose();
     this.pellets = this.pellets.filter((q) => q !== p);
     if (p.from.pellet === p) {
       p.from.pellet = null;
@@ -77,7 +114,9 @@ export class EnergySystem {
     for (const C of world.catchers) {
       const k = C.active ? 2.4 : 0.9 + Math.sin(t * 3) * 0.2;
       C.group.userData.glow.color.setRGB(0.5 * k, 1.2 * k, 1.8 * k);
+      C.group.userData.spin.rotation.y += dt * (C.active ? 6 : 0.8);
     }
+    for (const L of world.launchers) L.group.userData.spin.rotation.y -= dt * (L.pellet ? 1.5 : 0.4 + Math.max(0, 2 - L.wait) * 3);
     for (const p of [...this.pellets]) {
       p.life -= dt;
       p.cooldown -= dt;
@@ -113,6 +152,15 @@ export class EnergySystem {
         p.pos.copy(next);
       }
       p.group.position.copy(p.pos);
+      p.shell.rotation.set(t * 3.1, t * 4.3, t * 2.2);
+      // rastro (pula a amostra quando a bola atravessa um portal)
+      if (p.hist[0].distanceTo(p.pos) > 1.5) for (const h of p.hist) h.copy(p.pos);
+      p.hist.pop();
+      p.hist.unshift(p.pos.clone());
+      const tp = p.trail.geometry.attributes.position;
+      p.hist.forEach((h, i) => tp.setXYZ(i, h.x, h.y, h.z));
+      tp.needsUpdate = true;
+      this.trailMat.uniforms.uH.value = window.innerHeight * 0.75;
       p.sprite.material.rotation = t * 3;
       p.sprite.scale.setScalar(1.2 + Math.sin(t * 25) * 0.12);
       // receptor
