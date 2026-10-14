@@ -151,6 +151,26 @@ portais no meio de uma queda (é preciso abri-los no ar). Feitas para o tempo le
 | H04 Rampas e Torretas | Marquinho | terraços ligados por rampas sobre rocha fundida, torretas, plataforma final |
 | H05 Inferno | Dona Cida | bola de energia liga as plataformas, pistões, elevador e mergulho com grade |
 
+**Série Momento** — 6 testes enormes (até ~230 m), todos difíceis, resolvidos com momento. **Painéis
+diagonais** de concreto claro aceitam portal em qualquer inclinação: você cai num portal no chão e sai
+voando por um painel inclinado (o que entra rápido sai rápido). O próximo par de portais tem de ser
+aberto **em pleno voo** — no painel pega-voo (moldura laranja) onde você vai cair e no próximo painel
+lançador (moldura azul, a seta mostra para onde ele atira). Grades de desintegração no meio do caminho
+apagam os portais e barram os tiros, então nada fica pronto antes. Uma assistência de mira (como nos
+jogos do gênero) puxa de leve para o centro do portal quem chega voando de encontro a ele.
+
+| Teste | Personagem | O que tem |
+|-------|------------|-----------|
+| M01 Arremesso em Cadeia | Bigode | poço de 34 m, salão em L, duas grades: dois pares de portais no ar |
+| M02 Queda Infinita | Seu Tião | chão + teto até 115 km/h, portal aberto caindo pela janela, voo de 100 m, painel quase em pé até a plataforma a 40 m |
+| M03 Zigue-Zague | Kelly | quatro arremessos cruzando o salão na diagonal, três grades, três pares no ar |
+| M04 Gêiser | Rodrigo | voo rasante, portal na parede onde você bate e outro no chão: a velocidade vira subida até a torre |
+| M05 Mergulho | Marquinho | queda de 100 m com uma grade horizontal no meio: portais abertos caindo, depois mais um par no voo |
+| M06 Do Outro Lado | Helena | tudo junto: queda infinita, parede-gêiser e zigue-zague — quatro pares de portais no ar |
+
+Todos foram resolvidos por um robô de teste que joga com a física real do jogo (pelo console:
+`__jogo.manual = true` e `__jogo.step(1/60)` avançam a simulação quadro a quadro).
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
 segurando um objeto arremessa, `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
@@ -214,7 +234,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

@@ -10,7 +10,7 @@ import { portalGun } from './models.js';
 const H = (n, def) => ({ ...def, id: 200 + n, n, code: `H${String(n + 1).padStart(2, '0')}`, series: 'hard', music: def.music ?? 'descent', heat: def.heat ?? true });
 
 /** salão: paredes e teto de metal (sem chão) */
-function hall(w, x0, x1, z0, z1, y0, top, mat = 'metal') {
+export function hall(w, x0, x1, z0, z1, y0, top, mat = 'metal') {
   w.box(x0 - 1, y0, z0 - 1, x0, top, z1 + 1, mat);
   w.box(x1, y0, z0 - 1, x1 + 1, top, z1 + 1, mat);
   w.box(x0, y0, z1, x1, top, z1 + 1, mat);
@@ -19,13 +19,13 @@ function hall(w, x0, x1, z0, z1, y0, top, mat = 'metal') {
 }
 
 /** chão de rocha fundida (mata) */
-function lava(w, x0, x1, z0, z1, y) {
+export function lava(w, x0, x1, z0, z1, y) {
   w.box(x0, y - 2, z0, x1, y, z1, 'rock');
   w.hazard(x0, y, z0, x1, y + 0.6, z1);
 }
 
 /** pilar/ilha com o topo em `top` e frisos acesos nas bordas de cima (leitura do salto) */
-function pillar(w, x0, z0, x1, z1, top, mat = 'metal', base = -8) {
+export function pillar(w, x0, z0, x1, z1, top, mat = 'metal', base = -8) {
   const b = w.box(x0, base, z0, x1, top, z1, mat);
   const e = 0.08;
   const c = 0x8fd8ff;
@@ -37,7 +37,7 @@ function pillar(w, x0, z0, x1, z1, top, mat = 'metal', base = -8) {
 }
 
 /** rampa reta: de (x, y0, z0) até (x, y1, z1) ao longo de z, largura `wd` */
-function rampZ(w, x, wd, z0, y0, z1, y1) {
+export function rampZ(w, x, wd, z0, y0, z1, y1) {
   const L = Math.hypot(z1 - z0, y1 - y0);
   const th = Math.atan2(y1 - y0, z0 - z1); // sobe indo para −z
   const t = 0.6;
@@ -47,7 +47,7 @@ function rampZ(w, x, wd, z0, y0, z1, y1) {
 }
 
 /** rampa reta ao longo de x: de (x0, y0) até (x1, y1), centrada em z, largura `wd` */
-function rampX(w, z, wd, x0, y0, x1, y1) {
+export function rampX(w, z, wd, x0, y0, x1, y1) {
   const L = Math.hypot(x1 - x0, y1 - y0);
   const ph = Math.atan2(y1 - y0, x1 - x0); // sobe indo para +x
   const t = 0.6;
@@ -78,7 +78,7 @@ function sign(w, x, y, z, rotY, code, name, line2) {
   ]);
 }
 
-const lamps = (w, pts, k = 420, dist = 95) => pts.forEach(([x, y, z]) => w.light(x, y, z, k, 0xfff1dc, dist));
+export const lamps = (w, pts, k = 420, dist = 95) => pts.forEach(([x, y, z]) => w.light(x, y, z, k, 0xfff1dc, dist));
 
 export const HARD = [
   // ------------------------------------------------------------------ H01

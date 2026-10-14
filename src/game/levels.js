@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { BIG_MAP } from './bigmap.js';
 import { CLASSIC } from './classic.js';
 import { HARD } from './hard.js';
+import { MOMENTUM } from './momentum.js';
 
 const G = 9.8;
 const DIRS = {
@@ -374,6 +375,8 @@ export const LEVELS = [
 LEVELS.push(...CLASSIC);
 // desafios hardcore: salas enormes, plataformas diagonais, pistões
 LEVELS.push(...HARD);
+// série Momento: arremessos encadeados com portais abertos em pleno voo
+LEVELS.push(...MOMENTUM);
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);
 

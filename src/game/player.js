@@ -11,6 +11,8 @@ const JUMP = 4.6;
 const MAX_FALL = 32;
 
 const _ID = new THREE.Quaternion();
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
 
 export class Player {
   constructor(camera) {
@@ -113,6 +115,7 @@ export class Player {
     this.vel.copy(horiz).add(vert).addScaledVector(g, dt);
     if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
     this.funnel(dt, portals, g);
+    this.flingAssist(dt, portals, g);
 
     const prevCenter = this.pos.clone();
     const gUp = g.lengthSq() > 0.01 ? g.clone().normalize().negate() : up;
@@ -214,6 +217,46 @@ export class Player {
     // correção suave, com aceleração lateral limitada
     const dv = want.sub(sideNow).multiplyScalar(1 - Math.exp(-dt * 6));
     const maxDv = 12 * dt;
+    if (dv.length() > maxDv) dv.setLength(maxDv);
+    this.vel.add(dv);
+  }
+
+  /**
+   * Ajuda de arremesso: voando rápido de encontro a um portal (painel
+   * diagonal, parede…), se a trajetória vai cruzar o plano dele perto da boca,
+   * corrige de leve a velocidade lateral para entrar no centro — como nos
+   * jogos do gênero. Não muda a velocidade na direção do portal.
+   */
+  flingAssist(dt, portals, g) {
+    const speed = this.vel.length();
+    if (speed < 8) return;
+    let best = null;
+    for (const P of portals.list) {
+      if (!portals.isLinked(P)) continue;
+      const vn = -this.vel.dot(P.normal); // velocidade de encontro à face
+      if (vn < speed * 0.35) continue;
+      const h = _a.subVectors(this.pos, P.center).dot(P.normal);
+      if (h < 0.2 || h > 30) continue;
+      // tempo até o plano, com a gravidade: h − vn·t + ½(g·n)t² = 0
+      const gn = g.dot(P.normal);
+      let t = h / vn;
+      if (Math.abs(gn) > 1e-3) {
+        const disc = vn * vn - 2 * gn * h;
+        if (disc < 0) continue;
+        t = (vn - Math.sqrt(disc)) / gn;
+        if (!(t > 0)) t = h / vn;
+      }
+      if (t > 3) continue;
+      const hit = _b.copy(this.pos).addScaledVector(this.vel, t).addScaledVector(g, 0.5 * t * t).sub(P.center);
+      const off = hit.addScaledVector(P.normal, -hit.dot(P.normal));
+      const d = off.length();
+      // alcance: o tamanho de um painel pega-voo (o portal fica em algum lugar dele)
+      if (d < 4.5 && (!best || t < best.t)) best = { t, off: off.clone() };
+    }
+    if (!best) return;
+    const want = best.off.multiplyScalar(-1 / Math.max(best.t, 0.08));
+    const dv = want.multiplyScalar(1 - Math.exp(-dt * 8));
+    const maxDv = 14 * dt;
     if (dv.length() > maxDv) dv.setLength(maxDv);
     this.vel.add(dv);
   }

@@ -3,6 +3,7 @@
 // gatilhos, portas, botões, cubos e o elevador de saída.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { floorButton } from './models.js';
 
 const TILE = 2; // metros por repetição de textura
@@ -442,9 +443,9 @@ export class World {
   }
 
   /**
-   * Rampa: caixa girada (euler `rot` em radianos), de metal — não aceita
-   * portal. O motor de física e os raios (tiros, bolas de energia) usam a
-   * caixa girada de verdade.
+   * Rampa: caixa girada (euler `rot` em radianos). De metal não aceita portal;
+   * de concreto claro ('white') aceita — inclusive na diagonal. O motor de
+   * física e os raios (tiros, bolas de energia) usam a caixa girada de verdade.
    */
   ramp(cx, cy, cz, sx, sy, sz, rot, matName = 'metal') {
     const M = materials()[matName];
@@ -465,9 +466,61 @@ export class World {
           min.min(p);
           max.max(p);
         }
-    const b = { min, max, mat: matName, portalable: false, mesh, solid: true, obb: { c, q, qi: q.clone().invert(), half } };
+    const b = { min, max, mat: matName, portalable: M.portalable, mesh, solid: true, obb: { c, q, qi: q.clone().invert(), half } };
     this.solids.push(b);
     this.physics?.addBox(b);
+    return b;
+  }
+
+  /**
+   * Painel diagonal de concreto claro (aceita portal): a face da frente tem
+   * centro em `at` e aponta para `normal` (qualquer direção). `w` × `h` é o
+   * tamanho da face; `up` orienta a altura (padrão: o "para cima" do mundo
+   * projetado na face). Contorno aceso para dar para achar no meio do voo.
+   * `stand`: altura do chão — põe uma coluna de metal embaixo do painel.
+   */
+  panel(at, normal, { w = 4, h = 5, t = 0.8, up = null, color = 0x8fe3ff, stand = null } = {}) {
+    const n = new THREE.Vector3(...normal).normalize();
+    const u = up ? new THREE.Vector3(...up) : Math.abs(n.y) > 0.95 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+    u.projectOnPlane(n).normalize();
+    const rgt = new THREE.Vector3().crossVectors(u, n).normalize();
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(rgt, u, n));
+    const face = new THREE.Vector3(...at);
+    const c = face.clone().addScaledVector(n, -t / 2);
+    const e = new THREE.Euler().setFromQuaternion(q);
+    const b = this.ramp(c.x, c.y, c.z, w, h, t, [e.x, e.y, e.z], 'white');
+    // moldura acesa na face (grossa: dá para achar o painel de longe, no meio do voo)
+    const hw = w / 2;
+    const hh = h / 2;
+    const pts = [
+      [-hw, -hh],
+      [hw, -hh],
+      [hw, hh],
+      [-hw, hh],
+    ].map(([x, y]) => face.clone().addScaledVector(rgt, x).addScaledVector(u, y));
+    const bar = 0.16;
+    const frameMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(2.2) });
+    const bars = [
+      [0, hh - bar / 2, w, bar],
+      [0, -hh + bar / 2, w, bar],
+      [-hw + bar / 2, 0, bar, h],
+      [hw - bar / 2, 0, bar, h],
+    ].map(([x, y, sx, sy]) => new THREE.BoxGeometry(sx, sy, 0.06).translate(x, y, 0.03));
+    const frame = new THREE.Mesh(mergeGeometries(bars), frameMat);
+    frame.position.copy(face);
+    frame.quaternion.copy(q);
+    this.group.add(frame);
+    // setas no meio da face indicando para onde o painel "atira"
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 3), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.6), transparent: true, opacity: 0.55 }));
+    arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    arrow.position.copy(face).addScaledVector(u, hh - 0.45).addScaledVector(n, 0.3);
+    this.group.add(arrow);
+    if (stand !== null) {
+      const low = Math.min(...pts.map((p) => p.y)) - 0.2;
+      const base = face.clone().addScaledVector(n, -t);
+      if (low > stand) this.box(base.x - 0.3, stand, base.z - 0.3, base.x + 0.3, low, base.z + 0.3, 'metal');
+    }
+    b.panel = { n, up: u, right: rgt, face };
     return b;
   }
 

@@ -273,6 +273,7 @@ const _frustum = new THREE.Frustum();
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _ax = new THREE.Vector3();
 const _pm = new THREE.Matrix4();
 const _sphere = new THREE.Sphere();
 
@@ -402,23 +403,35 @@ export class PortalSystem {
     if (!hit.box.portalable) return { ok: false, point: hit.point, normal: hit.normal };
     const n = hit.normal.clone();
     let up;
-    if (Math.abs(n.y) > 0.5) {
-      // piso/teto: o portal fica alinhado com a direção do olhar
+    if (Math.abs(n.y) > (hit.box.obb ? 0.9 : 0.5)) {
+      // piso/teto (ou painel quase deitado): o portal fica alinhado com a direção do olhar
       up = dir.clone().projectOnPlane(n);
       if (up.lengthSq() < 1e-6) up.set(0, 0, -1);
       up.normalize();
       if (n.y < 0) up.negate();
-    } else up = new THREE.Vector3(0, 1, 0);
+    } else up = new THREE.Vector3(0, 1, 0).projectOnPlane(n).normalize(); // parede (ou painel em pé, inclinado)
     const right = new THREE.Vector3().crossVectors(up, n).normalize();
     const box = hit.box;
-    const axes = [0, 1, 2].filter((i) => i !== hit.axis);
     const center = hit.point.clone();
+    // a face atingida, no espaço da caixa: caixa girada (painel diagonal) ou alinhada
+    const obb = box.obb;
+    const toLocal = (v) => (obb ? v.clone().applyQuaternion(obb.qi) : v.clone());
+    const toWorld = (v) => (obb ? v.clone().applyQuaternion(obb.q) : v.clone());
+    const origin0 = obb ? obb.c : new THREE.Vector3();
+    const nL = toLocal(n);
+    const faceAxis = obb ? [0, 1, 2].reduce((a, i) => (Math.abs(nL.getComponent(i)) > Math.abs(nL.getComponent(a)) ? i : a), 0) : hit.axis;
+    const axes = [0, 1, 2].filter((i) => i !== faceAxis);
+    const rL = toLocal(right);
+    const uL = toLocal(up);
+    const lo = (i) => (obb ? -obb.half.getComponent(i) : box.min.getComponent(i));
+    const hi = (i) => (obb ? obb.half.getComponent(i) : box.max.getComponent(i));
+    const ext = (i) => Math.abs(rL.getComponent(i)) * PORTAL_A + Math.abs(uL.getComponent(i)) * PORTAL_B;
 
     const fits = (c) => {
       // dentro da face da caixa
+      const cl = toLocal(c.clone().sub(origin0));
       for (const i of axes) {
-        const ext = Math.abs(right.getComponent(i)) * PORTAL_A + Math.abs(up.getComponent(i)) * PORTAL_B;
-        if (c.getComponent(i) - ext < box.min.getComponent(i) - 1e-3 || c.getComponent(i) + ext > box.max.getComponent(i) + 1e-3) return false;
+        if (cl.getComponent(i) - ext(i) < lo(i) - 1e-3 || cl.getComponent(i) + ext(i) > hi(i) + 1e-3) return false;
       }
       // nada sólido na frente da borda do portal
       for (let k = 0; k < 16; k++) {
@@ -444,15 +457,16 @@ export class PortalSystem {
     };
 
     // empurra para dentro da face
+    const cl = toLocal(center.clone().sub(origin0));
     for (const i of axes) {
-      const ext = Math.abs(right.getComponent(i)) * PORTAL_A + Math.abs(up.getComponent(i)) * PORTAL_B;
-      const lo = box.min.getComponent(i) + ext;
-      const hi = box.max.getComponent(i) - ext;
-      if (lo > hi) return { ok: false, point: hit.point, normal: n };
-      center.setComponent(i, THREE.MathUtils.clamp(center.getComponent(i), lo, hi));
+      const a = lo(i) + ext(i);
+      const b = hi(i) - ext(i);
+      if (a > b) return { ok: false, point: hit.point, normal: n };
+      cl.setComponent(i, THREE.MathUtils.clamp(cl.getComponent(i), a, b));
     }
+    center.copy(toWorld(cl).add(origin0));
     // em parede, se a base do portal ficou perto do chão, encosta no chão (dá para entrar andando)
-    if (Math.abs(n.y) < 0.5) {
+    if (!obb && Math.abs(n.y) < 0.5) {
       const probe = center.clone().addScaledVector(n, 0.4);
       const floor = this.world.raycast(probe, new THREE.Vector3(0, -1, 0), PORTAL_B + 3.0);
       if (floor && floor.dist - PORTAL_B < 2.5) center.y = probe.y - floor.dist + PORTAL_B + 0.01;
@@ -501,10 +515,25 @@ export class PortalSystem {
   passes(box, mouths, min, max) {
     if (!aabbOverlap(min, max, box.min, box.max)) return false;
     for (const P of mouths) {
-      const a = P.axis;
-      const s = P.normal[a];
-      const front = s > 0 ? Math.min(max[a], box.max[a]) : Math.max(min[a], box.min[a]);
-      if (s > 0 ? front <= P.center[a] + 0.01 : front >= P.center[a] - 0.01) return true;
+      const n = P.normal;
+      const plane = n.dot(P.center) + 0.01;
+      if (box.obb) {
+        // caixa girada (painel diagonal): passa se ela inteira está atrás do plano
+        const o = box.obb;
+        let far = n.dot(o.c);
+        for (let i = 0; i < 3; i++) far += o.half.getComponent(i) * Math.abs(n.dot(_ax.set(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuaternion(o.q)));
+        if (far <= plane) return true;
+        continue;
+      }
+      // caixa alinhada: o ponto mais à frente (na direção da normal) da parte
+      // dela que o corpo toca tem de ficar atrás do plano do portal
+      let front = 0;
+      for (const a of ['x', 'y', 'z']) {
+        const l = Math.max(min[a], box.min[a]);
+        const h = Math.min(max[a], box.max[a]);
+        front += n[a] > 0 ? n[a] * h : n[a] * l;
+      }
+      if (front <= plane) return true;
     }
     return false;
   }

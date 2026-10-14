@@ -347,6 +347,7 @@ if (new URLSearchParams(location.search).has('todas')) progress.unlocked = LEVEL
 progress.unlocked = Math.max(progress.unlocked || 1, 1);
 progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.momentum = Math.max(progress.momentum || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
 const saveProgress = () => {
   try {
@@ -354,7 +355,8 @@ const saveProgress = () => {
   } catch {}
 };
 
-const levelLabel = (L) => (L.free ? 'Mapa livre' : L.series === 'hard' ? `Desafio ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`);
+const levelLabel = (L) =>
+  L.free ? 'Mapa livre' : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -906,6 +908,7 @@ function renderMenu() {
     ['Laboratório Antípoda', 'as seis câmaras do documentário', (L) => !L.free && !L.series],
     ['Bateria clássica', 'os testes clássicos do gênero, refeitos aqui embaixo', (L) => L.series === 'classic'],
     ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
+    ['Série Momento', 'arremessos encadeados: abra os portais nos painéis diagonais em pleno voo', (L) => L.series === 'momentum'],
     ['Exploração', '', (L) => L.free],
   ];
   for (const [title, sub, pick] of groups) {
@@ -1458,6 +1461,10 @@ function update(dt, t) {
 }
 
 let realDt = 1 / 60;
+// passo manual da simulação (testes automáticos pelo console: __jogo.manual = true; __jogo.step(1/60))
+let manualStep = false;
+let manualT = 0;
+
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   realDt = dt;
@@ -1465,7 +1472,9 @@ function frame() {
   if (running && level) {
     netTick(dt);
     updateAvatars(dt, t);
-    if (!paused && !completed) {
+    if (manualStep) {
+      player.applyCamera(0);
+    } else if (!paused && !completed) {
       updateSlowmo(dt);
       update(dt * SLOW.k, t);
     } else if (SLOW.on) toggleSlowmo(false);
@@ -1507,4 +1516,16 @@ if (m) {
   renderMenu();
 }
 initPhysics().then(() => requestAnimationFrame(frame));
-window.__jogo = { THREE, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+window.__jogo = {
+  get manual() {
+    return manualStep;
+  },
+  set manual(v) {
+    manualStep = v;
+  },
+  step(dt = 1 / 60) {
+    if (!running || !level || completed) return;
+    manualT += dt;
+    update(dt, manualT);
+  },
+  THREE, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
