@@ -151,7 +151,7 @@ portais no meio de uma queda (é preciso abri-los no ar). Feitas para o tempo le
 | H04 Rampas e Torretas | Marquinho | terraços ligados por rampas sobre rocha fundida, torretas, plataforma final |
 | H05 Inferno | Dona Cida | bola de energia liga as plataformas, pistões, elevador e mergulho com grade |
 
-**Série Momento** — 6 testes enormes (até ~230 m), todos difíceis, resolvidos com momento. **Painéis
+**Série Momento** — 10 testes enormes (até ~300 m), todos difíceis, resolvidos com momento (os quatro últimos misturam o momento com bolas de energia, buracos negros, viagem no tempo e torretas). **Painéis
 diagonais** de concreto claro aceitam portal em qualquer inclinação: você cai num portal no chão e sai
 voando por um painel inclinado (o que entra rápido sai rápido). O próximo par de portais tem de ser
 aberto **em pleno voo** — no painel pega-voo (moldura laranja) onde você vai cair e no próximo painel
@@ -167,6 +167,10 @@ jogos do gênero) puxa de leve para o centro do portal quem chega voando de enco
 | M04 Gêiser | Rodrigo | voo rasante, portal na parede onde você bate e outro no chão: a velocidade vira subida até a torre |
 | M05 Mergulho | Marquinho | queda de 100 m com uma grade horizontal no meio: portais abertos caindo, depois mais um par no voo |
 | M06 Do Outro Lado | Helena | tudo junto: queda infinita, parede-gêiser e zigue-zague — quatro pares de portais no ar |
+| M07 Fogo Cruzado | Bigode | cinco arremessos em zigue-zague com a grade colada no painel de captura (meio segundo para abrir os portais) e bolas de energia cruzando cada voo |
+| M08 Singularidade | Kelly | quatro buracos negros entortam os voos: o painel de captura fica onde a curva leva você (medido por simulação) |
+| M09 Paradoxo | Dona Cida | o percurso do Fogo Cruzado com paredões que só existem no passado ou no futuro: troque de época (T) no ar, duas vezes por salto |
+| M10 Horizonte de Eventos | Seu Tião | tudo junto: buracos negros, paredões de duas épocas, bolas de energia e torretas guardando a plataforma de saída |
 
 Todos foram resolvidos por um robô de teste que joga com a física real do jogo (pelo console:
 `__jogo.manual = true` e `__jogo.step(1/60)` avançam a simulação quadro a quadro).

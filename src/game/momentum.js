@@ -11,11 +11,11 @@
 
 import { lava, pillar, lamps } from './hard.js';
 
-const M = (n, def) => ({ ...def, id: 300 + n, n, code: `M${String(n + 1).padStart(2, '0')}`, series: 'momentum', music: def.music ?? 'labEpic', heat: def.heat ?? false });
+export const M = (n, def) => ({ ...def, id: 300 + n, n, code: `M${String(n + 1).padStart(2, '0')}`, series: 'momentum', music: def.music ?? 'labEpic', heat: def.heat ?? false });
 
-const D = Math.SQRT1_2;
+export const D = Math.SQRT1_2;
 
-function sign(w, x, y, z, rotY, code, name, line2) {
+export function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
     [`MOMENTO ${code}`, 104, 150],
     [name, 76, 270, '#7b1fa2'],
@@ -25,7 +25,7 @@ function sign(w, x, y, z, rotY, code, name, line2) {
 }
 
 /** paredes de metal em volta de um retângulo (sem chão), do y0 ao teto */
-function walls(w, x0, x1, z0, z1, y0, top, open = {}) {
+export function walls(w, x0, x1, z0, z1, y0, top, open = {}) {
   if (!open.w) w.box(x0 - 1, y0, z0 - 1, x0, top, z1 + 1, 'metal');
   if (!open.e) w.box(x1, y0, z0 - 1, x1 + 1, top, z1 + 1, 'metal');
   if (!open.s) w.box(x0, y0, z1, x1, top, z1 + 1, 'metal');
@@ -33,7 +33,7 @@ function walls(w, x0, x1, z0, z1, y0, top, open = {}) {
 }
 
 /** poço de queda: torre de metal com um furo quadrado e o fundo de concreto claro (y = 0) */
-function dropShaft(w, cx, cz, top, { size = 3, wall = 2.5, base = -4 } = {}) {
+export function dropShaft(w, cx, cz, top, { size = 3, wall = 2.5, base = -4 } = {}) {
   const h = size / 2;
   const o = h + wall;
   w.box(cx - o, base, cz - o, cx + o, top, cz - h, 'metal');

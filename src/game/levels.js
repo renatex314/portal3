@@ -9,6 +9,7 @@ import { BIG_MAP } from './bigmap.js';
 import { CLASSIC } from './classic.js';
 import { HARD } from './hard.js';
 import { MOMENTUM } from './momentum.js';
+import { MOMENTUM2 } from './momentum2.js';
 import { FRONTIER } from './fronteira.js';
 
 const G = 9.8;
@@ -378,6 +379,8 @@ LEVELS.push(...CLASSIC);
 LEVELS.push(...HARD);
 // série Momento: arremessos encadeados com portais abertos em pleno voo
 LEVELS.push(...MOMENTUM);
+// série Momento, parte 2: mais difíceis, misturando o resto do laboratório
+LEVELS.push(...MOMENTUM2);
 // série Fronteira: mapas enormes com todas as mecânicas juntas (e a Lua)
 LEVELS.push(...FRONTIER);
 // mapa livre de exploração (com torretas), também jogável em grupo
