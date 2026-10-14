@@ -1,19 +1,29 @@
-Efeitos sonoros da arma de portais
-==================================
+Efeitos sonoros do jogo (jogo.html)
+===================================
 
-Gravações do pacote "Sci-Fi Sounds" (1.0), de Kenney (www.kenney.nl),
-obtido em https://opengameart.org/content/sci-fi-sounds
-
-Licença: Creative Commons Zero (CC0) — domínio público.
+Gravações de domínio público (Creative Commons Zero, CC0 — licença confirmada na página
+ou no arquivo License.txt de cada pacote). O que não tem gravação (ou se o arquivo não
+carregar) usa o efeito sintetizado em src/game/sfx.js.
 http://creativecommons.org/publicdomain/zero/1.0/
 
-Uso no jogo (src/game/sfx.js):
-  laserLarge_*        disparo da arma (mais agudo no portal azul, mais grave no laranja)
-  forceField_*        portal abrindo; pegar/soltar objeto; arma encontrada
-  impactMetal_*       tiro numa superfície que não aceita portal
-  computerNoise_*     grade de desintegração apagando os portais (trecho)
-  spaceEngineLow_*    atravessar um portal (trecho acelerado)
-  laserRetro_*        arremesso
-  spaceEngineSmall_*  zumbido do campo da arma segurando um objeto (em laço)
+Pacotes de Kenney (www.kenney.nl):
+  "Sci-Fi Sounds"      https://opengameart.org/content/sci-fi-sounds
+      laserLarge_*, forceField_*, impactMetal_*, computerNoise_*, spaceEngineLow_*,
+      spaceEngineSmall_*, laserRetro_*, laserSmall_*, doorOpen_*, thrusterFire_*,
+      explosionCrunch_*, lowFrequency_explosion_*
+  "Impact Sounds"      https://kenney.nl/assets/impact-sounds
+      footstep_concrete_*, impactGlass_*, impactPlate_*, impactMetal_heavy_*, impactSoft_*
+  "Interface Sounds"   https://kenney.nl/assets/interface-sounds
+      click_*, switch_*, error_*, tick_*, confirmation_*
+  "Digital Audio"      https://kenney.nl/assets/digital-audio
+      powerUp*, phaserUp*, phaserDown*, phaseJump*, zap*, threeTone1, twoTone1, lowDown, highUp
 
+Outros:
+  metal_steps_*.wav   "Metal footsteps on concrete"  https://opengameart.org/content/metal-footsteps-on-concrete
+  wind.ogg            "wind whoosh loop"              https://opengameart.org/content/wind-whoosh-loop
+  t-rex_calls.mp3     "T-rex Calls"                   https://opengameart.org/content/t-rex-calls
+
+Uso: arma (laserLarge, forceField, impactMetal, computerNoise, spaceEngine, laserRetro),
+passos (concreto, chapa metálica, vidro), portas e botões, torretas, bolas de energia,
+laser, funil, viagem no tempo, buraco negro, vento da velocidade e rugido do T-rex.
 Não são os sons originais dos jogos Portal (Valve), que têm direitos autorais.

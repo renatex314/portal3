@@ -1749,9 +1749,10 @@ function frame() {
   // sons contínuos: ambiente do laboratório, campo da arma e vento da velocidade
   const live = running && level && !paused && !completed;
   if (live) {
-    sfx.ambience(1);
     sfx.hold(held ? 1 : 0);
-    if (!inTube) sound.setWhoosh(clamp((spd - 9) / 22, 0, 1));
+    // vento: gravação em laço que cresce com a velocidade (sintetizado se ainda não carregou)
+    const wv = inTube ? Math.min(spd / 28, 1) : clamp((spd - 9) / 22, 0, 1);
+    sound.setWhoosh(sfx.wind(wv) ? 0 : wv);
   } else {
     sfx.silenceLoops();
     sound.setWhoosh(0);

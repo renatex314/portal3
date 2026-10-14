@@ -6,18 +6,78 @@
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
-// Gravações reais (pacotes de efeitos de domínio público, CC0 — veja public/sfx/LEIA-ME.txt).
-// Cada nome aponta para um ou mais arquivos; um é sorteado a cada vez.
-const n5 = (base) => [0, 1, 2, 3, 4].map((i) => `${base}_00${i}.ogg`);
-const SAMPLES = {
-  shot: n5('laserLarge'), // disparo da arma de portais
-  open: n5('forceField'), // portal abrindo na superfície
-  fail: n5('impactMetal'), // superfície que não aceita portal
+// Gravações reais (pacotes de efeitos de domínio público CC0 — veja public/sfx/LEIA-ME.txt).
+// Cada nome aponta para um ou mais arquivos; um é sorteado a cada vez. Se algum
+// arquivo não carregar, o efeito usa a versão sintetizada.
+const seq = (base, n, ext = 'ogg') => Array.from({ length: n }, (_, i) => `${base}_${String(i).padStart(3, '0')}.${ext}`);
+const n3 = (base, ...ns) => ns.map((i) => `${base}_${String(i).padStart(3, '0')}.ogg`);
+export const SAMPLES = {
+  // arma de portais
+  shot: seq('laserLarge', 5), // disparo
+  open: seq('forceField', 5), // portal abrindo; pegar/soltar
+  fail: seq('impactMetal', 5), // superfície que não aceita portal
   fizzle: ['computerNoise_000.ogg', 'computerNoise_002.ogg'], // grade apagando os portais
   pass: ['spaceEngineLow_000.ogg', 'spaceEngineLow_003.ogg'], // atravessar um portal
   toss: ['laserRetro_002.ogg', 'laserRetro_004.ogg'], // arremesso
-  hum: ['spaceEngineSmall_000.ogg'], // campo da arma segurando um objeto (em laço)
+  hum: ['spaceEngineSmall_000.ogg'], // campo da arma segurando (laço)
+  // passos e pousos
+  stepConcrete: seq('footstep_concrete', 5),
+  stepMetal: [1, 3, 5, 7, 9, 11, 13, 15, 17, 19].map((i) => `metal_steps_${String(i).padStart(2, '0')}.wav`),
+  stepGlass: n3('impactGlass_light', 0, 1, 2),
+  land: n3('impactPlate_medium', 0, 1, 2),
+  // mecanismos
+  btnDown: n3('click', 1, 2, 3),
+  btnUp: n3('switch', 1, 3, 5),
+  door: seq('doorOpen', 3),
+  hiss: ['thrusterFire_000.ogg', 'thrusterFire_002.ogg'],
+  chime: ['confirmation_002.ogg', 'confirmation_003.ogg'],
+  plate: n3('impactMetal_heavy', 0, 1, 2),
+  denied: n3('error', 1, 3, 5),
+  tick: n3('tick', 1, 2),
+  // torretas
+  turret: seq('laserSmall', 5),
+  spot: ['threeTone1.ogg', 'twoTone1.ogg'],
+  lost: ['phaserDown1.ogg', 'phaserDown2.ogg'],
+  down: ['zapThreeToneDown.ogg', 'lowDown.ogg'],
+  // energia, laser, tempo, vácuo
+  launch: ['phaserUp3.ogg', 'phaserUp5.ogg'],
+  bounce: ['zap1.ogg', 'zap2.ogg'],
+  caught: ['powerUp5.ogg', 'powerUp7.ogg'],
+  pop: n3('explosionCrunch', 0, 2),
+  burn: n3('explosionCrunch', 1, 3),
+  laserOn: ['powerUp9.ogg', 'powerUp11.ogg'],
+  sizzle: ['zap1.ogg', 'zapTwoTone.ogg'],
+  funnelIn: ['phaserUp1.ogg', 'phaserUp6.ogg'],
+  timeShift: ['phaseJump1.ogg', 'phaseJump3.ogg', 'phaseJump5.ogg'],
+  boom: seq('lowFrequency_explosion', 2),
+  death: seq('explosionCrunch', 5),
+  // recompensas e tempo lento
+  gem: ['powerUp3.ogg', 'powerUp4.ogg'],
+  win: ['powerUp10.ogg', 'powerUp12.ogg'],
+  slowIn: ['lowDown.ogg'],
+  slowOut: ['highUp.ogg'],
+  heart: n3('impactSoft_heavy', 0, 1),
+  // laços (ambientes)
+  laserLoop: ['spaceEngineSmall_003.ogg'],
+  funnelLoop: ['forceField_002.ogg'],
+  bhLoop: ['lowFrequency_explosion_000.ogg'],
+  bhLoop2: ['spaceEngineLow_001.ogg'],
+  wind: ['wind.ogg'],
+  // criaturas
+  roar: ['t-rex_calls.mp3'],
 };
+
+// trechos do arquivo de chamados de T-rex (início, duração em s), achados pela energia do sinal
+const ROARS = [
+  [26.35, 3.4],
+  [36.6, 3.4],
+  [4.25, 3.0],
+  [10.5, 3.0],
+];
+const CHIRPS = [
+  [0.3, 1.1],
+  [2.4, 0.9],
+];
 
 export class Sfx {
   constructor(sound) {
@@ -26,6 +86,7 @@ export class Sfx {
     this.stepSide = 1;
     this.bufs = {};
     this.loading = false;
+    this.ready = false; // todas as gravações carregadas (ou falharam): os laços só começam depois
   }
 
   get ok() {
@@ -36,14 +97,18 @@ export class Sfx {
   /** baixa e decodifica as gravações (uma vez, quando o áudio liga) */
   _load() {
     this.loading = true;
+    const jobs = [];
     for (const [name, files] of Object.entries(SAMPLES))
       files.forEach((f, i) =>
-        fetch(`sfx/${f}`)
-          .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
-          .then((b) => this.sound.ctx.decodeAudioData(b))
-          .then((buf) => ((this.bufs[name] ??= [])[i] = buf))
-          .catch(() => {}),
+        jobs.push(
+          fetch(`sfx/${f}`)
+            .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+            .then((b) => this.sound.ctx.decodeAudioData(b))
+            .then((buf) => ((this.bufs[name] ??= [])[i] = buf))
+            .catch(() => {}),
+        ),
       );
+    Promise.all(jobs).then(() => (this.ready = true));
   }
 
   /**
@@ -181,12 +246,15 @@ export class Sfx {
       out.gain.value = 0;
       out.connect(this.sound.sfx);
       const ctl = build(ctx, out) ?? {};
-      this.loops.set(name, {
+      const entry = {
+        v: 0,
         set: (v, extra) => {
+          entry.v = v;
           out.gain.setTargetAtTime(Math.max(0, Math.min(1, v)) * max, ctx.currentTime, 0.08);
           ctl.tune?.(extra, ctx.currentTime);
         },
-      });
+      };
+      this.loops.set(name, entry);
     }
     return this.loops.get(name);
   }
@@ -199,8 +267,75 @@ export class Sfx {
     return s;
   }
 
+  /**
+   * Toca `buf` em laço sem emenda audível: cada cópia entra e sai com fade e
+   * a próxima começa antes de a anterior acabar. Só gasta processamento
+   * enquanto o laço `name` está audível.
+   */
+  _xloop(buf, dest, name, rate = 1, fade = 0.6) {
+    const ctx = this.sound.ctx;
+    const dur = buf.duration / rate;
+    const f = Math.min(fade, dur / 3);
+    let next = 0;
+    const spawn = (t) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(1, t + f);
+      g.gain.setValueAtTime(1, t + dur - f);
+      g.gain.linearRampToValueAtTime(0.0001, t + dur);
+      src.connect(g).connect(dest);
+      src.start(t);
+      src.stop(t + dur + 0.05);
+    };
+    setInterval(() => {
+      const on = (this.loops.get(name)?.v ?? 0) > 0.01;
+      const now = ctx.currentTime;
+      if (!on) {
+        next = 0;
+        return;
+      }
+      if (next < now) next = now;
+      while (next < now + 0.8) {
+        spawn(next);
+        next += dur - f;
+      }
+    }, 200);
+  }
+
+  /**
+   * Laço feito de uma gravação (`key` em SAMPLES). Devolve false se ela ainda
+   * não carregou (quem chamou usa a versão sintetizada).
+   */
+  _sloop(name, key, v, { max = 0.2, rate = 1, fade = 0.6, filter = null, tune = null, extra } = {}) {
+    const buf = this.bufs[key]?.find(Boolean);
+    if (!buf) return false;
+    this.loop(
+      name,
+      (ctx, out) => {
+        let dest = out;
+        let f = null;
+        if (filter) {
+          f = ctx.createBiquadFilter();
+          f.type = filter.type;
+          f.frequency.value = filter.freq;
+          f.Q.value = filter.q ?? 0.7;
+          f.connect(out);
+          dest = f;
+        }
+        this._xloop(buf, dest, name, rate, fade);
+        return { tune: (d, t) => tune?.(f, d, t) };
+      },
+      max,
+    ).set(v, extra);
+    return true;
+  }
+
   /** zumbido do campo da arma segurando um objeto (gravação em laço; sintetizado enquanto não carrega) */
   hold(v) {
+    if (!this.ready) return;
     if (this.bufs.hum?.[0]) {
       this.loop(
         'holdS',
@@ -248,38 +383,10 @@ export class Sfx {
     ).set(v);
   }
 
-  /** ambiente do laboratório: zumbido elétrico grave e ventilação */
-  ambience(v) {
-    this.loop(
-      'amb',
-      (ctx, out) => {
-        for (const [f, g] of [
-          [50, 0.5],
-          [100, 0.25],
-          [150, 0.1],
-        ]) {
-          const o = ctx.createOscillator();
-          o.frequency.value = f;
-          const og = ctx.createGain();
-          og.gain.value = g;
-          o.connect(og).connect(out);
-          o.start();
-        }
-        const n = this._noiseSrc(ctx);
-        const f = ctx.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.value = 350;
-        f.Q.value = 0.6;
-        const ng = ctx.createGain();
-        ng.gain.value = 0.8;
-        n.connect(f).connect(ng).connect(out);
-      },
-      0.035,
-    ).set(v);
-  }
-
   /** chiado do laser (volume pela distância até o feixe mais próximo) */
   laserHum(v) {
+    if (!this.ready) return;
+    if (this._sloop('laserS', 'laserLoop', v, { max: 0.09, rate: 1.7, filter: { type: 'bandpass', freq: 1400, q: 1.2 } })) return this.loops.get('laser')?.set(0);
     this.loop(
       'laser',
       (ctx, out) => {
@@ -312,6 +419,8 @@ export class Sfx {
 
   /** zumbido do funil de excursão; `extra` = 1 normal, −1 invertido (muda a altura) */
   funnelHum(v, dir = 1) {
+    if (!this.ready) return;
+    if (this._sloop('funnelS', 'funnelLoop', v, { max: 0.12, rate: 0.85, fade: 0.3, extra: dir, tune: (f, d) => f && (f.frequency.value = d < 0 ? 500 : 1500), filter: { type: 'lowpass', freq: 1500 } })) return this.loops.get('funnel')?.set(0);
     this.loop(
       'funnel',
       (ctx, out) => {
@@ -339,6 +448,11 @@ export class Sfx {
 
   /** rugido grave do buraco negro */
   blackHole(v) {
+    if (!this.ready) return;
+    if (this._sloop('bhS', 'bhLoop', v, { max: 0.55, rate: 0.55, fade: 0.7 })) {
+      this._sloop('bhS2', 'bhLoop2', v, { max: 0.5, rate: 0.5, fade: 0.9, filter: { type: 'lowpass', freq: 220 } });
+      return this.loops.get('bh')?.set(0);
+    }
     this.loop(
       'bh',
       (ctx, out) => {
@@ -367,6 +481,8 @@ export class Sfx {
 
   /** vento forte (vácuo do portal para a Lua) */
   gale(v) {
+    if (!this.ready) return;
+    if (this._sloop('galeS', 'wind', v, { max: 0.5, rate: 1.1, filter: { type: 'lowpass', freq: 2400 } })) return this.loops.get('gale')?.set(0);
     this.loop(
       'gale',
       (ctx, out) => {
@@ -385,6 +501,19 @@ export class Sfx {
       },
       0.45,
     ).set(v);
+  }
+
+  /** vento da velocidade (0..1): gravação em laço, mais agudo e forte quanto mais rápido; false se ainda não carregou */
+  wind(v) {
+    if (!this.ready) return true; // (ainda carregando: silêncio, sem o vento sintetizado)
+    return this._sloop('windS', 'wind', v * v, {
+      max: 0.5,
+      rate: 0.8,
+      fade: 0.5,
+      extra: v,
+      tune: (f, d) => f && (f.frequency.value = 500 + (d ?? 0) * 3500),
+      filter: { type: 'lowpass', freq: 800, q: 0.5 },
+    });
   }
 
   /** desliga todos os laços (troca de fase / pausa) */
@@ -469,6 +598,7 @@ export class Sfx {
   // ------------------------------------------------------------------ mecanismos
   click(down) {
     if (!this.ok) return;
+    if (this.sample(down ? 'btnDown' : 'btnUp', { vol: 0.45, rate: down ? 0.9 : 1.1 })) return;
     const t = this.t;
     // servo + trava
     this._osc('square', down ? 420 : 620, down ? 210 : 900, t, 0.09, 0.05);
@@ -479,6 +609,11 @@ export class Sfx {
 
   door() {
     if (!this.ok) return;
+    if (this.sample('door', { vol: 0.55, rate: 0.6, jitter: 0.03 })) {
+      this.sample('hiss', { vol: 0.2, rate: 1.2, dur: 0.7, from: 0.2 });
+      this.sample('chime', { vol: 0.2, delay: 0.85 });
+      return;
+    }
     const t = this.t;
     // hidráulica (chiado) + servo subindo + sinal de duas notas
     this._noise(t, 0.6, 'highpass', 6000, 2500, 0.06, 0.8);
@@ -514,6 +649,8 @@ export class Sfx {
   /** passo: bota com solado de metal; `mat` do chão muda o timbre */
   step(mat = 'white', speed = 1) {
     if (!this.ok) return;
+    const key = mat === 'metal' || mat === 'stripe' ? 'stepMetal' : mat === 'glass' ? 'stepGlass' : 'stepConcrete';
+    if (this.sample(key, { vol: 0.3 + Math.min(speed, 1.5) * 0.22, rate: mat === 'rock' || mat === 'moon' ? 0.85 : 1, jitter: 0.07 })) return;
     const t = this.t;
     this.stepSide = -this.stepSide;
     const p = 1 + this.stepSide * 0.04 + (Math.random() - 0.5) * 0.06;
@@ -532,6 +669,10 @@ export class Sfx {
 
   land(strength) {
     if (!this.ok) return;
+    {
+      const k = Math.min(strength / 15, 1);
+      if (this.sample('land', { vol: 0.35 + k * 0.5, rate: 1.1 - k * 0.3 })) return;
+    }
     const t = this.t;
     const k = Math.min(strength / 15, 1);
     this._osc('sine', 120, 35, t, 0.25, 0.25 + k * 0.3);
@@ -542,6 +683,10 @@ export class Sfx {
 
   death() {
     if (!this.ok) return;
+    if (this.sample('death', { vol: 0.6, rate: 0.9 })) {
+      this.sample('boom', { vol: 0.5, rate: 0.9, delay: 0.05 });
+      return;
+    }
     const t = this.t;
     this._fm(800, 40, t, 1.2, { ratio: 1.5, index: 10, peak: 0.12, type: 'sawtooth' });
     this._crackle(t, 0.6, 20, 0.15);
@@ -552,6 +697,10 @@ export class Sfx {
   // ------------------------------------------------------------------ torretas
   turretShot(dist) {
     if (!this.ok) return;
+    {
+      const v = Math.max(0.03, 0.22 - dist * 0.006);
+      if (this.sample('turret', { vol: v * 2.4, rate: 1.9, jitter: 0.14 })) return;
+    }
     const t = this.t;
     const v = Math.max(0.03, 0.22 - dist * 0.006);
     this._osc('square', 2600, 500, t, 0.06, v * 0.35);
@@ -562,6 +711,7 @@ export class Sfx {
   /** alvo encontrado: três bipes subindo */
   turretSpot() {
     if (!this.ok) return;
+    if (this.sample('spot', { vol: 0.28 })) return;
     const t = this.t;
     [76, 81, 88].forEach((m, i) => this._osc('square', mtof(m), mtof(m), t + i * 0.08, 0.06, 0.035));
   }
@@ -569,6 +719,7 @@ export class Sfx {
   /** procurando: dois bipes descendo */
   turretLost() {
     if (!this.ok) return;
+    if (this.sample('lost', { vol: 0.25 })) return;
     const t = this.t;
     [84, 79].forEach((m, i) => this._osc('square', mtof(m), mtof(m), t + i * 0.12, 0.08, 0.025));
   }
@@ -576,6 +727,7 @@ export class Sfx {
   /** desligando: tremido descendo */
   turretDown() {
     if (!this.ok) return;
+    if (this.sample('down', { vol: 0.35 })) return;
     const t = this.t;
     this._fm(1200, 120, t, 0.8, { ratio: 0.25, index: 3, peak: 0.06, type: 'square' });
     this._crackle(t, 0.4, 8, 0.08);
@@ -583,12 +735,17 @@ export class Sfx {
 
   roar(dist = 0) {
     if (!this.ok) return;
-    this.sound.roar(Math.max(0.15, 1 - dist / 45), 1);
+    const v = Math.max(0.15, 1 - dist / 45);
+    const [from, dur] = ROARS[Math.floor(Math.random() * ROARS.length)];
+    if (this.sample('roar', { vol: 0.75 * v, from, dur, jitter: 0.06, filter: dist > 25 ? { type: 'lowpass', freq: 1800 } : null })) return;
+    this.sound.roar(v, 1);
   }
 
   /** guincho de raptor (mascote) */
   chirp() {
     if (!this.ok) return;
+    const [from, dur] = CHIRPS[Math.floor(Math.random() * CHIRPS.length)];
+    if (this.sample('roar', { vol: 0.4, rate: 2.1, from, dur: dur / 2.1, jitter: 0.12 })) return;
     const t = this.t;
     this._osc('sawtooth', 900, 1500, t, 0.12, 0.05);
     this._osc('sawtooth', 1400, 700, t + 0.12, 0.18, 0.05);
@@ -596,12 +753,17 @@ export class Sfx {
 
   gem() {
     if (!this.ok) return;
+    if (this.sample('gem', { vol: 0.35 })) return;
     const t = this.t;
     [84, 88, 91, 96].forEach((m, i) => this._fm(mtof(m), mtof(m), t + i * 0.05, 0.6, { ratio: 3.5, index: 1.5, peak: 0.05 }));
   }
 
   win() {
     if (!this.ok) return;
+    if (this.sample('win', { vol: 0.45 })) {
+      this.sample('chime', { vol: 0.3, delay: 0.5 });
+      return;
+    }
     const t = this.t;
     [62, 69, 74, 78, 81].forEach((m, i) => this._fm(mtof(m), mtof(m), t + i * 0.09, 0.9, { ratio: 2, index: 1.2, peak: 0.06 }));
     this._osc('sine', 55, 110, t, 1.2, 0.12, 0.2);
@@ -610,6 +772,7 @@ export class Sfx {
   // ---- tempo lento (passa por fora do filtro abafado, direto no master)
   slowIn() {
     if (!this.ok) return;
+    if (this.sample('slowIn', { vol: 0.6, rate: 0.9, dest: this.sound.master })) return;
     const t = this.t;
     const m = this.sound.master;
     this._osc('sine', 420, 55, t, 0.9, 0.28, 0.01, m);
@@ -619,6 +782,7 @@ export class Sfx {
 
   slowOut() {
     if (!this.ok) return;
+    if (this.sample('slowOut', { vol: 0.5, dest: this.sound.master })) return;
     const t = this.t;
     const m = this.sound.master;
     this._osc('sine', 60, 480, t, 0.45, 0.22, 0.01, m);
@@ -627,6 +791,10 @@ export class Sfx {
 
   heartbeat() {
     if (!this.ok) return;
+    if (this.sample('heart', { vol: 0.75, rate: 0.65, dest: this.sound.master })) {
+      this.sample('heart', { vol: 0.5, rate: 0.6, delay: 0.2, dest: this.sound.master });
+      return;
+    }
     const t = this.t;
     const m = this.sound.master;
     this._osc('sine', 70, 38, t, 0.18, 0.35, 0.005, m);
@@ -635,12 +803,14 @@ export class Sfx {
 
   lowTime() {
     if (!this.ok) return;
+    if (this.sample('tick', { vol: 0.4, rate: 1.8, dest: this.sound.master })) return;
     const t = this.t;
     this._osc('square', 1320, 1320, t, 0.06, 0.05, 0.003, this.sound.master);
   }
 
   denied() {
     if (!this.ok) return;
+    if (this.sample('denied', { vol: 0.4 })) return;
     const t = this.t;
     // buzina com batimento (duas quadradas quase iguais)
     this._osc('square', 150, 140, t, 0.22, 0.05);
@@ -650,6 +820,7 @@ export class Sfx {
   // ---- bola de energia, grade e fornalha
   launch() {
     if (!this.ok) return;
+    if (this.sample('launch', { vol: 0.3 })) return;
     const t = this.t;
     this._fm(150, 900, t, 0.35, { ratio: 1.5, index: 5, peak: 0.06, type: 'sawtooth' });
     this._noise(t + 0.3, 0.2, 'bandpass', 1500, 400, 0.12, 2);
@@ -657,6 +828,10 @@ export class Sfx {
 
   bounce(dist) {
     if (!this.ok) return;
+    {
+      const v = Math.max(0.02, 0.16 - dist * 0.006);
+      if (this.sample('bounce', { vol: v * 3, rate: 0.9 + Math.random() * 0.3 })) return;
+    }
     const t = this.t;
     const v = Math.max(0.02, 0.16 - dist * 0.006);
     this._fm(520, 200, t, 0.16, { ratio: 1.33, index: 4, peak: v });
@@ -665,6 +840,7 @@ export class Sfx {
 
   caught() {
     if (!this.ok) return;
+    if (this.sample('caught', { vol: 0.4 })) return;
     const t = this.t;
     [57, 64, 69, 76].forEach((m, i) => this._fm(mtof(m), mtof(m), t + i * 0.07, 0.7, { ratio: 2, index: 1, peak: 0.06 }));
     this._osc('sawtooth', 55, 220, t, 1.2, 0.05, 0.1);
@@ -672,6 +848,7 @@ export class Sfx {
 
   pop() {
     if (!this.ok) return;
+    if (this.sample('pop', { vol: 0.28, rate: 1.4 })) return;
     const t = this.t;
     this._noise(t, 0.5, 'lowpass', 4000, 200, 0.2);
     this._fm(600, 80, t, 0.4, { ratio: 3, index: 6, peak: 0.05 });
@@ -679,6 +856,10 @@ export class Sfx {
 
   burn() {
     if (!this.ok) return;
+    if (this.sample('burn', { vol: 0.5, rate: 0.9 })) {
+      this.sample('hiss', { vol: 0.3, rate: 0.8, dur: 1.2, from: 0.2 });
+      return;
+    }
     const t = this.t;
     this._noise(t, 1.6, 'lowpass', 1800, 300, 0.35, 0.7);
     this._crackle(t, 1.2, 25, 0.1);
@@ -705,6 +886,10 @@ export class Sfx {
   /** placa de lançamento: pistão pneumático + rajada */
   plate() {
     if (!this.ok) return;
+    if (this.sample('plate', { vol: 0.55, rate: 0.9 })) {
+      this.sample('hiss', { vol: 0.35, rate: 1.4, dur: 0.5, from: 0.2 });
+      return;
+    }
     const t = this.t;
     this._osc('sine', 90, 40, t, 0.25, 0.4);
     this._noise(t, 0.35, 'highpass', 1500, 6000, 0.15, 0.7);
@@ -714,6 +899,7 @@ export class Sfx {
   /** receptor de laser ligou */
   laserOn() {
     if (!this.ok) return;
+    if (this.sample('laserOn', { vol: 0.35 })) return;
     const t = this.t;
     this._fm(220, 880, t, 0.5, { ratio: 2, index: 2, peak: 0.06 });
     this._osc('sine', 1760, 1760, t + 0.4, 0.4, 0.03);
@@ -722,6 +908,7 @@ export class Sfx {
   /** queimadura do laser na pele (curto, repetido enquanto encosta) */
   sizzle() {
     if (!this.ok) return;
+    if (this.sample('sizzle', { vol: 0.25, rate: 1.4, jitter: 0.15 })) return;
     const t = this.t;
     this._noise(t, 0.12, 'highpass', 3000, 6000, 0.12);
     this._crackle(t, 0.1, 3, 0.08);
@@ -730,6 +917,7 @@ export class Sfx {
   /** entrou/saiu de um funil */
   funnelIn() {
     if (!this.ok) return;
+    if (this.sample('funnelIn', { vol: 0.3 })) return;
     const t = this.t;
     this._osc('sine', 80, 220, t, 0.4, 0.15, 0.02);
     this._noise(t, 0.4, 'bandpass', 300, 1500, 0.08, 2);
@@ -738,6 +926,10 @@ export class Sfx {
   /** salto no tempo: varredura dobrando para os dois lados + "prato ao contrário" */
   timeShift(toPast) {
     if (!this.ok) return;
+    if (this.sample('timeShift', { vol: 0.5, rate: toPast ? 0.8 : 1.15, dest: this.sound.master })) {
+      this.sample('boom', { vol: 0.35, rate: 1.4, delay: 0.45, dest: this.sound.master });
+      return;
+    }
     const t = this.t;
     const m = this.sound.master;
     this._fm(toPast ? 1600 : 120, toPast ? 120 : 1600, t, 0.7, { ratio: 1.01, index: 12, peak: 0.08, dest: m });
@@ -760,6 +952,10 @@ export class Sfx {
   /** chegou na Lua / voltou: estrondo e assobio de despressurização */
   vacuum() {
     if (!this.ok) return;
+    if (this.sample('boom', { vol: 0.55, rate: 0.85 })) {
+      this.sample('hiss', { vol: 0.4, rate: 0.7, dur: 1.4, from: 0.2 });
+      return;
+    }
     const t = this.t;
     this._noise(t, 1.2, 'bandpass', 2500, 300, 0.3, 1);
     this._osc('sine', 60, 25, t, 1.0, 0.4);

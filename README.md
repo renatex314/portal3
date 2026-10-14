@@ -205,16 +205,19 @@ status, antena piscando, clarão e rastro de bala, faíscas ao cair. Grade de de
 hexagonal, varredura, arcos elétricos, bobinas pulsando e uma onda onde algo atravessa. Portas com
 indicador; objetos desintegram na grade e na fornalha.
 
-Música: composições próprias sintetizadas ao vivo, tensas em todos os mapas — nas câmaras, drone
-grave, baixo distorcido em semicolcheias, batida industrial com golpes metálicos e cordas em trêmolo;
-versão caótica a 138 bpm (trítono, acordes em cluster, sirene) nos desafios, com torretas e na queda
-pelo túnel; cordas, tímpanos e tema sombrio na série Momento, na câmara final e do outro lado da Terra.
-
-Efeitos sonoros de ficção científica: a **arma de portais** usa gravações reais do pacote
-"Sci-Fi Sounds" de Kenney (domínio público, CC0 — créditos em `public/sfx/LEIA-ME.txt`); o resto é
-sintetizado (FM, estalos elétricos, servos). Passos com timbre do piso (chapa, concreto, vidro),
-vento que cresce com a velocidade, zumbido do campo da arma, ambiente do laboratório, chiado do
-laser, funil, rugido do buraco negro e o vácuo do portal da Lua.
+Som do jogo: **gravações reais de domínio público (CC0)**, com a síntese ao vivo só como reserva
+(se um arquivo não carregar).
+- **Músicas** (`public/music/`, 26 MB): faixas sombrias de ficção científica tocadas em streaming
+  com transição suave — "Dark Sci-Fi Audio Pack", "Ambience Pack 1 – Sci Fi Horror",
+  "Menacing Otherworld" e "Searching", do OpenGameArt. As câmaras tocam as mais lentas, os desafios
+  e as torretas as mais urgentes, a série Momento e a câmara final as mais grandiosas.
+- **Efeitos** (`public/sfx/`, 4 MB): pacotes de Kenney (Sci-Fi Sounds, Impact Sounds, Interface
+  Sounds, Digital Audio) e gravações do OpenGameArt — arma de portais, passos (concreto, chapa
+  metálica e vidro), portas, botões, torretas, bolas de energia, laser, funil, viagem no tempo,
+  buraco negro, vento que cresce com a velocidade e o rugido do T-rex.
+- Créditos e links de cada faixa em `public/music/LEIA-ME.txt` e `public/sfx/LEIA-ME.txt`.
+- Não são as trilhas nem os sons originais dos jogos Portal (Valve), que têm direitos autorais.
+A visita (documentário) continua com a música sintetizada.
 
 Original: sem nomes, marcas ou arquivos de outros jogos.
 

@@ -1,0 +1,24 @@
+Músicas do jogo (jogo.html)
+===========================
+
+Faixas gravadas de domínio público (Creative Commons Zero, CC0 — licença confirmada na
+página de cada uma). Tocam em streaming, com transição suave entre as faixas de cada clima.
+Se algum arquivo não carregar, o jogo usa a música sintetizada.
+
+Câmaras de teste (clima "lab"):
+  sector.mp3, pulse.mp3, airy.mp3        — "Dark Sci-Fi Audio Pack"
+                                           https://opengameart.org/content/dark-sci-fi-audio-pack
+Desafios hardcore, torretas e túnel (clima "labTense"):
+  urgent.mp3                             — "Dark Sci-Fi Audio Pack" (idem)
+  depths.mp3, infestation.mp3            — "Ambience Pack 1 – Sci Fi Horror"
+                                           https://opengameart.org/content/ambience-pack-1-sci-fi-horror
+  searching.ogg                          — "Searching"
+                                           https://opengameart.org/content/searching
+Série Momento, câmara final e lado de cabeça para baixo (clima "labEpic"):
+  menacing.mp3                           — "Menacing Otherworld" (Ruskerdax)
+                                           https://opengameart.org/content/menacing-otherworld
+  surreal.mp3                            — "Ambience Pack 1 – Sci Fi Horror" (idem)
+  transmission.mp3                       — "Dark Sci-Fi Audio Pack" (idem)
+
+CC0: http://creativecommons.org/publicdomain/zero/1.0/
+Não são as trilhas originais dos jogos Portal (Valve), que têm direitos autorais.

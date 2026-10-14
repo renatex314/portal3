@@ -20,6 +20,33 @@
 // Efeitos: explosão, ronco da descida, vento da queda.
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+
+// Músicas gravadas (CC0, veja public/music/LEIA-ME.txt), tocadas em streaming com
+// transição suave entre as faixas. `g` iguala o volume entre elas. Climas sem
+// faixa (ou se o arquivo não carregar) usam a música sintetizada.
+// `g` = ganho que leva cada faixa ao mesmo volume (várias vêm masterizadas muito baixo).
+export const TRACKS = {
+  // câmaras de teste: pulso lento, tensão contida
+  lab: [
+    { f: 'music/sector.mp3', g: 7.5 },
+    { f: 'music/pulse.mp3', g: 4.5 },
+    { f: 'music/airy.mp3', g: 12 },
+  ],
+  // desafios e torretas: urgência
+  labTense: [
+    { f: 'music/urgent.mp3', g: 15 },
+    { f: 'music/depths.mp3', g: 1.76 },
+    { f: 'music/infestation.mp3', g: 8.2 },
+    { f: 'music/searching.ogg', g: 0.53 },
+  ],
+  // série Momento, câmara final e o outro lado da Terra: sombrio e grande
+  labEpic: [
+    { f: 'music/menacing.mp3', g: 0.33 },
+    { f: 'music/surreal.mp3', g: 5 },
+    { f: 'music/transmission.mp3', g: 4.3 },
+  ],
+};
+const FADE = 4; // segundos de transição entre faixas
 const BPM = { lab: 112, labTense: 138, labEpic: 100 };
 
 // melodias: por compasso, [semicolcheia de início, nota MIDI, duração em semicolcheias]
@@ -168,9 +195,79 @@ export class Soundtrack {
     const mood = { name, bus, next: t + 0.1, step: 0, nodes: [] };
     const bpm = BPM[name];
     if (bpm) this.delay.delayTime.setTargetAtTime((3 * 60) / bpm / 4, t, 0.05); // eco de 3 semicolcheias
-    this._startDrones(mood);
+    if (TRACKS[name]?.length) {
+      mood.next = Infinity; // sem sequenciador: quem toca é o streaming
+      this._playlist(mood);
+    } else this._startDrones(mood);
     this.current = mood;
     this.moods.push(mood);
+  }
+
+  // ------------------------------------------------------------ músicas gravadas
+  _playlist(mood) {
+    const list = [...TRACKS[mood.name]].sort(() => Math.random() - 0.5);
+    mood.stream = { list, i: 0, cur: null, failed: false };
+    this._nextTrack(mood, 0.3);
+  }
+
+  /** começa a próxima faixa (entra em `fade` s) */
+  _nextTrack(mood, fade = FADE) {
+    const st = mood.stream;
+    const tr = st.list[st.i++ % st.list.length];
+    const ctx = this.ctx;
+    const el = new Audio(tr.f);
+    el.preload = 'auto';
+    const src = ctx.createMediaElementSource(el);
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(Math.max(tr.g ?? 1, 0.01), t + fade);
+    src.connect(g).connect(mood.bus);
+    const track = { el, g, tr };
+    mood.nodes.push({ stop: () => el.pause() });
+    el.addEventListener('error', () => this._streamFailed(mood, track));
+    el.play().catch((e) => {
+      // autoplay bloqueado (ainda sem clique/tecla): tenta de novo no primeiro gesto
+      if (e?.name === 'NotAllowedError') this._retryOnGesture(el);
+      else this._streamFailed(mood, track);
+    });
+    // a faixa anterior sai
+    const old = st.cur;
+    if (old) {
+      old.g.gain.cancelScheduledValues(t);
+      old.g.gain.setValueAtTime(old.g.gain.value, t);
+      old.g.gain.linearRampToValueAtTime(0, t + fade);
+      old.ending = true;
+      setTimeout(() => old.el.pause(), (fade + 0.3) * 1000);
+    }
+    st.cur = track;
+  }
+
+  _retryOnGesture(el) {
+    const go = () => {
+      for (const ev of ['pointerdown', 'keydown']) window.removeEventListener(ev, go, true);
+      this.ctx?.resume();
+      el.play().catch(() => {});
+    };
+    for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, go, true);
+  }
+
+  /** arquivo ausente / bloqueado: cai para a música sintetizada do clima */
+  _streamFailed(mood, track) {
+    const st = mood.stream;
+    if (!st || st.failed || track.ending) return;
+    st.failed = true;
+    mood.stream = null;
+    mood.next = this.ctx.currentTime + 0.1;
+    this._startDrones(mood);
+  }
+
+  /** a cada passo do sequenciador: emenda a próxima faixa perto do fim da atual */
+  _streamTick(mood) {
+    const st = mood.stream;
+    if (!st?.cur) return;
+    const { el } = st.cur;
+    if (isFinite(el.duration) && el.duration > FADE * 2 && el.currentTime > el.duration - FADE - 0.2 && !st.cur.ending) this._nextTrack(mood);
   }
 
   /** tempo lento: abafa música e efeitos (o som do próprio efeito passa por fora) */
@@ -716,6 +813,7 @@ export class Soundtrack {
         continue;
       }
       if (m.dying) continue;
+      if (m.stream) this._streamTick(m);
       while (m.next < now + 0.35) this[`_${m.name}`](m, m.next);
     }
     this.moods = this.moods.filter((m) => !m.dead);
