@@ -45,6 +45,71 @@ export class Turret extends Prop {
     this.laser.frustumCulled = false;
     this.laser.visible = false;
     scene.add(this.laser);
+    // rastros das balas (riscos curtos que somem rápido)
+    this.tracers = Array.from({ length: 3 }, () => {
+      const l = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+        new THREE.LineBasicMaterial({ color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false }),
+      );
+      l.frustumCulled = false;
+      scene.add(l);
+      return l;
+    });
+    this.tracerI = 0;
+    this.flashT = 0;
+    this.barrelI = 0;
+    this.eyeK = 1;
+  }
+
+  /** clarão no cano da vez, recuo e um rastro até perto do alvo */
+  muzzle(target) {
+    const { flashes, barrels } = this.mesh.userData;
+    this.barrelI = (this.barrelI + 1) % barrels.length;
+    this.flashT = 0.05;
+    barrels[this.barrelI].userData.kick = 1;
+    const from = flashes[this.barrelI].getWorldPosition(new THREE.Vector3());
+    const to = target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.5 - 0.1, (Math.random() - 0.5) * 0.6));
+    const tr = this.tracers[this.tracerI++ % this.tracers.length];
+    // só um pedaço do caminho (risco de bala, não um laser)
+    const d = to.clone().sub(from);
+    const a = from.clone().addScaledVector(d, Math.random() * 0.4);
+    const b = a.clone().addScaledVector(d.normalize(), 1.6);
+    tr.geometry.setFromPoints([a, b]);
+    tr.material.opacity = 0.9;
+    tr.userData.vel = d.multiplyScalar(60);
+  }
+
+  /** animação que não depende de estar ligada: clarões, recuo, rastros, olho */
+  animate(dt) {
+    const u = this.mesh.userData;
+    this.flashT -= dt;
+    u.flashes.forEach((f, i) => {
+      f.visible = this.flashT > 0 && i === this.barrelI;
+      if (f.visible) {
+        f.material.rotation = Math.random() * Math.PI * 2;
+        f.scale.setScalar(0.16 + Math.random() * 0.1);
+      }
+    });
+    u.flashLight.intensity = this.flashT > 0 ? 6 : 0;
+    for (const b of u.barrels) {
+      b.userData.kick = Math.max(0, (b.userData.kick ?? 0) - dt * 25);
+      b.position.z = 0.07 - b.userData.kick * 0.025;
+    }
+    for (const tr of this.tracers) {
+      if (tr.material.opacity <= 0) continue;
+      tr.material.opacity = Math.max(0, tr.material.opacity - dt * 12);
+      const p = tr.geometry.attributes.position;
+      const v = tr.userData.vel;
+      for (let i = 0; i < 2; i++) p.setXYZ(i, p.getX(i) + v.x * dt, p.getY(i) + v.y * dt, p.getZ(i) + v.z * dt);
+      p.needsUpdate = true;
+    }
+    // olho: respira devagar procurando, acende forte mirando, apaga desligada
+    const target = !this.active ? 0 : this.lock > 0 ? 1.4 + this.lock * 0.6 : 0.85 + Math.sin(performance.now() / 300) * 0.15;
+    this.eyeK += (target - this.eyeK) * Math.min(1, dt * (this.active ? 10 : 2.5));
+    u.lensMat.color.setRGB(3 * this.eyeK + 0.12, 0.15 * this.eyeK + 0.02, 0.1 * this.eyeK + 0.02);
+    u.eyeGlow.visible = this.eyeK > 0.05;
+    u.eyeGlow.material.opacity = Math.min(1, this.eyeK);
+    u.eyeGlow.scale.setScalar(0.22 + this.eyeK * 0.1);
   }
 
   get eye() {
@@ -63,8 +128,6 @@ export class Turret extends Prop {
     if (!this.active) return false;
     this.active = false;
     this.laser.visible = false;
-    this.mesh.userData.lensMat.color.setRGB(0.15, 0.02, 0.02);
-    this.mesh.userData.eyeGlow.visible = false;
     this.downReason = reason;
     // desligada à mão: dá um tranco para ela tombar para a frente
     if (push && this.body) {
@@ -80,6 +143,7 @@ export class Turret extends Prop {
    * motor. Devolve os tiros disparados neste quadro.
    */
   update(dt, world, portals, gravityAt, target, cubes) {
+    this.animate(dt);
     // caída (deitada) por um tempinho: desliga
     const gUp = gravityAt(this.pos).clone().normalize().negate();
     this.fallen = this.upright.dot(gUp) < 0.6 ? this.fallen + dt : 0;
@@ -125,6 +189,7 @@ export class Turret extends Prop {
         while (this.fireAcc > 0.1) {
           this.fireAcc -= 0.1;
           shots++;
+          this.muzzle(target);
         }
       }
     } else {
@@ -164,7 +229,7 @@ export class Turret extends Prop {
   }
 
   dispose(scene) {
-    scene.remove(this.mesh, this.laser);
+    scene.remove(this.mesh, this.laser, ...this.tracers);
   }
 }
 
