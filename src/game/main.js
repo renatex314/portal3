@@ -1751,7 +1751,7 @@ function frame() {
   if (live) {
     sfx.hold(held ? 1 : 0);
     // vento: gravação em laço que cresce com a velocidade (sintetizado se ainda não carregou)
-    const wv = inTube ? Math.min(spd / 28, 1) : clamp((spd - 9) / 22, 0, 1);
+    const wv = inTube ? Math.min(spd / 28, 1) : clamp((spd - 5) / 18, 0, 1);
     sound.setWhoosh(sfx.wind(wv) ? 0 : wv);
   } else {
     sfx.silenceLoops();

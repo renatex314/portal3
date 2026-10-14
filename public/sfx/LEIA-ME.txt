@@ -8,22 +8,23 @@ http://creativecommons.org/publicdomain/zero/1.0/
 
 Pacotes de Kenney (www.kenney.nl):
   "Sci-Fi Sounds"      https://opengameart.org/content/sci-fi-sounds
-      laserLarge_*, forceField_*, impactMetal_*, computerNoise_*, spaceEngineLow_*,
-      spaceEngineSmall_*, laserRetro_*, laserSmall_*, doorOpen_*, thrusterFire_*,
-      explosionCrunch_*, lowFrequency_explosion_*
+      laserLarge_*, forceField_*, impactMetal_*, spaceEngineLow_*, spaceEngineSmall_*,
+      laserSmall_*, doorOpen_*, thrusterFire_*, explosionCrunch_*, lowFrequency_explosion_*
   "Impact Sounds"      https://kenney.nl/assets/impact-sounds
-      footstep_concrete_*, impactGlass_*, impactPlate_*, impactMetal_heavy_*, impactSoft_*
-  "Interface Sounds"   https://kenney.nl/assets/interface-sounds
-      click_*, switch_*, error_*, tick_*, confirmation_*
-  "Digital Audio"      https://kenney.nl/assets/digital-audio
-      powerUp*, phaserUp*, phaserDown*, phaseJump*, zap*, threeTone1, twoTone1, lowDown, highUp
+      footstep_concrete_*, impactGlass_*, impactPlate_*, impactMetal_light/heavy_*,
+      impactBell_heavy_*, impactSoft_heavy_*
 
-Outros:
-  metal_steps_*.wav   "Metal footsteps on concrete"  https://opengameart.org/content/metal-footsteps-on-concrete
-  wind.ogg            "wind whoosh loop"              https://opengameart.org/content/wind-whoosh-loop
-  t-rex_calls.mp3     "T-rex Calls"                   https://opengameart.org/content/t-rex-calls
+Outros (OpenGameArt):
+  mw_*.ogg            "100 CC0 metal and wood SFX"    https://opengameart.org/content/100-cc0-metal-and-wood-sfx
+                      (batidas, mola, porta e tranca de metal: botões, portas, placa de lançamento)
+  sf_*.ogg            "50 CC0 sci-fi SFX"             https://opengameart.org/content/50-cc0-sci-fi-sfx
+                      (teletransportes e laços de máquina: viagem no tempo, funil, laser)
+  metal_steps_*.wav   "Metal footsteps on concrete"   https://opengameart.org/content/metal-footsteps-on-concrete
+  wind.ogg            "wind whoosh loop"               https://opengameart.org/content/wind-whoosh-loop
+  t-rex_calls.mp3     "T-rex Calls"                    https://opengameart.org/content/t-rex-calls
 
-Uso: arma (laserLarge, forceField, impactMetal, computerNoise, spaceEngine, laserRetro),
-passos (concreto, chapa metálica, vidro), portas e botões, torretas, bolas de energia,
-laser, funil, viagem no tempo, buraco negro, vento da velocidade e rugido do T-rex.
+Uso: arma (laserLarge, forceField, impactMetal, spaceEngine), passos (concreto, chapa
+metálica, vidro), portas e botões (metal de verdade), torretas, bolas de energia, laser, funil,
+viagem no tempo, buraco negro, vento da velocidade e rugido do T-rex. Confirmações e recompensas
+tocam sinos reais; ligar e desligar máquinas varre a altura de gravações de motores.
 Não são os sons originais dos jogos Portal (Valve), que têm direitos autorais.

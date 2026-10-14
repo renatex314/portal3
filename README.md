@@ -211,10 +211,13 @@ Som do jogo: **gravações reais de domínio público (CC0)**, com a síntese ao
   com transição suave — "Dark Sci-Fi Audio Pack", "Ambience Pack 1 – Sci Fi Horror",
   "Menacing Otherworld" e "Searching", do OpenGameArt. As câmaras tocam as mais lentas, os desafios
   e as torretas as mais urgentes, a série Momento e a câmara final as mais grandiosas.
-- **Efeitos** (`public/sfx/`, 4 MB): pacotes de Kenney (Sci-Fi Sounds, Impact Sounds, Interface
-  Sounds, Digital Audio) e gravações do OpenGameArt — arma de portais, passos (concreto, chapa
-  metálica e vidro), portas, botões, torretas, bolas de energia, laser, funil, viagem no tempo,
-  buraco negro, vento que cresce com a velocidade e o rugido do T-rex.
+- **Efeitos** (`public/sfx/`, 4,5 MB): pacotes de Kenney (Sci-Fi Sounds e Impact Sounds) e do
+  OpenGameArt (metal e madeira, 50 efeitos sci-fi, passos em chapa, vento, T-rex) — nada de bipes
+  digitais: botões, portas e placas de lançamento usam metal de verdade; confirmações e
+  recompensas, sinos reais; ligar e desligar máquinas varre a altura de gravações de motores
+  (e tocadas ao contrário na viagem no tempo). Arma de portais, passos (concreto, chapa
+  metálica e vidro), torretas, bolas de energia, laser, funil, buraco negro, vento que cresce
+  com a velocidade e o rugido do T-rex.
 - Créditos e links de cada faixa em `public/music/LEIA-ME.txt` e `public/sfx/LEIA-ME.txt`.
 - Não são as trilhas nem os sons originais dos jogos Portal (Valve), que têm direitos autorais.
 A visita (documentário) continua com a música sintetizada.
