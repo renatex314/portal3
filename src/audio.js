@@ -51,11 +51,17 @@ export class Soundtrack {
 
     this.music = ctx.createGain(); // volume geral da música (abaixa na narração)
     this.music.gain.value = 0.5;
-    this.music.connect(this.master);
+    // filtro "abafado" do tempo lento (jogo): normalmente aberto
+    this.slowLP = ctx.createBiquadFilter();
+    this.slowLP.type = 'lowpass';
+    this.slowLP.frequency.value = 20000;
+    this.slowLP.Q.value = 0.9;
+    this.slowLP.connect(this.master);
+    this.music.connect(this.slowLP);
     this.music.connect(this.reverb);
     this.sfx = ctx.createGain();
     this.sfx.gain.value = 0.9;
-    this.sfx.connect(this.master);
+    this.sfx.connect(this.slowLP);
 
     // ruído branco reaproveitável
     this.noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -114,6 +120,12 @@ export class Soundtrack {
     this._startDrones(mood);
     this.current = mood;
     this.moods.push(mood);
+  }
+
+  /** tempo lento: abafa música e efeitos (o som do próprio efeito passa por fora) */
+  setSlowmo(on) {
+    if (!this.ctx) return;
+    this.slowLP.frequency.setTargetAtTime(on ? 650 : 20000, this.ctx.currentTime, on ? 0.12 : 0.25);
   }
 
   /** 0..1 — usado na descida (tensão) e na queda (velocidade) */

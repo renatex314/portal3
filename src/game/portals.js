@@ -32,15 +32,19 @@ const displayVS = /* glsl */ `
     gl_Position = projectionMatrix * viewMatrix * w;
   }`;
 
+const NOISE = /* glsl */ `
+  float h(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
+  float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+    return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+  float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * n2(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }`;
+
 const displayFS = /* glsl */ `
   uniform sampler2D map;
   uniform vec3 uCenter, uRight, uUp, uNormal, uColor;
   uniform float uA, uB, uLinked, uOpen, uTime;
   uniform vec2 uRes;
   varying vec3 vW;
-  float h(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
-  float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-    return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+  ${NOISE}
   void main(){
     // onde o raio olho → este pixel cruza o plano do portal
     vec3 dir = vW - cameraPosition;
@@ -53,35 +57,72 @@ const displayFS = /* glsl */ `
     float r = length(e);
     if (r > 1.0) discard;
     vec3 view = texture2D(map, gl_FragCoord.xy / uRes).rgb;
-    // sem par: superfície giratória da cor do portal
-    float ang = atan(e.y, e.x);
-    float sw = n2(vec2(ang * 3.0 + uTime * 1.5 + r * 6.0, r * 5.0 - uTime * 2.0));
-    vec3 swirl = uColor * (0.25 + 0.9 * sw * (1.0 - r * 0.5)) + uColor * pow(1.0 - r, 3.0) * 0.6;
+    // sem par: plasma girando na cor do portal, mais claro perto da borda
+    float ang = uTime * 0.7 + r * 3.2;
+    vec2 sp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * e * 2.4;
+    float sw = fbm(sp + vec2(uTime * 0.25, -uTime * 0.18));
+    vec3 swirl = uColor * (0.12 + 1.5 * sw * sw) * (0.45 + 0.75 * r) + uColor * smoothstep(0.55, 1.0, r) * 0.5;
     vec3 col = mix(swirl, view, uLinked);
-    // borda brilhante por dentro
-    float rim = smoothstep(0.82, 1.0, r) * (0.75 + 0.25 * n2(vec2(ang * 9.0, uTime * 4.0)));
-    col = mix(col, uColor * 1.25, rim * 0.6);
+    // a borda tinge a vista por dentro (a faixa brilhante vem do anel)
+    col = mix(col, uColor * 1.4, smoothstep(0.78, 1.0, r) * 0.35);
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }`;
 
+const RIM = 1.42; // o anel cobre a borda e o halo de fora
 const rimFS = /* glsl */ `
-  uniform vec3 uColor; uniform float uTime, uOpen;
+  uniform vec3 uColor; uniform float uTime, uOpen, uFlash;
   varying vec2 vUv;
-  float h(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
-  float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-    return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+  ${NOISE}
   void main(){
-    vec2 p = (vUv - 0.5) * 2.0 * 1.18 / max(uOpen, 0.001);
+    vec2 p = (vUv - 0.5) * 2.0 * ${RIM.toFixed(2)} / max(uOpen, 0.001);
     float r = length(p);
+    if (r > ${RIM.toFixed(2)}) discard;
     float ang = atan(p.y, p.x);
-    float flick = n2(vec2(ang * 7.0 + uTime * 3.0, uTime * 2.0 + r * 4.0));
-    float ring = smoothstep(1.16, 1.0, r) * smoothstep(0.93, 1.0, r);
-    float glow = exp(-abs(r - 1.02) * 16.0) * (0.3 + 0.5 * flick);
-    float a = clamp(ring * 0.9 + glow, 0.0, 1.0);
-    if (a < 0.01) discard;
-    gl_FragColor = vec4(uColor * (0.75 + 0.45 * flick), a * 0.9);
+    vec2 c = vec2(cos(ang), sin(ang)); // ruído sem emenda em volta do anel
+    float slow = fbm(c * 2.0 + vec2(uTime * 0.31, -uTime * 0.23) + r);
+    float fast = fbm(c * 5.5 + vec2(-uTime * 1.1, uTime * 0.8));
+    float d = r - (1.0 + (slow - 0.5) * 0.10); // >0 fora da borda
+    // faixa "queimando": nasce dentro do portal e corta seco por fora
+    float band = smoothstep(-0.26 - 0.10 * fast, -0.03, d) * (1.0 - smoothstep(0.0, 0.03 + 0.06 * fast, d));
+    float hot = exp(-abs(d + 0.03) * 30.0);
+    float halo = step(0.0, d) * exp(-d * 8.0) * (0.25 + 0.45 * fast);
+    vec3 col = uColor * (0.42 + 0.75 * fast + 0.5 * hot) + uColor * uColor * hot * 0.45;
+    float a = clamp(band * (0.8 + 0.2 * fast) + hot * 0.6 + halo, 0.0, 1.0);
+    a *= 1.0 - smoothstep(${(RIM - 0.08).toFixed(2)}, ${RIM.toFixed(2)}, r);
+    col *= 1.0 + uFlash * 2.5;
+    if (a < 0.005) discard;
+    gl_FragColor = vec4(col, a);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`;
+
+// faíscas que escapam da borda
+const sparkVS = /* glsl */ `
+  attribute float seed;
+  uniform float uTime, uOpen, uA, uB, uSize, uH;
+  varying float vA;
+  void main(){
+    float speed = 0.35 + 0.45 * fract(seed * 7.13);
+    float life = fract(uTime * speed + seed * 3.7);
+    float ang = seed * 6.2831853 * 17.0 + life * (fract(seed * 5.3) - 0.5) * 1.2;
+    float rr = (1.0 + life * (0.18 + 0.3 * fract(seed * 2.9))) * uOpen;
+    vec3 p = vec3(cos(ang) * uA * rr, sin(ang) * uB * rr, 0.02 + life * 0.35 * fract(seed * 9.1));
+    p.y -= life * life * 0.25;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = uSize * (1.0 - 0.6 * life) * projectionMatrix[1][1] * uH / max(-mv.z, 0.05);
+    vA = (1.0 - life) * smoothstep(0.0, 0.08, life) * uOpen;
+  }`;
+const sparkFS = /* glsl */ `
+  uniform vec3 uColor;
+  varying float vA;
+  void main(){
+    float d = length(gl_PointCoord - 0.5) * 2.0;
+    if (d > 1.0) discard;
+    float k = (1.0 - d) * (1.0 - d);
+    gl_FragColor = vec4(uColor * 1.6 + 0.6 * k, vA * k);
     #include <colorspace_fragment>
   }`;
 
@@ -132,18 +173,49 @@ class Portal {
     const inner = new THREE.Mesh(new THREE.BoxGeometry(PORTAL_A * 2, PORTAL_B * 2, depth).translate(0, 0, -depth / 2), innerMat);
     this.group.add(front, inner);
     const rim = new THREE.Mesh(
-      new THREE.PlaneGeometry(PORTAL_A * 2 * 1.18, PORTAL_B * 2 * 1.18),
+      new THREE.PlaneGeometry(PORTAL_A * 2 * RIM, PORTAL_B * 2 * RIM),
       new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: this.color }, uTime: this.uniforms.uTime, uOpen: this.uniforms.uOpen },
+        uniforms: { uColor: { value: this.color }, uTime: this.uniforms.uTime, uOpen: this.uniforms.uOpen, uFlash: { value: 0 } },
         vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
         fragmentShader: rimFS,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    rim.position.z = 0.012;
+    rim.renderOrder = 2;
+    this.group.add(rim);
+    this.rimMat = rim.material;
+    const N = 90;
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    sg.setAttribute('seed', new THREE.BufferAttribute(Float32Array.from({ length: N }, () => Math.random()), 1));
+    const sparks = new THREE.Points(
+      sg,
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: this.color },
+          uTime: this.uniforms.uTime,
+          uOpen: this.uniforms.uOpen,
+          uA: { value: PORTAL_A },
+          uB: { value: PORTAL_B },
+          uSize: { value: 0.035 },
+          uH: { value: size.y * 0.5 },
+        },
+        vertexShader: sparkVS,
+        fragmentShader: sparkFS,
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     );
-    rim.position.z = 0.012;
-    this.group.add(rim);
+    sparks.frustumCulled = false;
+    sparks.renderOrder = 3;
+    this.sparks = sparks;
+    this.group.add(sparks);
     this.light = new THREE.PointLight(this.color, 6, 6, 1.6);
     this.light.position.z = 0.6;
     this.group.add(this.light);
@@ -159,6 +231,7 @@ class Portal {
     this.up.copy(up);
     this.right.crossVectors(up, normal).normalize();
     this.box = box;
+    this.axis = Math.abs(normal.x) > 0.5 ? 'x' : Math.abs(normal.y) > 0.5 ? 'y' : 'z';
     this.matrix.makeBasis(this.right, this.up, this.normal).setPosition(this.center);
     this.inverse.copy(this.matrix).invert();
     this.group.matrix.copy(this.matrix);
@@ -166,6 +239,7 @@ class Portal {
     this.group.visible = true;
     this.placed = true;
     this.open = 0;
+    this.age = 0;
   }
 
   remove() {
@@ -181,6 +255,7 @@ class Portal {
   resize(w, h) {
     for (const r of this.rt) r.setSize(w, h);
     this.uniforms.uRes.value.set(w, h);
+    this.sparks.material.uniforms.uH.value = h * 0.5;
   }
 
   setColor(c) {
@@ -195,6 +270,9 @@ class Portal {
 }
 
 const _frustum = new THREE.Frustum();
+const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _m = new THREE.Matrix4();
 const _pm = new THREE.Matrix4();
 const _sphere = new THREE.Sphere();
 
@@ -277,7 +355,33 @@ export class PortalSystem {
   }
 
   reset() {
-    for (const p of this.list) p.remove();
+    for (const p of this.list) {
+      p.remove();
+      p.fixed = false;
+    }
+  }
+
+  /** grade de desintegração: some com os portais do jogador (os fixos da fase ficam) */
+  fizzle() {
+    let any = false;
+    for (const P of [this.blue, this.orange])
+      if (P.placed && !P.fixed) {
+        P.remove();
+        any = true;
+      }
+    return any;
+  }
+
+  /** portal colocado pela própria fase (não sai com a grade nem com tiro) */
+  placeFixed(which, center, normal, up) {
+    const P = which === 'blue' ? this.blue : this.orange;
+    const c = new THREE.Vector3(...center);
+    const n = new THREE.Vector3(...normal);
+    const hit = this.world.raycast(c.clone().addScaledVector(n, 0.3), n.clone().negate(), 1);
+    if (!hit) return null;
+    P.setFrame(hit.point.addScaledVector(n, 0.002), n, new THREE.Vector3(...up), hit.box);
+    P.fixed = true;
+    return P;
   }
 
   resize(w, h) {
@@ -292,6 +396,7 @@ export class PortalSystem {
   // ------------------------------------------------------------ colocar portal
   tryPlace(which, origin, dir) {
     const P = which === 'blue' ? this.blue : this.orange;
+    if (P.fixed) return { ok: false };
     const hit = this.world.raycast(origin, dir, 400);
     if (!hit) return { ok: false };
     if (!hit.box.portalable) return { ok: false, point: hit.point, normal: hit.normal };
@@ -372,52 +477,124 @@ export class PortalSystem {
   }
 
   // ------------------------------------------------------------ física
-  /** caixas que o corpo pode atravessar porque está entrando num portal */
-  ignoreFor(min, max, center, wall = true) {
-    const set = new Set();
+  /**
+   * Portais ligados em cuja boca está o centro de um corpo (o corpo está
+   * entrando neles). `wall`: jogador — em portal de parede precisa caber em pé.
+   */
+  mouths(center, wall = false, reach = 0) {
+    const out = [];
     for (const P of this.list) {
-      if (!this.isLinked(P)) continue;
-      if (!P.box || !aabbOverlap(min, max, P.box.min, P.box.max)) continue;
+      if (!this.isLinked(P) || !P.box) continue;
       const l = P.local(center);
-      const isWall = Math.abs(P.normal.y) < 0.5;
-      const mu = 0.25;
-      const mv = isWall && wall ? 0.72 : 0.25;
-      if (Math.abs(l.x) <= PORTAL_A - mu && Math.abs(l.y) <= PORTAL_B - mv && l.z > -2.5) set.add(P.box);
+      if (l.z < -2.5 || l.z > 1.2 + reach) continue;
+      const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.72 : 0.25;
+      if (Math.abs(l.x) <= PORTAL_A - 0.25 && Math.abs(l.y) <= PORTAL_B - mv) out.push(P);
     }
-    return set;
+    return out;
+  }
+
+  /**
+   * A caixa `box` deixa de colidir com um corpo (caixa min..max) que está na
+   * boca de um dos portais `mouths`? Sim quando tudo o que o corpo toca dela
+   * fica ATRÁS do plano do portal (a parede do portal e o que houver atrás).
+   */
+  passes(box, mouths, min, max) {
+    if (!aabbOverlap(min, max, box.min, box.max)) return false;
+    for (const P of mouths) {
+      const a = P.axis;
+      const s = P.normal[a];
+      const front = s > 0 ? Math.min(max[a], box.max[a]) : Math.max(min[a], box.min[a]);
+      if (s > 0 ? front <= P.center[a] + 0.01 : front >= P.center[a] - 0.01) return true;
+    }
+    return false;
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */
   crossing(a, b) {
     for (const P of this.list) {
       if (!this.isLinked(P)) continue;
-      const sa = a.clone().sub(P.center).dot(P.normal);
-      const sb = b.clone().sub(P.center).dot(P.normal);
+      const sa = _v.subVectors(a, P.center).dot(P.normal);
+      const sb = _v.subVectors(b, P.center).dot(P.normal);
       if (sa > 0 && sb <= 0) {
-        const x = a.clone().lerp(b, sa / (sa - sb));
-        const l = P.local(x);
+        const l = P.local(_v.copy(a).lerp(b, sa / (sa - sb)));
         if (Math.abs(l.x) <= PORTAL_A && Math.abs(l.y) <= PORTAL_B) return P;
       }
     }
     return null;
   }
 
-  /** corpo terminou atrás do plano de um portal (entrou rápido demais): devolve o portal */
-  stuckIn(center, min, max) {
+  /** o ponto terminou atrás do plano de um portal sem cruzá-lo (entrou rápido demais): devolve o portal */
+  stuckIn(point, min, max, margin = 0.45) {
     for (const P of this.list) {
       if (!this.isLinked(P) || !P.box || !aabbOverlap(min, max, P.box.min, P.box.max)) continue;
-      const l = P.local(center);
-      if (l.z < -0.02 && l.z > -1.6 && Math.abs(l.x) < PORTAL_A + 0.45 && Math.abs(l.y) < PORTAL_B + 1.0) return P;
+      const l = P.local(point);
+      if (l.z < -0.02 && l.z > -1.6 && Math.abs(l.x) < PORTAL_A + margin && Math.abs(l.y) < PORTAL_B + margin) return P;
     }
     return null;
+  }
+
+  /** ponto (a câmera) logo atrás da boca de um portal ligado: devolve o portal */
+  behind(point) {
+    for (const P of this.list) {
+      if (!this.isLinked(P)) continue;
+      const l = P.local(point);
+      if (l.z < 0 && l.z > -1.5 && Math.abs(l.x) < PORTAL_A && Math.abs(l.y) < PORTAL_B) return P;
+    }
+    return null;
+  }
+
+  /**
+   * Leva um corpo de P para Q conservando o momento: posição e velocidade
+   * passam pela MESMA transformação rígida (nada de empurrões extras), então
+   * quem entra a v sai a v, na mesma posição relativa ao portal.
+   * Devolve a rotação aplicada.
+   */
+  carry(P, pos, vel) {
+    const Q = P.partner;
+    const M = this.transform(P, Q);
+    const rot = new THREE.Quaternion().setFromRotationMatrix(_m.extractRotation(M));
+    pos.applyMatrix4(M);
+    vel.applyQuaternion(rot);
+    return { Q, M, rot };
+  }
+
+  /**
+   * Saída por um portal virado para cima com pouca velocidade: garante o
+   * mínimo para o corpo sair inteiro da boca e um empurrãozinho lateral para
+   * não cair de volta nele (como nos jogos do gênero). Só age quando a
+   * velocidade é baixa — numa queda em loop entre dois portais no chão a
+   * velocidade fica igual a cada volta.
+   */
+  exitAssist(Q, pos, vel, half, g, side) {
+    const gm = g.length();
+    if (gm < 0.01) return;
+    const up = _v.copy(g).multiplyScalar(-1 / gm);
+    if (Q.normal.dot(up) < 0.7) return;
+    const h = _v2.subVectors(pos, Q.center).dot(up);
+    const clear = Math.abs(up.x) * half.x + Math.abs(up.y) * half.y + Math.abs(up.z) * half.z + 0.3;
+    const need = Math.sqrt(2 * gm * Math.max(0, clear - h));
+    const vUp = vel.dot(up);
+    if (vUp >= 7) return;
+    if (vUp < need) vel.addScaledVector(up, need - vUp);
+    const lat = _v2.copy(vel).addScaledVector(up, -vel.dot(up));
+    const dir = side.clone().addScaledVector(up, -side.dot(up));
+    if (dir.lengthSq() < 1e-6) return;
+    dir.normalize();
+    const along = lat.dot(dir);
+    if (along < 2) vel.addScaledVector(dir, 2 - along);
   }
 
   // ------------------------------------------------------------ renderização
   update(t, dt) {
     for (const P of this.list) {
       P.uniforms.uTime.value = t;
-      P.open = Math.min(1, P.open + dt * 5);
-      P.uniforms.uOpen.value = 1 - Math.pow(1 - P.open, 3);
+      P.open = Math.min(1, P.open + dt * 4.5);
+      P.age = (P.age ?? 9) + dt;
+      // abre com um leve "passar do ponto" e um clarão, como no original
+      const o = P.open;
+      P.uniforms.uOpen.value = o >= 1 ? 1 : 1 + 2.2 * Math.pow(o - 1, 3) + 1.2 * Math.pow(o - 1, 2);
+      P.rimMat.uniforms.uFlash.value = Math.max(0, 1 - P.age / 0.5) ** 2;
+      P.light.intensity = 6 + 14 * P.rimMat.uniforms.uFlash.value;
       P.uniforms.uLinked.value = this.isLinked(P) ? 1 : 0;
     }
   }

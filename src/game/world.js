@@ -3,8 +3,10 @@
 // gatilhos, portas, botões, cubos e o elevador de saída.
 
 import * as THREE from 'three';
+import { floorButton } from './models.js';
 
 const TILE = 2; // metros por repetição de textura
+const _path = new THREE.Vector3();
 
 function canvasTex(size, draw, srgb = true) {
   const cv = document.createElement('canvas');
@@ -28,49 +30,148 @@ function noiseFill(g, s, base, amp, n = 2600) {
   }
 }
 
+/**
+ * Textura de painéis (cor + relevo). `n` placas por lado; a textura cobre
+ * 4 m (repeat 0.5), então a variação de tom entre placas só se repete de 4 em 4 m.
+ */
+function paneled(size, n, o) {
+  const t = size / n;
+  const cv = document.createElement('canvas');
+  const hv = document.createElement('canvas');
+  cv.width = cv.height = hv.width = hv.height = size;
+  const g = cv.getContext('2d');
+  const h = hv.getContext('2d');
+  h.fillStyle = '#000';
+  h.fillRect(0, 0, size, size);
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++) {
+      const x = i * t;
+      const y = j * t;
+      const d = (Math.random() - 0.5) * 2 * o.vary;
+      const [r, gg, b] = o.base.map((c) => Math.round(c + d));
+      g.fillStyle = `rgb(${r},${gg},${b})`;
+      g.fillRect(x, y, t, t);
+      // grão do concreto/chapa e um leve degradê
+      for (let k = 0; k < (t * t) / 90; k++) {
+        const a = Math.random() * o.grain;
+        g.fillStyle = Math.random() < 0.5 ? `rgba(0,0,0,${a})` : `rgba(255,255,255,${a})`;
+        g.fillRect(x + Math.random() * t, y + Math.random() * t, 1 + Math.random() * 2.5, 1 + Math.random() * 2.5);
+      }
+      const gr = g.createLinearGradient(x, y, x, y + t);
+      gr.addColorStop(0, 'rgba(255,255,255,0.03)');
+      gr.addColorStop(1, 'rgba(0,0,0,0.04)');
+      g.fillStyle = gr;
+      g.fillRect(x, y, t, t);
+      // relevo: placa alta com chanfro até a junta
+      const gp = o.gap / 2;
+      for (let k = 0; k <= o.bevel; k++) {
+        const v = Math.round(255 * (k / o.bevel));
+        h.fillStyle = `rgb(${v},${v},${v})`;
+        h.fillRect(x + gp + k, y + gp + k, t - 2 * (gp + k), t - 2 * (gp + k));
+      }
+      // luz/sombra do chanfro na cor
+      g.fillStyle = 'rgba(255,255,255,0.10)';
+      g.fillRect(x + gp, y + gp, t - 2 * gp, o.bevel * 0.6);
+      g.fillRect(x + gp, y + gp, o.bevel * 0.6, t - 2 * gp);
+      g.fillStyle = 'rgba(0,0,0,0.09)';
+      g.fillRect(x + gp, y + t - gp - o.bevel * 0.6, t - 2 * gp, o.bevel * 0.6);
+      g.fillRect(x + t - gp - o.bevel * 0.6, y + gp, o.bevel * 0.6, t - 2 * gp);
+      o.detail?.(g, x, y, t, h);
+    }
+  // juntas
+  g.fillStyle = 'rgba(60,60,62,0.6)';
+  for (let i = 0; i <= n; i++) {
+    g.fillRect(i * t - o.gap / 2, 0, o.gap, size);
+    g.fillRect(0, i * t - o.gap / 2, size, o.gap);
+  }
+  const map = new THREE.CanvasTexture(cv);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const normal = heightToNormal(hv, 1.5);
+  for (const tx of [map, normal]) {
+    tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+    tx.repeat.set(0.5, 0.5);
+    tx.anisotropy = 8;
+  }
+  return [map, normal];
+}
+
+/** mapa de normais (espaço tangente) a partir de um mapa de altura em tons de cinza */
+function heightToNormal(cv, strength) {
+  const w = cv.width;
+  const hgt = cv.getContext('2d').getImageData(0, 0, w, w).data;
+  const out = document.createElement('canvas');
+  out.width = out.height = w;
+  const og = out.getContext('2d');
+  const img = og.createImageData(w, w);
+  const H = (x, y) => hgt[(((y + w) % w) * w + ((x + w) % w)) * 4] / 255;
+  for (let y = 0; y < w; y++)
+    for (let x = 0; x < w; x++) {
+      const dx = (H(x + 1, y) - H(x - 1, y)) * strength;
+      const dy = (H(x, y + 1) - H(x, y - 1)) * strength;
+      const l = Math.hypot(dx, dy, 1);
+      const i = (y * w + x) * 4;
+      img.data[i] = ((-dx / l) * 0.5 + 0.5) * 255;
+      img.data[i + 1] = ((dy / l) * 0.5 + 0.5) * 255;
+      img.data[i + 2] = ((1 / l) * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  og.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(out);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
 let MATS = null;
 export function materials() {
   if (MATS) return MATS;
-  // painel branco (aceita portal): concreto projetado claro com juntas a cada 1 m
-  const white = canvasTex(512, (g, s) => {
-    noiseFill(g, s, '#d9d8d2', 0.05);
-    g.strokeStyle = 'rgba(70,70,70,0.55)';
-    g.lineWidth = 3;
-    for (let i = 0; i <= 2; i++) {
-      g.beginPath();
-      g.moveTo(i * (s / 2), 0);
-      g.lineTo(i * (s / 2), s);
-      g.moveTo(0, i * (s / 2));
-      g.lineTo(s, i * (s / 2));
-      g.stroke();
-    }
-    g.fillStyle = 'rgba(0,0,0,0.12)';
-    for (const [x, y] of [
-      [12, 12],
-      [s / 2 + 12, 12],
-      [12, s / 2 + 12],
-      [s / 2 + 12, s / 2 + 12],
-    ])
-      g.fillRect(x, y, 10, 10);
+  // painel branco (aceita portal): placas de concreto claro de 1 m, cada uma
+  // com um tom levemente diferente, juntas fundas e cantos chanfrados
+  const [white, whiteN] = paneled(1024, 4, {
+    base: [220, 219, 213],
+    vary: 8,
+    gap: 3,
+    bevel: 3,
+    grain: 0.05,
+    detail(g, x, y, t) {
+      // marcas de fixação nos cantos de algumas placas
+      if (Math.random() < 0.5) {
+        g.fillStyle = 'rgba(0,0,0,0.10)';
+        for (const [u, v] of [
+          [14, 14],
+          [t - 24, 14],
+          [14, t - 24],
+          [t - 24, t - 24],
+        ])
+          g.fillRect(x + u, y + v, 10, 10);
+      }
+    },
   });
-  // metal escuro (não aceita portal): chapa xadrez com rebites
-  const metal = canvasTex(512, (g, s) => {
-    noiseFill(g, s, '#3a3d42', 0.08);
-    for (let y = 0; y < s; y += 32)
-      for (let x = (y / 32) % 2 ? 16 : 0; x < s; x += 32) {
-        g.fillStyle = 'rgba(255,255,255,0.07)';
-        g.fillRect(x, y + 10, 18, 5);
+  // metal escuro (não aceita portal): painéis de chapa com frisos e parafusos
+  const [metal, metalN] = paneled(1024, 2, {
+    base: [58, 61, 66],
+    vary: 6,
+    gap: 4,
+    bevel: 6,
+    grain: 0.09,
+    detail(g, x, y, t, h) {
+      // frisos horizontais e parafusos (também no relevo)
+      for (const ctx of [g, h]) {
+        const hm = ctx === h;
+        ctx.fillStyle = hm ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.28)';
+        for (let k = 1; k < 8; k++) ctx.fillRect(x + 40, y + (k * t) / 8 - 2, t - 80, 4);
+        ctx.fillStyle = hm ? '#fff' : 'rgba(200,205,210,0.4)';
+        for (const [u, v] of [
+          [22, 22],
+          [t - 22, 22],
+          [22, t - 22],
+          [t - 22, t - 22],
+        ]) {
+          ctx.beginPath();
+          ctx.arc(x + u, y + v, 6, 0, 7);
+          ctx.fill();
+        }
       }
-    g.strokeStyle = 'rgba(0,0,0,0.6)';
-    g.lineWidth = 6;
-    g.strokeRect(0, 0, s, s);
-    g.fillStyle = 'rgba(200,200,200,0.35)';
-    for (let i = 24; i < s; i += 76)
-      for (const y of [12, s - 12]) {
-        g.beginPath();
-        g.arc(i, y, 4, 0, 7);
-        g.fill();
-      }
+    },
   });
   // rocha laterítica / itabirito (não aceita portal)
   const rock = canvasTex(512, (g, s) => {
@@ -108,8 +209,11 @@ export function materials() {
     }
   });
   MATS = {
-    white: { mat: new THREE.MeshStandardMaterial({ map: white, roughness: 0.75, metalness: 0.0 }), portalable: true },
-    metal: { mat: new THREE.MeshStandardMaterial({ map: metal, roughness: 0.55, metalness: 0.6, color: 0xb8bcc4 }), portalable: false },
+    white: { mat: new THREE.MeshStandardMaterial({ map: white, normalMap: whiteN, normalScale: new THREE.Vector2(1.2, 1.2), roughness: 0.78, metalness: 0.0 }), portalable: true },
+    metal: {
+      mat: new THREE.MeshStandardMaterial({ map: metal, normalMap: metalN, normalScale: new THREE.Vector2(1.4, 1.4), roughness: 0.5, metalness: 0.6, color: 0xb8bcc4 }),
+      portalable: false,
+    },
     rock: { mat: new THREE.MeshStandardMaterial({ map: rock, roughness: 0.95 }), portalable: false },
     glass: {
       mat: new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.2, depthWrite: false }),
@@ -145,6 +249,42 @@ function worldBoxGeo(min, max) {
   return g;
 }
 
+/** raio contra caixa girada: leva o raio para o espaço da caixa e testa como caixa alinhada */
+function rayObb(origin, dir, obb, maxDist) {
+  const o = origin.clone().sub(obb.c).applyQuaternion(obb.qi);
+  const d = dir.clone().applyQuaternion(obb.qi);
+  let tmin = -Infinity;
+  let tmax = Infinity;
+  let axis = -1;
+  let sign = 0;
+  for (let i = 0; i < 3; i++) {
+    const oi = o.getComponent(i);
+    const di = d.getComponent(i);
+    const h = obb.half.getComponent(i);
+    if (Math.abs(di) < 1e-9) {
+      if (oi < -h || oi > h) return null;
+      continue;
+    }
+    let t1 = (-h - oi) / di;
+    let t2 = (h - oi) / di;
+    let s = -1;
+    if (t1 > t2) {
+      [t1, t2] = [t2, t1];
+      s = 1;
+    }
+    if (t1 > tmin) {
+      tmin = t1;
+      axis = i;
+      sign = s;
+    }
+    tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return null;
+  }
+  if (tmin < 0 || tmin > maxDist || axis < 0) return null;
+  const normal = new THREE.Vector3().setComponent(axis, sign).applyQuaternion(obb.q);
+  return { dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal };
+}
+
 export function aabbOverlap(aMin, aMax, bMin, bMax, eps = 0) {
   return aMin.x < bMax.x - eps && aMax.x > bMin.x + eps && aMin.y < bMax.y - eps && aMax.y > bMin.y + eps && aMin.z < bMax.z - eps && aMax.z > bMin.z + eps;
 }
@@ -169,6 +309,12 @@ export class World {
     this.buttons = [];
     this.lights = [];
     this.anim = [];
+    this.fizzlers = [];
+    this.launchers = [];
+    this.catchers = [];
+    this.incinerators = [];
+    this.pedestals = [];
+    this.physics?.reset();
   }
 
   box(x0, y0, z0, x1, y1, z1, matName = 'white', opts = {}) {
@@ -180,7 +326,10 @@ export class World {
     if (matName === 'glass') mesh.renderOrder = 5;
     this.group.add(mesh);
     const b = { min, max, mat: matName, portalable: M.portalable && !opts.noPortal, mesh, solid: opts.solid !== false };
-    if (b.solid) this.solids.push(b);
+    if (b.solid) {
+      this.solids.push(b);
+      this.physics?.addBox(b, !!opts.kinematic);
+    }
     return b;
   }
 
@@ -218,9 +367,9 @@ export class World {
 
   /** porta que sobe quando aberta */
   door(id, x0, y0, z0, x1, y1, z1, opts = {}) {
-    const b = this.box(x0, y0, z0, x1, y1, z1, opts.axis ? 'stripe' : 'metal');
+    const b = this.box(x0, y0, z0, x1, y1, z1, opts.mat ?? (opts.axis ? 'stripe' : 'metal'), { kinematic: true });
     let stripe = null;
-    if (!opts.axis) {
+    if (!opts.axis && !opts.mat) {
       stripe = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) + 0.02, 0.25, Math.abs(z1 - z0) + 0.02), materials().stripe.mat);
       stripe.position.set((x0 + x1) / 2, Math.min(y0, y1) + 0.4, (z0 + z1) / 2);
       this.group.add(stripe);
@@ -235,22 +384,293 @@ export class World {
       baseMax: b.max.clone(),
       axis: opts.axis ?? 'y',
       dist: opts.dist ?? Math.abs(y1 - y0) - 0.15,
+      speed: opts.speed ?? 1.4,
       mesh: b.mesh,
+      delta: new THREE.Vector3(),
+      offset: new THREE.Vector3(),
     };
     this.doors.push(d);
     return d;
   }
 
-  button(x, y, z, opens) {
+  /** plataforma (elevador) que sobe/anda quando o sinal `id` liga; leva quem estiver em cima */
+  platform(id, x0, y0, z0, x1, y1, z1, { axis = 'y', dist = 4, speed = 1.2, loop = 0, always = false } = {}) {
+    const d = this.door(id, x0, y0, z0, x1, y1, z1, { axis, dist: 1, speed: speed / Math.abs(dist), mat: 'metal' });
+    d.dist = dist;
+    d.loop = loop; // >0: vai e volta (espera `loop` s em cada ponta) enquanto ligado
+    d.always = always; // ligado desde o começo
+    d.wait = loop;
+    const top = Math.max(y0, y1);
+    this.strip(Math.min(x0, x1) + 0.05, top + 0.005, Math.min(z0, z1) + 0.05, Math.max(x0, x1) - 0.05, top + 0.02, Math.min(z0, z1) + 0.12, 0xffcc33, 1.4).userData.follow = d;
+    this.strip(Math.min(x0, x1) + 0.05, top + 0.005, Math.max(z0, z1) - 0.12, Math.max(x0, x1) - 0.05, top + 0.02, Math.max(z0, z1) - 0.05, 0xffcc33, 1.4).userData.follow = d;
+    return d;
+  }
+
+  /**
+   * Plataforma que vai e volta sozinha ao longo do vetor `to` (pode ser
+   * diagonal), com `speed` m/s na ida e `back` m/s na volta, parando `waits`
+   * segundos em cada ponta [início, fim]. `phase` (0..1) desencontra várias.
+   * `crush`: esmaga quem ficar embaixo/no caminho (pistão).
+   */
+  mover(id, x0, y0, z0, x1, y1, z1, { to, speed = 4, back, waits = [0.6, 0.6], always = true, phase = 0, crush = false, mat = 'metal', marks = true } = {}) {
+    const d = this.door(id, x0, y0, z0, x1, y1, z1, { mat });
+    d.path = new THREE.Vector3(...to);
+    const L = d.path.length();
+    d.speed = speed / L;
+    d.speedBack = (back ?? speed) / L;
+    d.loop = 1;
+    d.waits = waits;
+    d.always = always;
+    d.crush = crush;
+    d.mover = true;
+    d.open = phase;
+    d.target = 1;
+    d.wait = waits[1];
+    if (marks) {
+      const top = Math.max(y0, y1);
+      const [ax, bx, az, bz] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(z0, z1), Math.max(z0, z1)];
+      const color = crush ? 0xff3a2a : 0xffcc33;
+      for (const [sx0, sz0, sx1, sz1] of [
+        [ax + 0.05, az + 0.05, bx - 0.05, az + 0.15],
+        [ax + 0.05, bz - 0.15, bx - 0.05, bz - 0.05],
+        [ax + 0.05, az + 0.05, ax + 0.15, bz - 0.05],
+        [bx - 0.15, az + 0.05, bx - 0.05, bz - 0.05],
+      ])
+        this.strip(sx0, crush ? Math.min(y0, y1) - 0.02 : top + 0.005, sz0, sx1, crush ? Math.min(y0, y1) - 0.005 : top + 0.02, sz1, color, 1.6).userData.follow = d;
+    }
+    return d;
+  }
+
+  /**
+   * Rampa: caixa girada (euler `rot` em radianos), de metal — não aceita
+   * portal. O motor de física e os raios (tiros, bolas de energia) usam a
+   * caixa girada de verdade.
+   */
+  ramp(cx, cy, cz, sx, sy, sz, rot, matName = 'metal') {
+    const M = materials()[matName];
+    const half = new THREE.Vector3(sx / 2, sy / 2, sz / 2);
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot));
+    const c = new THREE.Vector3(cx, cy, cz);
+    const mesh = new THREE.Mesh(worldBoxGeo(half.clone().negate(), half), M.mat);
+    mesh.position.copy(c);
+    mesh.quaternion.copy(q);
+    this.group.add(mesh);
+    // caixa alinhada que envolve a rampa (para os testes rápidos)
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const x of [-1, 1])
+      for (const y of [-1, 1])
+        for (const z of [-1, 1]) {
+          const p = new THREE.Vector3(x * half.x, y * half.y, z * half.z).applyQuaternion(q).add(c);
+          min.min(p);
+          max.max(p);
+        }
+    const b = { min, max, mat: matName, portalable: false, mesh, solid: true, obb: { c, q, qi: q.clone().invert(), half } };
+    this.solids.push(b);
+    this.physics?.addBox(b);
+    return b;
+  }
+
+  /**
+   * Grade de desintegração: um plano de luz que some com os portais de quem
+   * passa por ela e desintegra objetos (que voltam ao dispensador). Também
+   * barra os tiros da arma de portais.
+   */
+  fizzler(x0, y0, z0, x1, y1, z1) {
+    const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
+    const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
+    const size = new THREE.Vector3().subVectors(max, min);
+    const thin = size.y < Math.min(size.x, size.z) ? 'y' : size.x < size.z ? 'x' : 'z';
+    const w = thin === 'x' ? size.z : size.x;
+    const hgt = thin === 'y' ? size.z : size.y;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uSize: { value: new THREE.Vector2(w, hgt) } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: /* glsl */ `
+        uniform float uTime; uniform vec2 uSize; varying vec2 vUv;
+        float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        void main(){
+          vec2 p = vUv * uSize;
+          float lines = pow(abs(sin(p.y * 9.0 - uTime * 1.5)), 40.0) * 0.6;
+          float ripple = 0.5 + 0.5 * sin(p.x * 3.0 + uTime * 2.0 + sin(p.y * 2.0 + uTime));
+          vec2 cell = floor(p * vec2(14.0, 14.0) + vec2(0.0, uTime * 6.0));
+          float spark = step(0.985, h(cell)) * (0.6 + 0.4 * sin(uTime * 20.0 + h(cell) * 6.28));
+          float edge = smoothstep(0.08, 0.0, vUv.x) + smoothstep(0.92, 1.0, vUv.x);
+          float a = 0.08 + 0.10 * ripple + lines + spark + edge * 0.35;
+          gl_FragColor = vec4(vec3(0.45, 0.8, 1.0) * (1.0 + spark * 2.0), clamp(a, 0.0, 0.85));
+        }`,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+    });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(w, hgt), mat);
+    plane.position.addVectors(min, max).multiplyScalar(0.5);
+    if (thin === 'x') plane.rotation.y = Math.PI / 2;
+    if (thin === 'y') plane.rotation.x = -Math.PI / 2;
+    this.group.add(plane);
+    // emissores nas laterais
+    const emit = materials().metal.mat;
+    for (const s of thin === 'y' ? [] : [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(thin === 'x' ? 0.25 : 0.12, size.y, thin === 'x' ? 0.12 : 0.25), emit);
+      post.position.copy(plane.position);
+      post.position[thin === 'x' ? 'z' : 'x'] += (s * w) / 2;
+      this.group.add(post);
+    }
+    this.anim.push((t) => (mat.uniforms.uTime.value = t));
+    const pad = new THREE.Vector3(thin === 'x' ? 0.1 : 0, thin === 'y' ? 0.1 : 0, thin === 'z' ? 0.1 : 0);
+    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin };
+    this.fizzlers.push(f);
+    return f;
+  }
+
+  /** o segmento a→b passa por alguma grade? (quedas rápidas atravessam a grade fina num só quadro) */
+  segmentFizzler(a, b) {
+    const d = new THREE.Vector3().subVectors(b, a);
+    const len = d.length();
+    if (len < 1e-6) return this.fizzlers.find((f) => a.x > f.min.x && a.x < f.max.x && a.y > f.min.y && a.y < f.max.y && a.z > f.min.z && a.z < f.max.z) ?? null;
+    return this.rayFizzler(a, d.divideScalar(len), len) ? true : null;
+  }
+
+  /** o raio cruza uma grade de desintegração antes de `maxDist`? */
+  rayFizzler(origin, dir, maxDist) {
+    for (const f of this.fizzlers) {
+      let t0 = 0;
+      let t1 = maxDist;
+      for (const a of ['x', 'y', 'z']) {
+        if (Math.abs(dir[a]) < 1e-9) {
+          if (origin[a] < f.min[a] || origin[a] > f.max[a]) t0 = Infinity;
+          continue;
+        }
+        let ta = (f.min[a] - origin[a]) / dir[a];
+        let tb = (f.max[a] - origin[a]) / dir[a];
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta);
+        t1 = Math.min(t1, tb);
+      }
+      if (t0 <= t1) return origin.clone().addScaledVector(dir, t0);
+    }
+    return null;
+  }
+
+  /** tubo no teto que solta a amostra (e solta outra quando ela é desintegrada) */
+  dispenser(x, top, z) {
     const g = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.95, 0.12, 32), materials().metal.mat);
-    base.position.y = 0.06;
-    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.66, 0.12, 32), new THREE.MeshStandardMaterial({ color: 0xc0392b, emissive: 0x5a0a05, roughness: 0.4 }));
-    plate.position.y = 0.16;
-    g.add(base, plate);
+    const metal = materials().metal.mat;
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 2.2, 32, 1, true), new THREE.MeshStandardMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false }));
+    tube.position.y = -1.1;
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 0.35, 32), metal);
+    collar.position.y = -0.17;
+    const lip = new THREE.Mesh(new THREE.TorusGeometry(0.66, 0.06, 10, 32).rotateX(Math.PI / 2), metal);
+    lip.position.y = -2.2;
+    g.add(tube, collar, lip);
+    for (let i = 0; i < 4; i++) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 0.06), metal);
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      rib.position.set(Math.cos(a) * 0.64, -1.1, Math.sin(a) * 0.64);
+      g.add(rib);
+    }
+    g.position.set(x, top, z);
+    this.group.add(g);
+    return [x, top - 1.6, z];
+  }
+
+  /** pedestal com a arma de portais (ou a melhoria dela) */
+  pedestal(x, y, z, gives, model) {
+    const g = new THREE.Group();
+    const metal = materials().metal.mat;
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 1.0, 32), metal);
+    base.position.y = 0.5;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.03, 8, 40).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 2.6) }));
+    ring.position.y = 1.02;
+    g.add(base, ring);
+    const holder = new THREE.Group();
+    holder.position.y = 1.45;
+    if (model) holder.add(model);
+    g.add(holder);
+    const light = new THREE.PointLight(0x9fd8ff, 4, 5, 1.6);
+    light.position.y = 1.6;
+    g.add(light);
     g.position.set(x, y, z);
     this.group.add(g);
-    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, group: g };
+    this.anim.push((t) => {
+      holder.rotation.y = t * 0.8;
+      holder.position.y = 1.45 + Math.sin(t * 2) * 0.05;
+    });
+    const p = { pos: new THREE.Vector3(x, y + 1, z), gives, group: holder, taken: false, light };
+    this.pedestals.push(p);
+    return p;
+  }
+
+  /** lançador de bola de energia na parede (normal = para onde atira) */
+  launcher(x, y, z, normal, opts = {}) {
+    const n = new THREE.Vector3(...normal);
+    const g = this.socket(n, 0xffb347);
+    g.position.set(x, y, z);
+    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(n, 0.35), dir: n, group: g, pellet: null, wait: opts.delay ?? 1, life: opts.life ?? 12, speed: opts.speed ?? 6.5, done: false };
+    this.launchers.push(L);
+    return L;
+  }
+
+  /** receptor da bola de energia: liga o sinal `opens` quando recebe uma */
+  catcher(x, y, z, normal, opens) {
+    const n = new THREE.Vector3(...normal);
+    const g = this.socket(n, 0x6fc8ff);
+    g.position.set(x, y, z);
+    const C = { pos: new THREE.Vector3(x, y, z).addScaledVector(n, 0.25), normal: n, opens, active: false, group: g };
+    this.catchers.push(C);
+    return C;
+  }
+
+  /** soquete redondo na parede (lançador/receptor) com o anel aceso */
+  socket(n, color) {
+    const g = new THREE.Group();
+    const metal = materials().metal.mat;
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.85, 0.12, 32), metal);
+    plate.position.y = 0.06;
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.35, 32, 1, true), new THREE.MeshStandardMaterial({ color: 0x1c1d20, metalness: 0.6, roughness: 0.4, side: THREE.DoubleSide }));
+    cup.position.y = 0.25;
+    const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.6) });
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.04, 8, 40).rotateX(Math.PI / 2), glowMat);
+    ring.position.y = 0.42;
+    for (let i = 0; i < 4; i++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.4, 0.3), metal);
+      const a = (i / 4) * Math.PI * 2;
+      fin.position.set(Math.cos(a) * 0.62, 0.25, Math.sin(a) * 0.62);
+      fin.rotation.y = -a;
+      g.add(fin);
+    }
+    g.add(plate, cup, ring);
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    g.userData.glow = glowMat;
+    this.group.add(g);
+    return g;
+  }
+
+  /** fornalha: o que cair dentro é destruído (e liga o sinal `opens`) */
+  incinerator(x0, y0, z0, x1, y1, z1, opens) {
+    const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
+    const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
+    const glow = new THREE.Mesh(
+      new THREE.BoxGeometry(max.x - min.x, 0.05, max.z - min.z),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.1, 0.2) }),
+    );
+    glow.position.set((min.x + max.x) / 2, min.y + 0.02, (min.z + max.z) / 2);
+    this.group.add(glow);
+    const light = new THREE.PointLight(0xff7a20, 18, 8, 1.6);
+    light.position.copy(glow.position).add(new THREE.Vector3(0, 0.8, 0));
+    this.group.add(light);
+    this.anim.push((t) => (light.intensity = 14 + Math.sin(t * 9) * 3 + Math.sin(t * 23) * 2));
+    const I = { min, max, opens, active: false };
+    this.incinerators.push(I);
+    return I;
+  }
+
+  button(x, y, z, opens) {
+    const { group: g, plate, lights } = floorButton();
+    g.position.set(x, y, z);
+    this.group.add(g);
+    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, group: g };
     this.buttons.push(btn);
     return btn;
   }
@@ -325,6 +745,11 @@ export class World {
     let best = null;
     for (const b of this.solids) {
       if (filter && !filter(b)) continue;
+      if (b.obb) {
+        const h = rayObb(origin, dir, b.obb, maxDist);
+        if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+        continue;
+      }
       let tmin = -Infinity;
       let tmax = Infinity;
       let axis = -1;
@@ -373,6 +798,11 @@ export class World {
   pointInSolid(p, except = null) {
     for (const b of this.solids) {
       if (b === except) continue;
+      if (b.obb) {
+        const l = p.clone().sub(b.obb.c).applyQuaternion(b.obb.qi);
+        if (Math.abs(l.x) < b.obb.half.x && Math.abs(l.y) < b.obb.half.y && Math.abs(l.z) < b.obb.half.z) return b;
+        continue;
+      }
       if (p.x > b.min.x && p.x < b.max.x && p.y > b.min.y && p.y < b.max.y && p.z > b.min.z && p.z < b.max.z) return b;
     }
     return null;
@@ -384,13 +814,25 @@ export class World {
     magma.offset.set(t * 0.02, t * 0.013);
     materials().magma.mat.emissiveIntensity = 1.4 + Math.sin(t * 1.7) * 0.25;
     for (const d of this.doors) {
-      d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * 1.4);
-      const off = d.open * d.dist;
-      const a = d.axis;
-      d.box.min[a] = d.baseMin[a] + off;
-      d.box.max[a] = d.baseMax[a] + off;
-      d.mesh.position[a] = off;
-      if (d.stripe) d.stripe.position.y = d.baseMin.y + 0.4 + off;
+      // caminho: vetor qualquer (plataformas diagonais) ou um eixo × distância (portas)
+      const path = d.path ?? _path.set(0, 0, 0);
+      if (!d.path) path[d.axis] = d.dist;
+      const before = d.open;
+      const sp = d.target < d.open && d.speedBack ? d.speedBack : d.speed;
+      d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * sp);
+      d.delta.copy(path).multiplyScalar(d.open - before);
+      d.offset.copy(path).multiplyScalar(d.open);
+      d.box.min.copy(d.baseMin).add(d.offset);
+      d.box.max.copy(d.baseMax).add(d.offset);
+      d.mesh.position.copy(d.offset);
+      if (d.stripe) d.stripe.position.y = d.baseMin.y + 0.4 + d.offset.y;
+      this.physics?.moveBox(d.box);
+    }
+    for (const c of this.group.children) {
+      const f = c.userData.follow;
+      if (!f) continue;
+      c.userData.base ??= c.position.clone();
+      c.position.copy(c.userData.base).add(f.offset);
     }
   }
 }

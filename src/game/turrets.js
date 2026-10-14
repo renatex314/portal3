@@ -1,65 +1,45 @@
-// Torretas de segurança (mapa livre). Cada torreta é um corpo físico: cai
-// pela gravidade, atravessa portais e, se cair de mau jeito, desliga.
-// Também desliga se você chegar por trás e apertar E, ou se for atingida por
-// uma amostra arremessada.
+// Torretas de segurança. Cada torreta é um corpo rígido (tripé largo, centro
+// de massa baixo): cai, tomba quando empurrada ou atingida, atravessa portais
+// e pode ser carregada. Se ficar caída, desliga. Também desliga se você chegar
+// por trás e apertar E, ou se for atingida por uma amostra arremessada.
+// Como nos jogos do gênero, ela não gira para te seguir: enxerga num cone à
+// frente do corpo, e cubos no caminho bloqueiam a mira e os tiros.
 
 import * as THREE from 'three';
-import { moveBody } from './player.js';
+import { Prop } from './props.js';
+import { turretModel } from './models.js';
 
 const RANGE = 26;
 const FOV = THREE.MathUtils.degToRad(55);
+const UP = new THREE.Vector3(0, 1, 0);
 
-function turretMesh() {
-  const g = new THREE.Group();
-  const white = new THREE.MeshStandardMaterial({ color: 0xf0f0ec, roughness: 0.3, metalness: 0.1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.5, metalness: 0.6 });
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.6, 8, 20).scale(1, 1, 0.75), white);
-  body.position.y = 0.75;
-  g.add(body);
-  // pernas
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 6;
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.7, 6), dark);
-    leg.position.set(Math.cos(a) * 0.22, 0.3, Math.sin(a) * 0.22);
-    leg.rotation.set(Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4);
-    g.add(leg);
-  }
-  // faixa do "olho" e lente vermelha
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.265, 0.265, 0.12, 20, 1, true).scale(1, 1, 0.75), dark);
-  band.position.y = 0.95;
-  g.add(band);
-  const lensMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.15, 0.1) });
-  const lens = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), lensMat);
-  lens.position.set(0, 0.95, 0.2);
-  g.add(lens);
-  // canhões laterais
-  for (const s of [-1, 1]) {
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.28), dark);
-    gun.position.set(s * 0.3, 0.8, 0.08);
-    g.add(gun);
-  }
-  g.userData = { lensMat, body };
-  return g;
-}
-
-export class Turret {
-  constructor(scene, x, y, z, yaw) {
-    this.mesh = turretMesh();
+export class Turret extends Prop {
+  constructor(scene, physics, portals, x, y, z, yaw) {
+    super(physics, portals, turretModel());
+    this.kind = 'turret';
     scene.add(this.mesh);
-    this.pos = new THREE.Vector3(x, y + 0.6, z);
-    this.home = this.pos.clone();
-    this.vel = new THREE.Vector3();
     this.half = new THREE.Vector3(0.28, 0.6, 0.28);
-    this.yaw = yaw;
-    this.aimYaw = yaw;
+    this.meshOffset.set(0, -0.6, 0);
+    this.home = new THREE.Vector3(x, y + 0.62, z);
+    this.homeQuat = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
+    physics.addProp(this, {
+      shapes: [
+        { half: [0.21, 0.4, 0.17], at: [0, 0.2, 0] }, // corpo
+        { half: [0.34, 0.05, 0.34], at: [0, -0.55, -0.06] }, // pés do tripé
+      ],
+      mass: 35,
+      friction: 0.9,
+      restitution: 0.02,
+      pos: this.home,
+      quat: this.homeQuat,
+    });
+    this.sync();
     this.active = true;
-    this.tip = 0;
     this.lock = 0; // 0..1: tempo mirando antes de atirar
     this.fireAcc = 0;
-    this.prev = this.pos.clone();
-    this.cooldown = 0;
-    this.airTime = 0;
     this.spotted = false;
+    this.deploy = 0; // 0..1: metades abertas mostrando os canos
+    this.fallen = 0;
     const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.laser = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xff2a1a, transparent: true, opacity: 0.85 }));
     this.laser.frustumCulled = false;
@@ -68,78 +48,73 @@ export class Turret {
   }
 
   get eye() {
-    return this.pos.clone().add(new THREE.Vector3(0, 0.35, 0));
+    return new THREE.Vector3(0, 0.35, 0.2).applyQuaternion(this.quat).add(this.pos);
   }
 
   forward() {
-    return new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(this.quat);
   }
 
-  disable(reason) {
+  get upright() {
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(this.quat);
+  }
+
+  disable(reason, push = 0) {
     if (!this.active) return false;
     this.active = false;
     this.laser.visible = false;
     this.mesh.userData.lensMat.color.setRGB(0.15, 0.02, 0.02);
+    this.mesh.userData.eyeGlow.visible = false;
     this.downReason = reason;
+    // desligada à mão: dá um tranco para ela tombar para a frente
+    if (push && this.body) {
+      const f = this.forward().multiplyScalar(push);
+      const top = new THREE.Vector3(0, 0.55, 0).applyQuaternion(this.quat).add(this.pos);
+      this.body.applyImpulseAtPoint({ x: f.x, y: 0, z: f.z }, top, true);
+    }
     return true;
   }
 
-  /** atualiza física e mira; `target` = olho do jogador local. Devolve tiros disparados neste quadro. */
+  /**
+   * mira e tiros; `target` = olho do jogador local. A física já foi feita pelo
+   * motor. Devolve os tiros disparados neste quadro.
+   */
   update(dt, world, portals, gravityAt, target, cubes) {
-    // física (cai, atravessa portais)
-    this.vel.addScaledVector(gravityAt(this.pos), dt);
-    this.prev.copy(this.pos);
-    const vy = this.vel.y;
-    const c = moveBody(this, this.vel.clone().multiplyScalar(dt), world, portals, false);
-    if (c.y) {
-      if (vy < -6.5 && this.active) this.disable('queda');
-      this.vel.x *= 0.7;
-      this.vel.z *= 0.7;
-    }
-    this.cooldown -= dt;
-    let P = this.cooldown <= 0 ? portals.crossing(this.prev, this.pos) : null;
-    if (P) {
-      const Q = portals.other(P);
-      const M = portals.transform(P, Q);
-      const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M));
-      this.pos.applyMatrix4(M).addScaledVector(Q.normal, 0.5);
-      this.vel.applyQuaternion(rot);
-      this.cooldown = 0.2;
-      if (this.active) this.disable('portal');
-    }
+    // caída (deitada) por um tempinho: desliga
+    const gUp = gravityAt(this.pos).clone().normalize().negate();
+    this.fallen = this.upright.dot(gUp) < 0.6 ? this.fallen + dt : 0;
+    if (this.fallen > 0.3) this.disable('queda');
     // amostra arremessada derruba
     for (const cube of cubes ?? [])
-      if (cube.vel.length() > 4 && cube.pos.distanceTo(this.pos) < 0.75) {
-        if (this.disable('amostra')) this.vel.addScaledVector(cube.vel, 0.4);
-      }
+      if (!cube.held && cube.vel.length() > 4 && cube.pos.distanceTo(this.pos) < 0.8) this.disable('amostra');
 
-    // visual
-    this.tip = Math.min(1, this.tip + (this.active ? 0 : dt * 3));
-    this.mesh.position.copy(this.pos).add(new THREE.Vector3(0, -0.6, 0));
-    this.mesh.rotation.set(0, this.aimYaw, 0);
-    this.mesh.rotateX(this.tip * 1.45);
+    // abre as metades quando está mirando em alguém
+    this.deploy += ((this.active && this.lock > 0 ? 1 : 0) - this.deploy) * Math.min(1, dt * 8);
+    const { halves, guns } = this.mesh.userData;
+    halves.forEach((h, i) => {
+      const s = i ? 1 : -1;
+      h.position.x = s * (0.006 + this.deploy * 0.07);
+      guns[i].position.x = -s * (0.02 - this.deploy * 0.06);
+    });
 
     let shots = 0;
     this.laser.visible = false;
-    if (!this.active || !target) {
+    this.spottedNow = false;
+    if (!this.active || !target || this.held || this.gone) {
       this.lock = 0;
       return 0;
     }
-    // vê o jogador?
+    // vê o jogador? (cone à frente do corpo; cubos e paredes bloqueiam)
     const eye = this.eye;
+    const fwd = this.forward();
     const to = target.clone().sub(eye);
     const dist = to.length();
-    const flat = new THREE.Vector3(to.x, 0, to.z).normalize();
-    const ang = Math.acos(THREE.MathUtils.clamp(flat.dot(this.forward()), -1, 1));
-    let sees = dist < RANGE && ang < FOV;
+    const dir = to.clone().divideScalar(dist);
+    let sees = dist < RANGE && Math.acos(THREE.MathUtils.clamp(dir.dot(fwd), -1, 1)) < FOV;
     if (sees) {
-      const hit = world.raycast(eye, to.clone().normalize(), dist - 0.3);
+      const hit = this.physics.castRay(eye, dir, dist - 0.4, (p) => p === this);
       if (hit) sees = false;
     }
-    const want = sees ? Math.atan2(to.x, to.z) : this.yaw + Math.sin(performance.now() / 1400) * 0.5;
-    let dy = want - this.aimYaw;
-    dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-    this.aimYaw += dy * Math.min(1, dt * (sees ? 6 : 1.2));
     if (sees) {
       this.lock = Math.min(1, this.lock + dt / 0.7);
       this.laser.visible = true;
@@ -154,12 +129,12 @@ export class Turret {
       }
     } else {
       this.lock = Math.max(0, this.lock - dt);
-      // laser varrendo
-      const sweep = new THREE.Vector3(Math.sin(this.aimYaw), -0.05, Math.cos(this.aimYaw));
-      const hit = world.raycast(eye, sweep, RANGE);
+      // laser varrendo devagar à frente
+      const sweep = fwd.clone().applyAxisAngle(this.upright, Math.sin(performance.now() / 1400) * 0.45);
+      const hit = this.physics.castRay(eye, sweep, RANGE, (p) => p === this);
       this.laser.visible = true;
       this.laser.material.opacity = 0.35;
-      this.laser.geometry.setFromPoints([eye, hit ? hit.point : eye.clone().addScaledVector(sweep, RANGE)]);
+      this.laser.geometry.setFromPoints([eye, eye.clone().addScaledVector(sweep, hit ? hit.dist : RANGE)]);
     }
     this.spottedNow = sees;
     return shots;
@@ -171,7 +146,21 @@ export class Turret {
     const to = p.clone().sub(this.pos);
     if (to.length() > 1.9) return false;
     const flat = new THREE.Vector3(to.x, 0, to.z).normalize();
-    return flat.dot(new THREE.Vector3(Math.sin(this.aimYaw), 0, Math.cos(this.aimYaw))) < 0.2;
+    const f = this.forward().setY(0).normalize();
+    return flat.dot(f) < 0.2;
+  }
+
+  respawn() {
+    this.held = false;
+    this.gone = false;
+    this.body.setEnabled(true);
+    this.place(this.home, this.homeQuat);
+  }
+
+  vanish() {
+    super.vanish();
+    this.disable('destruída');
+    this.laser.visible = false;
   }
 
   dispose(scene) {

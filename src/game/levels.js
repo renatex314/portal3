@@ -4,6 +4,8 @@
 
 import * as THREE from 'three';
 import { BIG_MAP } from './bigmap.js';
+import { CLASSIC } from './classic.js';
+import { HARD } from './hard.js';
 
 const G = 9.8;
 const DIRS = {
@@ -39,7 +41,7 @@ function booth(w, cx, cy, cz, facing, who, list) {
 }
 
 /** parede norte (z = zIn, face interna) com nicho de saída e porta opcional */
-function northWallWithExit(w, x0, x1, top, zIn, doorId, yBase = 0) {
+export function northWallWithExit(w, x0, x1, top, zIn, doorId, yBase = 0) {
   w.box(x0 - 1, yBase, zIn - 1, -1.5, top, zIn, 'metal');
   w.box(1.5, yBase, zIn - 1, x1 + 1, top, zIn, 'metal');
   w.box(-1.5, yBase + 3.5, zIn - 1, 1.5, top, zIn, 'metal');
@@ -52,7 +54,7 @@ function northWallWithExit(w, x0, x1, top, zIn, doorId, yBase = 0) {
   w.exitElevator(0, yBase, zIn - 3);
 }
 
-function chamberSign(w, x, y, z, rotY, num, name, line2) {
+export function chamberSign(w, x, y, z, rotY, num, name, line2) {
   w.sign(x, y, z, rotY, [
     [`CÂMARA ${String(num).padStart(2, '0')}`, 110, 150],
     [name, 76, 270, '#c0392b'],
@@ -358,6 +360,10 @@ export const LEVELS = [
   },
 ];
 
+// bateria clássica: os testes do gênero refeitos no laboratório
+LEVELS.push(...CLASSIC);
+// desafios hardcore: salas enormes, plataformas diagonais, pistões
+LEVELS.push(...HARD);
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);
 

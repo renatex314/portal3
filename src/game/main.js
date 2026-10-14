@@ -4,7 +4,10 @@
 import * as THREE from 'three';
 import { World } from './world.js';
 import { PortalSystem } from './portals.js';
-import { Player, Cube } from './player.js';
+import { Player } from './player.js';
+import { Cube } from './props.js';
+import { Physics, initPhysics } from './physics.js';
+import { EnergySystem } from './energy.js';
 import { LEVELS, SPEAKER_NPC, DEFAULT_GRAVITY } from './levels.js';
 import { Sfx } from './sfx.js';
 import { Soundtrack } from '../audio.js';
@@ -14,6 +17,7 @@ import { PEOPLE } from '../documentary.js';
 import { Net } from './net.js';
 import { Turret, crystalMesh } from './turrets.js';
 import { SLOT_COLORS, SLOT_CSS } from './portals.js';
+import { initEnvironment, portalGun, sampleCube } from './models.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
@@ -26,6 +30,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
+initEnvironment(renderer);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x101216);
@@ -37,6 +42,10 @@ scene.add(camera);
 
 const world = new World(scene);
 const portals = new PortalSystem(renderer, scene, camera, world);
+const physics = new Physics(portals);
+world.physics = physics;
+const energy = new EnergySystem(scene);
+const UP = new THREE.Vector3(0, 1, 0);
 const player = new Player(camera);
 const sound = new Soundtrack();
 const sfx = new Sfx(sound);
@@ -149,7 +158,7 @@ net.on('cube', (m) => {
   const c = cubes[m.idx];
   if (!c || m.lvl !== levelIdx) return;
   if (held === c) return; // eu é que estou segurando
-  c.remote = { p: new THREE.Vector3().fromArray(m.p), held: m.held, t: performance.now() };
+  c.remote = { p: new THREE.Vector3().fromArray(m.p), q: m.q ? new THREE.Quaternion().fromArray(m.q) : null, held: m.held, t: performance.now() };
 });
 net.on('turret', (m) => {
   if (m.lvl === levelIdx) turretDown(m.idx, false, m.p);
@@ -195,7 +204,7 @@ net.on('level', (m) => {
   if (!first && !m.by) toast(`Mapa da sala trocado: ${LEVELS[m.level].name}`);
   $('next').hidden = false;
   setTimeout(() => {
-    loadLevel(m.level);
+    loadLevel(Math.min(m.level, LEVELS.length - 1));
     fillMapSelect();
     if (first || !$('pause').hidden) {
       $('pause').hidden = true;
@@ -217,7 +226,7 @@ function netTick(dt) {
     cubes.forEach((c, idx) => {
       if (c === held) cubeSendUntil.set(idx, now + 2500);
       if ((cubeSendUntil.get(idx) ?? 0) > now && !(c.remote && now - c.remote.t < 300))
-        net.send({ t: 'cube', idx, p: c.pos.toArray().map((v) => +v.toFixed(3)), held: c === held, lvl: levelIdx });
+        net.send({ t: 'cube', idx, p: c.pos.toArray().map((v) => +v.toFixed(3)), q: c.quat.toArray().map((v) => +v.toFixed(4)), held: c === held, lvl: levelIdx });
     });
   }
 }
@@ -250,35 +259,17 @@ body.group.traverse((o) => o.layers.set(1));
 scene.add(body.group);
 
 // ------------------------------------------------------------------ arma de portais (primeira pessoa)
-const gun = new THREE.Group();
+const gun = portalGun();
 {
-  const white = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.25, metalness: 0.1 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.5, metalness: 0.6 });
-  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.32, 8, 20).rotateX(Math.PI / 2), white);
-  const back = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.14, 16).rotateX(Math.PI / 2).translate(0, 0, 0.24), dark);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.016, 10, 24).translate(0, 0, -0.16), dark);
-  const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.4, 3) });
-  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.2, 12).rotateX(Math.PI / 2).translate(0, 0.05, -0.02), coreMat);
-  gun.add(shell, back, ring, core);
-  for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 2;
-    const claw = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.018, 0.13), dark);
-    claw.position.set(Math.cos(a) * 0.06, Math.sin(a) * 0.06, -0.26);
-    claw.rotation.set(-Math.sin(a) * 0.35, Math.cos(a) * 0.35, 0);
-    gun.add(claw);
-  }
-  const tip = new THREE.Object3D();
-  tip.position.set(0, 0, -0.32);
-  gun.add(tip);
-  gun.userData = { core: coreMat, tip };
-  gun.position.set(0.24, -0.22, -0.48);
-  gun.rotation.set(0.04, 0.08, 0);
-  gun.scale.setScalar(0.85);
+  gun.position.set(0.21, -0.19, -0.44);
+  gun.rotation.set(0.05, 0.09, 0);
+  gun.scale.setScalar(0.62);
   gun.traverse((o) => o.layers.set(2));
   camera.add(gun);
   const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
   gunLight.position.set(0.2, -0.1, -0.4);
   camera.add(gunLight);
+  gun.userData.light = gunLight;
 }
 let recoil = 0;
 
@@ -302,6 +293,8 @@ let sparkT = 9;
 
 // ------------------------------------------------------------------ estado
 const input = { f: false, b: false, l: false, r: false, jump: false };
+// zoom: segure Z; a rodinha muda o aumento enquanto segura
+const ZOOM = { on: false, level: 3, k: 1 };
 let level = null; // definição
 let data = null; // dados devolvidos por build()
 let levelIdx = 0;
@@ -328,6 +321,10 @@ let health = 100;
 let hurtT = 9;
 let hurtFlash = 0;
 let gemsMine = 0;
+let gunMode = 'both'; // 'none' | 'blue' | 'both' (a arma é achada/melhorada em algumas câmaras)
+let cycle = null; // portal da fase que troca de lugar sozinho
+let inFizzler = false;
+const lastPlayerPos = new THREE.Vector3();
 const gemOwners = new Map(); // nome → cristais (multiplayer)
 let spottedOnce = false;
 const gravityAt = (p) => gravityFn(p, grav);
@@ -341,6 +338,8 @@ const progress = (() => {
 })();
 if (new URLSearchParams(location.search).has('todas')) progress.unlocked = LEVELS.length;
 progress.unlocked = Math.max(progress.unlocked || 1, 1);
+progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
 const saveProgress = () => {
   try {
@@ -348,36 +347,17 @@ const saveProgress = () => {
   } catch {}
 };
 
-// ------------------------------------------------------------------ cubo de amostra
-function cubeMesh() {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = 256;
-  const g = cv.getContext('2d');
-  g.fillStyle = '#5b5e63';
-  g.fillRect(0, 0, 256, 256);
-  for (let y = 0; y < 256; y += 14) {
-    g.fillStyle = y % 28 ? '#7e3417' : '#33353a';
-    g.fillRect(28, 28 + (y % 200), 200, 9);
-  }
-  g.strokeStyle = '#d9d9d4';
-  g.lineWidth = 22;
-  g.strokeRect(11, 11, 234, 234);
-  g.fillStyle = '#f2c200';
-  g.font = 'bold 26px Arial';
-  g.textAlign = 'center';
-  g.fillText('AMOSTRA', 128, 136);
-  const t = new THREE.CanvasTexture(cv);
-  t.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ map: t, roughness: 0.6, metalness: 0.3 }));
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.62), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.0, 0.2), wireframe: true }));
-  m.add(edge);
-  return m;
-}
+const levelLabel = (L) => (L.free ? 'Mapa livre' : L.series === 'hard' ? `Desafio ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`);
+const cycleSpot = (i) => {
+  const sp = cycle.spots[i];
+  return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
+};
 
 // ------------------------------------------------------------------ fases
 function clearLevel() {
   world.reset();
   portals.reset();
+  energy.reset();
   for (const c of [...dyn.children]) dyn.remove(c);
   cubes = [];
   turrets = [];
@@ -406,10 +386,11 @@ function loadLevel(i, silent = false) {
   gravityFn = data.gravityAt ?? DEFAULT_GRAVITY;
   const [x, y, z, yaw] = data.spawn;
   player.spawn(x + spawnOffset(), y, z, yaw);
-  for (const c of data.cubes ?? []) {
-    const m = cubeMesh();
+  physics.setPlayer(player.half);
+  for (const [cx, cy, cz, opts] of data.cubes ?? []) {
+    const m = sampleCube(opts);
     dyn.add(m);
-    cubes.push(new Cube(m, ...c));
+    cubes.push(new Cube(physics, portals, m, cx, cy, cz, opts));
   }
   for (const b of [...(data.booths ?? []), ...(data.npcs ?? [])]) {
     const p = PEOPLE[b.who];
@@ -421,7 +402,15 @@ function loadLevel(i, silent = false) {
     npcs[b.who] = w;
     npcList.push(w);
   }
-  for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, tx, ty, tz, tyaw));
+  for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, physics, portals, tx, ty, tz, tyaw));
+  gunMode = data.gun ?? 'both';
+  for (const f of data.portals ?? []) portals.placeFixed(f.which, f.c, f.n, f.u);
+  cycle = data.cycle ? { ...data.cycle, i: 0, t: data.cycle.every } : null;
+  if (cycle) portals.placeFixed(cycle.which, ...cycleSpot(0));
+  inFizzler = false;
+  lastPlayerPos.copy(player.pos);
+  toggleSlowmo(false);
+  SLOW.left = SLOW.max;
   for (const [cx, cy, cz] of data.crystals ?? []) {
     const m = crystalMesh();
     m.position.set(cx, cy, cz);
@@ -435,7 +424,7 @@ function loadLevel(i, silent = false) {
   completed = false;
   inTube = false;
   sound.setMood(level.music);
-  $('lvl-num').textContent = level.free ? 'Mapa livre' : `Câmara ${String(level.id).padStart(2, '0')}`;
+  $('lvl-num').textContent = levelLabel(level);
   $('lvl-name').textContent = level.name;
   $('lvl-goal').textContent = level.lesson;
   $('tube-hud').hidden = true;
@@ -489,13 +478,19 @@ function camForward() {
 function shoot(which) {
   if (!running || paused || completed) return;
   const blue = which === 'blue';
+  if (gunMode === 'none') return;
+  if (gunMode === 'blue' && !blue) return sfx.denied();
   recoil = 1;
   gun.userData.core.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
+  gun.userData.light.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
   sfx.shot(blue);
   const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camForward();
-  const res = allowed ? portals.tryPlace(which, origin, dir) : { ok: false };
+  // a grade de desintegração barra o tiro
+  const wall = world.raycast(origin, dir, 400);
+  const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
+  const res = !allowed ? { ok: false } : fz ? { ok: false, point: fz, normal: dir.clone().negate() } : portals.tryPlace(which, origin, dir);
   const tipW = gun.userData.tip.getWorldPosition(new THREE.Vector3());
   const end = res.point ?? origin.clone().addScaledVector(dir, 40);
   tracer.geometry.setFromPoints([tipW, end]);
@@ -505,6 +500,7 @@ function shoot(which) {
     if (mp())
       net.send({ t: 'portal', which, lvl: levelIdx, c: res.point.toArray(), n: res.normal.toArray(), u: res.up.toArray(), b: res.boxIndex });
     sfx.open(blue);
+    physics.wakeAll();
     updateCrosshair();
   } else {
     sfx.fizzle();
@@ -528,7 +524,8 @@ function burst(p, n) {
 
 function rayCube(origin, dir, maxD) {
   let best = null;
-  for (const c of cubes) {
+  for (const c of [...cubes, ...turrets]) {
+    if (c.gone) continue;
     const min = c.pos.clone().sub(c.half);
     const max = c.pos.clone().add(c.half);
     let t0 = 0;
@@ -553,34 +550,82 @@ function rayCube(origin, dir, maxD) {
 function use() {
   if (!running || paused) return;
   if (held) {
-    held.held = false;
-    held.vel.copy(player.vel).multiplyScalar(0.8).addScaledVector(camForward(), 5.5); // arremessa
-    held = null;
-    sfx.drop();
-    return;
-  }
-  const ti = turrets.findIndex((t) => t.canDisableFrom(player.pos));
-  if (ti >= 0) {
-    turretDown(ti, true);
+    release(); // E só solta; o botão esquerdo é que arremessa
     return;
   }
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camForward();
   const hit = rayCube(origin, dir, 2.8);
+  // por trás de uma torreta ativa: E desliga (e ela tomba)
+  const ti = turrets.findIndex((t) => t.canDisableFrom(player.pos) && (!hit || hit.c === t));
+  if (ti >= 0) {
+    turretDown(ti, true);
+    return;
+  }
   if (!hit) return;
   if (hit.c.remote?.held && performance.now() - hit.c.remote.t < 500) return toast('Outra pessoa está segurando essa amostra.');
   const wall = world.raycast(origin, dir, hit.t);
   if (wall) return;
   held = hit.c;
   held.held = true;
+  held.farTime = 0;
+  held.space.identity(); // segurado do mesmo lado do jogador
+  // segura mantendo o giro relativo ao olhar (cubo no múltiplo de 90° mais perto;
+  // torreta virada para a frente, como quem aponta)
+  const yawQ = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw);
+  if (held.kind === 'turret') held.holdBase = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI);
+  else {
+    const rel = yawQ.clone().invert().multiply(held.quat);
+    const f = new THREE.Vector3(0, 0, 1).applyQuaternion(rel);
+    held.holdBase = new THREE.Quaternion().setFromAxisAngle(UP, Math.round(Math.atan2(f.x, f.z) / (Math.PI / 2)) * (Math.PI / 2));
+  }
   sfx.pick();
+}
+
+/** solta o objeto segurado; `toss`: arremessa na direção da mira */
+function release(toss = false) {
+  if (!held) return;
+  const c = held;
+  held.held = false;
+  held.holdLocal = null;
+  held = null;
+  if (toss) {
+    // a mira e a velocidade do jogador levadas para o lado em que o objeto está
+    const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(c.space));
+    const v = player.vel.clone().multiplyScalar(0.8).addScaledVector(camForward(), 7).applyQuaternion(rot);
+    c.throw(v);
+    sfx.toss();
+  } else sfx.drop();
+}
+
+/**
+ * Até onde o objeto segurado vai à frente da mira (no máximo 1,7 m). O raio
+ * atravessa portais: se a mira passa por um, a distância continua do outro
+ * lado — o ponto pode ficar "atrás" da parede do portal, e o objeto passa por ele.
+ */
+function holdDistance(eye, fwd) {
+  const MAX = 1.7;
+  const o = eye.clone();
+  const d = fwd.clone();
+  let dist = 0;
+  for (let k = 0; k < 3; k++) {
+    const rest = MAX - dist;
+    const wall = world.raycast(o, d, rest);
+    const P = portals.crossing(o, o.clone().addScaledVector(d, wall ? wall.dist + 0.01 : rest));
+    if (!P) return wall ? Math.max(dist + wall.dist - 0.45, 0.5) : MAX;
+    const tc = P.center.clone().sub(o).dot(P.normal) / d.dot(P.normal);
+    dist += tc;
+    const M = portals.transform(P, P.partner);
+    o.addScaledVector(d, tc + 0.01).applyMatrix4(M);
+    d.transformDirection(M);
+  }
+  return MAX;
 }
 
 function turretDown(idx, byMe, pos = null) {
   const t = turrets[idx];
   if (!t) return;
-  if (pos) t.pos.fromArray(pos);
-  if (!t.disable(byMe ? 'desligada' : 'rede')) return;
+  if (!t.disable(byMe ? 'desligada' : 'rede', byMe ? 55 : 0)) return;
   sfx.click(true);
   if (byMe && mp()) net.send({ t: 'turret', idx, p: t.pos.toArray(), lvl: levelIdx });
   if (byMe) toast('Torreta desligada.');
@@ -617,10 +662,7 @@ function die() {
   health = 100;
   sfx.death();
   deadFlash = 1;
-  if (held) {
-    held.held = false;
-    held = null;
-  }
+  release();
   const [x, y, z, yaw] = data.spawn;
   player.spawn(x + spawnOffset(), y, z, yaw);
   playLines([[level.who, ['Opa. Volta pro começo e tenta de novo.', 'Essa doeu. De novo!', 'Calma, sô. Mais uma vez.'][Math.floor(Math.random() * 3)]]]);
@@ -633,14 +675,16 @@ function complete(final) {
   const t = levelTime;
   const prev = progress.best[level.id];
   if (!prev || t < prev) progress.best[level.id] = t;
-  progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
+  if (level.series) progress[level.series] = Math.max(progress[level.series], level.n + 2);
+  else progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
   saveProgress();
   document.exitPointerLock?.();
+  $('next').hidden = !LEVELS[levelIdx + 1] || LEVELS[levelIdx + 1].series !== level.series || !!LEVELS[levelIdx + 1].free;
   if (final) {
     showFinal(t);
     return;
   }
-  $('done-title').textContent = `Câmara ${String(level.id).padStart(2, '0')} concluída`;
+  $('done-title').textContent = `${levelLabel(level)} concluíd${level.code ? 'o' : 'a'}`;
   $('done-time').textContent = `Tempo: ${fmt(t)}${prev && prev <= t ? ` · recorde ${fmt(prev)}` : ' · novo recorde!'}`;
   $('done').hidden = false;
 }
@@ -673,6 +717,8 @@ function toast(msg) {
 function updateCrosshair() {
   $('xh').classList.toggle('blue', portals.blue.placed);
   $('xh').classList.toggle('orange', portals.orange.placed);
+  $('xh').classList.toggle('no-gun', gunMode === 'none');
+  $('xh').classList.toggle('blue-only', gunMode === 'blue');
 }
 
 // ------------------------------------------------------------------ entrada
@@ -686,24 +732,104 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyE') use();
   if (e.code === 'KeyR') loadLevel(levelIdx);
-  if (e.code === 'KeyQ') shoot('blue');
+  if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
+  if (e.code === 'KeyZ') ZOOM.on = true;
 });
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
+  if (e.code === 'KeyZ') ZOOM.on = false;
   if (e.code === 'Space') input.jump = false;
 });
 document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX, e.movementY);
+  // com zoom, a mira fica mais fina (proporcional ao campo de visão)
+  const s = camera.fov / 75;
+  if (document.pointerLockElement === canvas && running && !paused) player.look(e.movementX * s, e.movementY * s);
 });
 canvas.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) {
     if (running && !completed) lock();
     return;
   }
-  if (e.button === 0) shoot('blue');
-  if (e.button === 2) shoot('orange');
+  // segurando um objeto: o botão esquerdo arremessa (e não sai portal)
+  if (e.button === 0) held ? release(true) : shoot('blue');
+  if (e.button === 2 && !held) shoot('orange');
+  if (e.button === 1) {
+    e.preventDefault();
+    toggleSlowmo();
+  }
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
+window.addEventListener(
+  'wheel',
+  (e) => {
+    if (!ZOOM.on || !running || paused) return;
+    e.preventDefault();
+    ZOOM.level = clamp(ZOOM.level * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1.5, 8);
+  },
+  { passive: false },
+);
+// botão do meio não abre a rolagem automática do navegador
+window.addEventListener('auxclick', (e) => e.button === 1 && e.preventDefault());
+
+// ------------------------------------------------------------------ tempo lento (bullet time)
+// Botão do meio liga/desliga. Gasta a reserva (segundos de verdade) enquanto
+// está ligado; desligado, ela recarrega no mesmo ritmo (6 s gastos voltam em 6 s).
+const SLOW = { max: 6, left: 6, on: false, k: 1, beat: 0, warn: 0, scale: 0.28 };
+function toggleSlowmo(force) {
+  const want = force ?? !SLOW.on;
+  if (want === SLOW.on) return;
+  if (want) {
+    if (!running || paused || completed) return;
+    if (mp()) return toast('O tempo lento só funciona no modo solo.');
+    if (SLOW.left < 0.6) {
+      sfx.denied();
+      return toast('Reserva de tempo lento vazia — espere recarregar.');
+    }
+  }
+  SLOW.on = want;
+  SLOW.beat = 0;
+  if (want) sfx.slowIn();
+  else sfx.slowOut();
+  sound.setSlowmo(want);
+  document.body.classList.toggle('slowmo', want);
+  const ring = $('slow-ring');
+  ring.classList.remove('pulse');
+  void ring.offsetWidth;
+  ring.classList.add('pulse');
+}
+
+function updateSlowmo(realDt) {
+  if (SLOW.on) {
+    SLOW.left -= realDt;
+    SLOW.beat -= realDt;
+    if (SLOW.beat <= 0) {
+      SLOW.beat = 0.8;
+      sfx.heartbeat();
+    }
+    if (SLOW.left < 1.5) {
+      SLOW.warn -= realDt;
+      if (SLOW.warn <= 0) {
+        SLOW.warn = 0.25;
+        sfx.lowTime();
+      }
+    }
+    if (SLOW.left <= 0) {
+      SLOW.left = 0;
+      toggleSlowmo(false);
+    }
+  } else {
+    SLOW.left = Math.min(SLOW.max, SLOW.left + realDt);
+  }
+  SLOW.k += ((SLOW.on ? SLOW.scale : 1) - SLOW.k) * Math.min(1, realDt * 7);
+  const f = SLOW.left / SLOW.max;
+  $('slow-fill').style.transform = `scaleX(${f})`;
+  $('slow-v').textContent = `${SLOW.left.toFixed(1).replace('.', ',')} s`;
+  $('slow').classList.toggle('on', SLOW.on);
+  $('slow').classList.toggle('low', f < 0.25);
+  document.body.classList.toggle('slow-low', f < 0.25);
+  $('slow').classList.toggle('full', f >= 0.999 && !SLOW.on);
+  $('slow-arc').style.strokeDashoffset = String(100 - f * 100);
+}
 
 function lock() {
   sound.init();
@@ -737,17 +863,30 @@ function setAudio(music, voice) {
 function renderMenu() {
   const grid = $('levels');
   grid.innerHTML = '';
-  LEVELS.forEach((L, i) => {
-    const locked = !L.free && !mp() && L.id > progress.unlocked;
-    const b = document.createElement('button');
-    b.className = `lvl${locked ? ' locked' : ''}`;
-    b.innerHTML = `<span class="n">${L.free ? 'MAPA LIVRE' : String(L.id).padStart(2, '0')}</span><b>${L.name}</b><small>${L.who}</small>${
-      progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''
-    }`;
-    b.disabled = locked;
-    b.addEventListener('click', () => startLevel(i));
-    grid.appendChild(b);
-  });
+  const groups = [
+    ['Laboratório Antípoda', 'as seis câmaras do documentário', (L) => !L.free && !L.series],
+    ['Bateria clássica', 'os testes clássicos do gênero, refeitos aqui embaixo', (L) => L.series === 'classic'],
+    ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
+    ['Exploração', '', (L) => L.free],
+  ];
+  for (const [title, sub, pick] of groups) {
+    const h = document.createElement('div');
+    h.className = 'lvl-head';
+    h.innerHTML = `<b>${title}</b>${sub ? `<span>${sub}</span>` : ''}`;
+    grid.appendChild(h);
+    LEVELS.forEach((L, i) => {
+      if (!pick(L)) return;
+      const locked = !L.free && !mp() && (L.series ? L.n + 1 > progress[L.series] : L.id > progress.unlocked);
+      const b = document.createElement('button');
+      b.className = `lvl${locked ? ' locked' : ''}`;
+      b.innerHTML = `<span class="n">${L.free ? 'MAPA LIVRE' : L.code ?? String(L.id).padStart(2, '0')}</span><b>${L.name}</b><small>${L.who}</small>${
+        progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''
+      }`;
+      b.disabled = locked;
+      b.addEventListener('click', () => startLevel(i));
+      grid.appendChild(b);
+    });
+  }
 }
 
 function startLevel(i) {
@@ -798,7 +937,7 @@ $('mp-join').addEventListener('click', async () => {
     // entra direto na câmara em que a sala está
     $('menu').hidden = true;
     running = true;
-    loadLevel(w.level);
+    loadLevel(Math.min(w.level, LEVELS.length - 1));
     fillMapSelect();
     applyRoomFlags(w.flags);
     toast(`Mapa da sala: ${LEVELS[w.level].name} — para trocar, aperte Esc`);
@@ -880,6 +1019,17 @@ function update(dt, t) {
   levelTime += dt;
   world.update(t, dt);
   portals.update(t, dt);
+  // portal da fase que muda de lugar sozinho
+  if (cycle) {
+    cycle.t -= dt;
+    if (cycle.t <= 0) {
+      cycle.t = cycle.every;
+      cycle.i = (cycle.i + 1) % cycle.spots.length;
+      portals.placeFixed(cycle.which, ...cycleSpot(cycle.i));
+      sfx.open(cycle.which === 'blue');
+      physics.wakeAll();
+    }
+  }
 
   // ---- jogador
   if (assist) {
@@ -889,10 +1039,27 @@ function update(dt, t) {
     player.vel.set(0, 0, 0);
     if (assist.t >= 1) assist = null;
   } else {
-    player.update(dt, input, world, portals, gravityAt, () => {
+    player.update(dt, input, world, portals, gravityAt, (P) => {
       sfx.whoosh();
-      if (held) held.pos.copy(player.eye()).addScaledVector(player.forward(), 1.2);
+      // o jogador mudou de lado: o objeto segurado continua onde está e passa a
+      // seguir a mira "através" do portal (até atravessar também)
+      if (held) held.space.multiply(portals.transform(P, P.partner).invert());
     });
+  }
+  // porta/plataforma em movimento entrou no jogador: pistão esmaga; o resto empurra
+  for (const d of world.doors) {
+    if (d.delta.lengthSq() === 0 || player.ground === d.box) continue;
+    const b = d.box;
+    const pen = ['x', 'y', 'z'].map((a) => Math.min(player.pos[a] + player.half[a] - b.min[a], b.max[a] - (player.pos[a] - player.half[a])));
+    if (pen.some((v) => v <= 0.06)) continue;
+    if (d.crush) {
+      die('esmagado');
+      break;
+    }
+    const i = pen.indexOf(Math.min(...pen));
+    const a = 'xyz'[i];
+    const center = (b.min[a] + b.max[a]) / 2;
+    player.pos[a] += (player.pos[a] > center ? 1 : -1) * (pen[i] + 0.01);
   }
   // aterrissagem e passos
   if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) sfx.land(Math.abs(lastVy));
@@ -906,54 +1073,145 @@ function update(dt, t) {
     }
   }
 
-  // ---- cubos
+  // ---- objetos (cubos e torretas): corpos rígidos
   const fwd = camForward();
-  for (const c of cubes) {
-    let target = null;
-    if (c.held) {
-      const eye = player.eye();
-      const hit = world.raycast(eye, fwd, 1.7);
-      target = eye.clone().addScaledVector(fwd, hit ? Math.max(hit.dist - 0.45, 0.5) : 1.7);
-      if (c.pos.distanceTo(target) > 2.6) {
-        c.held = false;
-        held = null;
-      }
+  const props = [...cubes, ...turrets];
+  if (held) {
+    const eye = player.eye();
+    // alvo na frente da mira (do lado do jogador; o objeto converte para o lado em que estiver)
+    held.holdLocal = eye.clone().addScaledVector(fwd, holdDistance(eye, fwd));
+    held.holdQuatLocal = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw).multiply(held.holdBase);
+  }
+  physics.step(
+    dt,
+    (p, h) => p.pre(h, gravityAt(p.prevCenter)),
+    (p) => p.post(gravityAt),
+  );
+  for (const c of props) c.sync();
+  if (held) {
+    // longe do alvo por um tempo = preso em algo: solta (atrasado num giro rápido, não)
+    held.updateHold();
+    held.farTime = held.pos.distanceTo(held.holdTarget) > 2.6 ? (held.farTime ?? 0) + dt : 0;
+    if (held.farTime > 0.4) release();
+  }
+  const touches = (c, b) => {
+    tmpMin.copy(c.pos).sub(c.half);
+    tmpMax.copy(c.pos).add(c.half);
+    return tmpMin.x < b.max.x && tmpMax.x > b.min.x && tmpMin.y < b.max.y && tmpMax.y > b.min.y && tmpMin.z < b.max.z && tmpMax.z > b.min.z;
+  };
+  for (const c of props) {
+    if (c.gone) continue;
+    // fornalha: queima a amostra e liga o sinal
+    const I = world.incinerators.find((f) => inside(c.pos, f.min, f.max));
+    if (I) {
+      if (held === c) release();
+      c.vanish();
+      I.active = true;
+      sfx.burn();
+      continue;
     }
-    if (c.remote && performance.now() - c.remote.t < 400 && c !== held) {
-      c.pos.lerp(c.remote.p, 1 - Math.exp(-dt * 18));
-      c.vel.set(0, 0, 0);
-      c.mesh.position.copy(c.pos);
-    } else c.update(dt, world, portals, gravityAt, target);
-    for (const h of world.hazards) {
-      tmpMin.copy(c.pos).sub(c.half);
-      tmpMax.copy(c.pos).add(c.half);
-      if (tmpMin.x < h.max.x && tmpMax.x > h.min.x && tmpMin.y < h.max.y && tmpMax.y > h.min.y && tmpMin.z < h.max.z && tmpMax.z > h.min.z) {
-        if (held === c) held = null;
-        c.respawn();
-        sfx.fizzle();
-      }
+    // rocha fundida ou grade de desintegração: a amostra volta ao dispensador; a torreta é destruída
+    if (world.hazards.some((h) => touches(c, h)) || world.fizzlers.some((f) => inside(c.pos, f.min, f.max))) {
+      if (held === c) release();
+      if (c.kind === 'cube') c.respawn();
+      else c.vanish();
+      sfx.fizzle();
+      continue;
     }
-    if (c.pos.y < -300) c.respawn();
+    if (c.pos.y < -300 || c.pos.y > 400) c.kind === 'cube' ? c.respawn() : c.vanish();
   }
 
-  // ---- botões e portas
+  // ---- botões, receptores e portas (sinais)
   const feet = player.pos.clone().addScaledVector(new THREE.Vector3(0, -1, 0), 0.9 * player.upSign);
   const peers = peerFeet();
   for (const b of world.buttons) {
     const near = (p, dy0, dy1) => Math.hypot(p.x - b.pos.x, p.z - b.pos.z) < 0.85 && p.y - b.pos.y > dy0 && p.y - b.pos.y < dy1;
-    const pressed = cubes.some((c) => !c.held && !c.remote?.held && near(c.pos, 0, 0.9)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
+    const pressed = props.some((c) => !c.held && !c.gone && !c.remote?.held && near(c.pos, 0, 1.0)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
     if (pressed !== b.pressed) {
       b.pressed = pressed;
       b.plate.position.y = pressed ? 0.09 : 0.16;
       b.plate.material.color.set(pressed ? 0x27ae60 : 0xc0392b);
       b.plate.material.emissive.set(pressed ? 0x0a4a20 : 0x5a0a05);
+      b.lights?.color.setRGB(...(pressed ? [0.3, 2.4, 0.8] : [2.4, 0.35, 0.15]));
       sfx.click(pressed);
-      for (const d of world.doors)
-        if (d.id === b.opens) {
-          d.target = pressed ? 1 : 0;
-          sfx.door();
-        }
     }
+  }
+  // uma porta abre quando TODOS os botões/receptores/fornalhas ligados a ela estão ativos
+  const sig = new Map();
+  const and = (id, v) => id && sig.set(id, (sig.get(id) ?? true) && v);
+  for (const b of world.buttons) and(b.opens, b.pressed);
+  for (const c of world.catchers) and(c.opens, c.active);
+  for (const I of world.incinerators) and(I.opens, I.active);
+  for (const d of world.doors) {
+    if (d.loop) {
+      // plataforma que vai e volta enquanto ligada
+      if (!(d.always || sig.get(d.id))) {
+        d.target = 0;
+        continue;
+      }
+      if (Math.abs(d.open - d.target) < 1e-4) {
+        d.wait -= dt;
+        if (d.wait <= 0) {
+          d.target = 1 - d.target;
+          d.wait = d.waits ? d.waits[d.target] : d.loop;
+        }
+      }
+      continue;
+    }
+    if (!sig.has(d.id)) continue;
+    const target = sig.get(d.id) ? 1 : 0;
+    if (d.target !== target) {
+      d.target = target;
+      sfx.door();
+    }
+  }
+
+  // ---- grade de desintegração: passar por ela some com os seus portais
+  const nowIn = !!world.segmentFizzler(lastPlayerPos, player.pos);
+  lastPlayerPos.copy(player.pos);
+  if (nowIn && !inFizzler) {
+    if (portals.fizzle()) {
+      sfx.fizzle();
+      updateCrosshair();
+    }
+    if (held) {
+      const c = held;
+      release();
+      if (c.kind === 'cube') c.respawn();
+      else c.vanish();
+    }
+  }
+  inFizzler = nowIn;
+
+  // ---- pedestal da arma
+  for (const pd of world.pedestals)
+    if (!pd.taken && player.pos.distanceTo(pd.pos) < 1.5) {
+      pd.taken = true;
+      pd.group.visible = false;
+      pd.light.intensity = 0;
+      gunMode = pd.gives;
+      sfx.gun();
+      toast(pd.gives === 'blue' ? 'Você pegou a arma de portais (por enquanto, só o portal azul).' : 'Arma completa: agora ela abre os dois portais!');
+      updateCrosshair();
+    }
+
+  // ---- bolas de energia
+  tmpMin.copy(player.pos).sub(player.half);
+  tmpMax.copy(player.pos).add(player.half);
+  energy.update(dt, t, world, portals, { min: tmpMin.clone(), max: tmpMax.clone() }, {
+    launch: () => sfx.launch(),
+    bounce: (p) => sfx.bounce(p.distanceTo(player.pos)),
+    caught: () => sfx.caught(),
+    pop: () => sfx.pop(),
+    hitPlayer: () => die(),
+  });
+
+  // amostra em cima de um botão acende a janela do núcleo
+  for (const c of cubes) {
+    const gl = c.mesh.userData.glow;
+    if (!gl) continue;
+    const on = world.buttons.some((b) => Math.hypot(c.pos.x - b.pos.x, c.pos.z - b.pos.z) < 0.85 && c.pos.y - b.pos.y > 0 && c.pos.y - b.pos.y < 0.9);
+    gl.emissiveIntensity += ((on ? 2.4 : 0.6) - gl.emissiveIntensity) * Math.min(1, dt * 5);
   }
 
   // ---- torretas
@@ -1007,7 +1265,7 @@ function update(dt, t) {
       die();
       break;
     }
-  if (player.pos.y < -400) die();
+  if (player.pos.y < -400 || world.incinerators.some((f) => inside(player.pos, f.min, f.max))) die();
   for (const tr of world.triggers) {
     if (tr.done || !inside(player.pos, tr.min, tr.max)) continue;
     if (tr.exit) {
@@ -1074,11 +1332,11 @@ function update(dt, t) {
   body.group.rotation.set(0, player.yaw + Math.PI, player.upSign < 0 ? Math.PI : 0);
 
   // ---- arma, rastro, faíscas
-  gun.visible = true;
+  gun.visible = gunMode !== 'none' && ZOOM.k < 1.3;
   recoil = Math.max(0, recoil - dt * 6);
   const sway = Math.sin(player.bob) * 0.012;
-  gun.position.set(0.24 + sway, -0.22 + Math.abs(sway) * 0.6 + recoil * 0.02, -0.48 + recoil * 0.08);
-  gun.rotation.x = 0.04 + recoil * 0.25;
+  gun.position.set(0.21 + sway, -0.19 + Math.abs(sway) * 0.6 + recoil * 0.015, -0.44 + recoil * 0.06);
+  gun.rotation.x = 0.05 + recoil * 0.22;
   tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 5);
   if (sparkT < 1) {
     sparkT += dt;
@@ -1093,25 +1351,39 @@ function update(dt, t) {
 
   // ---- câmera
   const speed = player.vel.length();
-  camera.fov = THREE.MathUtils.lerp(camera.fov, 75 + clamp((speed - 8) / 22, 0, 1) * 16, 1 - Math.exp(-dt * 4));
+  // zoom com o tempo de verdade (o lento não deixa a lente lenta)
+  ZOOM.k += ((ZOOM.on ? ZOOM.level : 1) - ZOOM.k) * (1 - Math.exp(-realDt * 14));
+  const baseFov = 75 + clamp((speed - 8) / 22, 0, 1) * 16 - (SLOW.on ? 7 : 0);
+  ZOOM.fov = THREE.MathUtils.lerp(ZOOM.fov ?? 75, baseFov, 1 - Math.exp(-dt * (SLOW.on ? 10 : 4)));
+  camera.fov = ZOOM.fov / ZOOM.k;
+  document.body.classList.toggle('zoomed', ZOOM.k > 1.15);
+  $('zoom-v').textContent = `${ZOOM.k.toFixed(1).replace('.', ',')}×`;
   camera.updateProjectionMatrix();
   player.applyCamera(dt, 0);
+  // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
+  // apareceria colado na vista
+  body.group.visible = !player.inTransit;
   deadFlash = Math.max(0, deadFlash - dt * 1.5);
   $('flash').style.opacity = deadFlash;
   $('timer').textContent = fmt(levelTime);
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
   $('use-hint').hidden = !(look && !held) && !held;
-  $('use-hint').textContent = held ? 'E — soltar a amostra' : 'E — pegar a amostra';
+  $('use-hint').textContent = held ? 'E — soltar · botão esquerdo — arremessar' : 'E — pegar';
 }
 
+let realDt = 1 / 60;
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  realDt = dt;
   const t = clock.elapsedTime;
   if (running && level) {
     netTick(dt);
     updateAvatars(dt, t);
-    if (!paused && !completed) update(dt, t);
+    if (!paused && !completed) {
+      updateSlowmo(dt);
+      update(dt * SLOW.k, t);
+    } else if (SLOW.on) toggleSlowmo(false);
     else {
       world.update(t, dt);
       portals.update(t, dt);
@@ -1147,5 +1419,5 @@ if (m) {
   progress.unlocked = Math.max(progress.unlocked, Number(m[1]));
   renderMenu();
 }
-requestAnimationFrame(frame);
-window.__jogo = { player, portals, world, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+initPhysics().then(() => requestAnimationFrame(frame));
+window.__jogo = { THREE, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

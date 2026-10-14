@@ -1,74 +1,16 @@
-// Jogador em primeira pessoa e cubos: colisão de caixas alinhadas aos eixos,
-// gravidade (que pode mudar de direção — fase final!) e passagem pelos portais
-// conservando o momento ("o que entra rápido, sai rápido").
+// Jogador em primeira pessoa: anda com o "character controller" do motor de
+// física (colide com o cenário e com cubos/torretas, empurrando-os), gravidade
+// que pode mudar de direção (fase final!) e passagem pelos portais conservando
+// o momento ("o que entra rápido, sai rápido").
 
 import * as THREE from 'three';
-import { aabbOverlap } from './world.js';
 
 const EYE = 0.7; // altura do olho acima do centro do corpo
 const WALK = 4.6;
 const JUMP = 4.6;
 const MAX_FALL = 32;
 
-const _min = new THREE.Vector3();
-const _max = new THREE.Vector3();
-
-const _before = new Set();
-
-function pushOut(body, b, contact) {
-  let best = null;
-  for (const axis of ['x', 'y', 'z']) {
-    const lo = body.pos[axis] - body.half[axis];
-    const hi = body.pos[axis] + body.half[axis];
-    const up = b.max[axis] - lo; // empurrar no sentido +
-    const down = hi - b.min[axis]; // empurrar no sentido −
-    if (!best || up < best.d) best = { axis, d: up, s: 1 };
-    if (down < best.d) best = { axis, d: down, s: -1 };
-  }
-  body.pos[best.axis] += best.s * (best.d + 1e-4);
-  if (Math.sign(body.vel[best.axis]) === -best.s) body.vel[best.axis] = 0;
-  contact[best.axis] = -best.s;
-}
-
-/** move um corpo AABB, eixo por eixo, resolvendo colisões; devolve contatos */
-export function moveBody(body, delta, world, portals, isPlayer) {
-  const steps = Math.max(1, Math.ceil(delta.length() / 0.18));
-  const d = delta.clone().divideScalar(steps);
-  const contact = { x: 0, y: 0, z: 0 };
-  for (let s = 0; s < steps; s++) {
-    for (const axis of ['y', 'x', 'z']) {
-      const dv = d[axis];
-      if (dv === 0) continue;
-      // caixas em que o corpo já estava enfiado antes deste passo (ex.: atravessando um portal)
-      _min.copy(body.pos).sub(body.half);
-      _max.copy(body.pos).add(body.half);
-      _before.clear();
-      for (const b of world.solids) if (aabbOverlap(_min, _max, b.min, b.max)) _before.add(b);
-      body.pos[axis] += dv;
-      _min.copy(body.pos).sub(body.half);
-      _max.copy(body.pos).add(body.half);
-      const ignore = portals.ignoreFor(_min, _max, body.pos, isPlayer);
-      for (const b of world.solids) {
-        if (ignore.has(b) || b === body.box) continue;
-        if (!aabbOverlap(_min, _max, b.min, b.max)) continue;
-        if (_before.has(b)) {
-          // já estava dentro: sai pelo lado de menor penetração (nunca é jogado para trás da parede)
-          pushOut(body, b, contact);
-          _min.copy(body.pos).sub(body.half);
-          _max.copy(body.pos).add(body.half);
-          continue;
-        }
-        if (dv > 0) body.pos[axis] = b.min[axis] - body.half[axis] - 1e-4;
-        else body.pos[axis] = b.max[axis] + body.half[axis] + 1e-4;
-        contact[axis] = Math.sign(dv);
-        body.vel[axis] = 0;
-        _min.copy(body.pos).sub(body.half);
-        _max.copy(body.pos).add(body.half);
-      }
-    }
-  }
-  return contact;
-}
+const _ID = new THREE.Quaternion();
 
 export class Player {
   constructor(camera) {
@@ -84,7 +26,10 @@ export class Player {
     this.cooldown = 0;
     this.groundTime = 0;
     this.bob = 0;
-    this.prevEye = new THREE.Vector3();
+    // depois de um portal, a câmera começa exatamente onde a vista do portal
+    // estava e volta suavemente para a postura de pé (posição e giro)
+    this.viewOffset = new THREE.Vector3();
+    this.viewRot = new THREE.Quaternion();
   }
 
   spawn(x, y, z, yaw = 0) {
@@ -94,7 +39,8 @@ export class Player {
     this.pitch = 0;
     this.upSign = 1;
     this.flip = 0;
-    this.prevEye.copy(this.eye());
+    this.viewOffset.set(0, 0, 0);
+    this.viewRot.identity();
   }
 
   eye(target = new THREE.Vector3()) {
@@ -114,7 +60,12 @@ export class Player {
   }
 
   forward() {
-    return new THREE.Vector3(0, 0, -1).applyQuaternion(this.quaternion());
+    return new THREE.Vector3(0, 0, -1).applyQuaternion(this.viewQuaternion());
+  }
+
+  /** orientação que a câmera mostra (inclui o giro residual da passagem pelo portal) */
+  viewQuaternion() {
+    return this.viewRot.clone().multiply(this.quaternion());
   }
 
   look(dx, dy) {
@@ -123,7 +74,7 @@ export class Player {
   }
 
   update(dt, input, world, portals, gravityAt, onTeleport) {
-    const g = gravityAt(this.pos);
+    const g = gravityAt(this.pos).clone();
     // de cabeça para baixo quando a gravidade aponta para cima
     if (g.y > 0.5 && this.upSign > 0) this.upSign = -1;
     else if (g.y < -0.5 && this.upSign < 0) this.upSign = 1;
@@ -161,21 +112,58 @@ export class Player {
     }
     this.vel.copy(horiz).add(vert).addScaledVector(g, dt);
     if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
+    this.funnel(dt, portals, g);
 
-    this.eye(this.prevEye);
     const prevCenter = this.pos.clone();
-    const contact = moveBody(this, this.vel.clone().multiplyScalar(dt), world, portals, true);
-    this.grounded = contact.y === Math.sign(g.y) && g.lengthSq() > 0.01;
+    const gUp = g.lengthSq() > 0.01 ? g.clone().normalize().negate() : up;
+    // em cima de uma plataforma/porta que andou: vai junto com ela (em qualquer
+    // direção, até diagonal e rápida) — o colisor dela ainda está no lugar
+    // antigo, então ele fica de fora e o jogador é assentado no topo novo
+    const plat = this.upSign > 0 ? world.doors.find((d) => d.box === this.ground) : null;
+    let onPlat = null;
+    // (mesmo parada: o controlador do Rapier trava andando em cima de corpo cinemático)
+    if (plat && this.vel.dot(gUp) <= 0.05) {
+      this.pos.add(plat.delta);
+      onPlat = plat;
+    }
+    const res = world.physics.movePlayer(this, this.vel.clone().multiplyScalar(dt), gUp, onPlat?.box);
+    this.ground = res.ground;
+    if (onPlat) {
+      const b = onPlat.box;
+      const over = this.pos.x > b.min.x - this.half.x + 0.05 && this.pos.x < b.max.x + this.half.x - 0.05 && this.pos.z > b.min.z - this.half.z + 0.05 && this.pos.z < b.max.z + this.half.z - 0.05;
+      if (over && this.pos.y - this.half.y > b.max.y - 0.4) {
+        this.pos.y = b.max.y + this.half.y + 0.035; // folga maior que a margem do controlador (0,02)
+        if (this.vel.y < 0) this.vel.y = 0;
+        res.normals.push(gUp.clone());
+        this.ground = b;
+      }
+    }
+    // saiu de cima de uma plataforma em movimento: leva a velocidade dela
+    if (plat && this.ground !== plat.box && dt > 0) this.vel.addScaledVector(plat.delta, 1 / dt);
+    // o que bateu tira a parte da velocidade que ia contra a superfície
+    let ground = false;
+    for (const n of res.normals) {
+      const vn = this.vel.dot(n);
+      if (vn < 0) this.vel.addScaledVector(n, -vn);
+      if (n.dot(gUp) > 0.7) ground = true;
+    }
+    this.grounded = g.lengthSq() > 0.01 && (ground || (res.grounded && this.vel.dot(gUp) <= 0.05));
     if (this.grounded && horiz.lengthSq() < 0.01) this.groundTime += dt;
     else this.groundTime = 0;
 
-    // atravessou um portal?
+    // o giro e o deslocamento da câmera herdados do portal se desfazem aos poucos
+    this.viewOffset.multiplyScalar(Math.exp(-dt * 9));
+    this.viewRot.slerp(_ID, 1 - Math.exp(-dt * 6));
+
+    // atravessou um portal? Conta o CENTRO DE MASSA: assim a gravidade age
+    // sempre do lado certo e a energia se conserva. A câmera pode ficar um
+    // instante atrás da boca do portal — aí ela é desenhada do outro lado
+    // (veja applyCamera), então a imagem continua contínua.
+    this.portals = portals;
     this.cooldown -= dt;
-    const eyeNow = this.eye();
-    // atravessou um portal? (pelo olho, pelo centro do corpo, ou ficou preso atrás do plano)
     let P = null;
     if (this.cooldown <= 0) {
-      P = portals.crossing(this.prevEye, eyeNow) || portals.crossing(prevCenter, this.pos);
+      P = portals.crossing(prevCenter, this.pos);
       if (!P) {
         const mn = this.pos.clone().sub(this.half);
         const mx = this.pos.clone().add(this.half);
@@ -183,91 +171,105 @@ export class Player {
       }
     }
     if (P) {
-      this.teleport(portals, P);
+      this.teleport(portals, P, g);
       onTeleport?.(P);
     }
     if (input.f || input.b || input.l || input.r) this.bob += dt * (this.grounded ? 9 : 0);
   }
 
-  teleport(portals, P) {
-    const Q = portals.other(P);
-    const M = portals.transform(P, Q);
-    const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M));
-    const fwd = this.forward().applyQuaternion(rot);
-    const eye = this.eye().applyMatrix4(M);
-    this.vel.applyQuaternion(rot);
-    // a gravidade continua apontando para baixo: o corpo "pendura" do olho
-    this.pos.copy(eye).sub(new THREE.Vector3(0, EYE, 0));
-    // garante que o corpo saia inteiro do portal de saída
+  /**
+   * "Funil": caindo por cima de um portal no chão, a trajetória é puxada de
+   * leve para o centro dele (como nos jogos do gênero) — dá para acertar o
+   * portal mesmo saindo da beirada andando.
+   */
+  funnel(dt, portals, g) {
+    const gm = g.length();
+    if (gm < 0.01) return;
+    const down = g.clone().divideScalar(gm);
+    const vDown = this.vel.dot(down);
+    if (vDown < 1) return;
+    // só para quem está caindo quase reto (voando de lado por cima de um portal não conta)
+    const sideNow = this.vel.clone().addScaledVector(down, -vDown);
+    if (sideNow.length() > 6) return;
+    let best = null;
+    let bestD = Infinity;
+    for (const P of portals.list) {
+      if (!portals.isLinked(P) || P.normal.dot(down) > -0.7) continue;
+      const rel = this.pos.clone().sub(P.center);
+      const h = rel.dot(P.normal);
+      if (h < 0.3 || h > 60) continue;
+      const lat = rel.addScaledVector(P.normal, -h);
+      const d = lat.length();
+      // quanto mais alto, mais longe o funil alcança (há tempo para corrigir)
+      const reach = Math.min(6, Math.max(2.6, 1.5 + h * 0.1));
+      if (d < reach && d < bestD) {
+        bestD = d;
+        best = { lat, h };
+      }
+    }
+    if (!best) return;
+    // velocidade lateral que leva ao centro no tempo que falta para chegar (queda acelerada)
+    const t = Math.max((-vDown + Math.sqrt(vDown * vDown + 2 * gm * best.h)) / gm, 0.05);
+    const want = best.lat.multiplyScalar(-1 / t);
+    // correção suave, com aceleração lateral limitada
+    const dv = want.sub(sideNow).multiplyScalar(1 - Math.exp(-dt * 6));
+    const maxDv = 12 * dt;
+    if (dv.length() > maxDv) dv.setLength(maxDv);
+    this.vel.add(dv);
+  }
+
+  teleport(portals, P, g = new THREE.Vector3(0, -9.8, 0)) {
+    // vista atual (com o que sobrou da última passagem) levada para o outro lado
+    const view = this.eye().add(this.viewOffset);
+    const viewQ = this.viewQuaternion();
+    const { Q, M, rot } = portals.carry(P, this.pos, this.vel);
+    view.applyMatrix4(M);
+    viewQ.premultiply(rot);
+    // saída numa parede: o corpo (de pé) sai inteiro da boca — deslocamento
+    // horizontal, não muda a energia; a câmera não pula (viewOffset absorve)
     const n = Q.normal;
-    const need = Math.abs(n.x) * this.half.x + Math.abs(n.y) * this.half.y + Math.abs(n.z) * this.half.z + 0.03;
-    const d = this.pos.clone().sub(Q.center).dot(n);
-    if (d < need) this.pos.addScaledVector(n, need - d);
-    const vn = this.vel.dot(n);
-    if (vn < 2) this.vel.addScaledVector(n, 2 - vn);
-    // nova direção do olhar, sem inclinação lateral
-    this.pitch = Math.asin(THREE.MathUtils.clamp(fwd.y, -0.999, 0.999));
-    if (Math.abs(fwd.y) < 0.995) this.yaw = Math.atan2(-fwd.x, -fwd.z);
+    if (Math.abs(n.y) < 0.5) {
+      const need = Math.abs(n.x) * this.half.x + Math.abs(n.z) * this.half.z + 0.03;
+      const d = this.pos.clone().sub(Q.center).dot(n);
+      if (d < need) this.pos.addScaledVector(n, need - d);
+    }
+
+    // nova direção do olhar sem inclinação lateral (o giro fica em viewRot)
+    const unflip = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -Math.PI * this.flipEase());
+    const f = new THREE.Vector3(0, 0, -1).applyQuaternion(viewQ).applyQuaternion(unflip);
+    const u = new THREE.Vector3(0, 1, 0).applyQuaternion(viewQ).applyQuaternion(unflip);
+    const sp = THREE.MathUtils.clamp(f.y, -0.999, 0.999);
+    const cp = Math.sqrt(1 - sp * sp);
+    // direção horizontal "para a frente" estável mesmo olhando reto para cima/baixo
+    const hx = f.x * cp - u.x * sp;
+    const hz = f.z * cp - u.z * sp;
+    this.pitch = THREE.MathUtils.clamp(Math.asin(sp), -1.55, 1.55);
+    if (hx * hx + hz * hz > 1e-8) this.yaw = Math.atan2(-hx, -hz);
+    this.viewRot.copy(viewQ).multiply(this.quaternion().invert());
+    this.viewOffset.copy(view).sub(this.eye());
+
+    // portal no chão com pouca velocidade: sai inteiro e para a frente
+    const side = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    portals.exitAssist(Q, this.pos, this.vel, this.half, g, side);
     this.cooldown = 0.12;
     this.grounded = false;
   }
 
   applyCamera(dt, shakeAmt = 0) {
-    const e = this.eye();
     const b = Math.sin(this.bob) * 0.035 * (this.grounded ? 1 : 0);
-    this.camera.position.copy(e).add(new THREE.Vector3(0, b * this.upSign, 0));
-    if (shakeAmt > 0)
-      this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt));
-    this.camera.quaternion.copy(this.quaternion());
-  }
-}
-
-/** Cubo de amostra (pode ser carregado e atravessar portais) */
-export class Cube {
-  constructor(mesh, x, y, z) {
-    this.mesh = mesh;
-    this.pos = new THREE.Vector3(x, y + 0.31, z);
-    this.home = this.pos.clone();
-    this.vel = new THREE.Vector3();
-    this.half = new THREE.Vector3(0.3, 0.3, 0.3);
-    this.held = false;
-    this.cooldown = 0;
-    this.prev = this.pos.clone();
-  }
-
-  respawn() {
-    this.pos.copy(this.home);
-    this.vel.set(0, 0, 0);
-    this.held = false;
-  }
-
-  update(dt, world, portals, gravityAt, holdTarget) {
-    if (this.held && holdTarget) {
-      this.vel.copy(holdTarget).sub(this.pos).multiplyScalar(16);
-      if (this.vel.length() > 25) this.vel.setLength(25);
-    } else {
-      this.vel.addScaledVector(gravityAt(this.pos), dt);
-      if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
-    }
-    this.prev.copy(this.pos);
-    const c = moveBody(this, this.vel.clone().multiplyScalar(dt), world, portals, false);
-    if (c.y && !this.held) {
-      this.vel.x *= 0.8;
-      this.vel.z *= 0.8;
-    }
-    this.cooldown -= dt;
-    let P = this.cooldown <= 0 ? portals.crossing(this.prev, this.pos) : null;
-    if (!P && this.cooldown <= 0) P = portals.stuckIn(this.pos, this.pos.clone().sub(this.half), this.pos.clone().add(this.half));
+    const pos = this.eye().add(this.viewOffset).add(new THREE.Vector3(0, b * this.upSign, 0));
+    if (shakeAmt > 0) pos.add(new THREE.Vector3((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt));
+    const quat = this.viewQuaternion();
+    // câmera atrás da boca de um portal (cabeça entrou antes do corpo, ou logo
+    // depois da passagem): desenha do ponto equivalente do outro lado
+    const P = this.portals?.behind(pos);
+    this.inTransit = !!P || this.viewOffset.lengthSq() > 0.02;
     if (P) {
-      const Q = portals.other(P);
-      const M = portals.transform(P, Q);
-      const rot = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M));
-      this.pos.applyMatrix4(M);
-      this.vel.applyQuaternion(rot);
-      this.pos.addScaledVector(Q.normal, 0.35);
-      this.cooldown = 0.15;
-      this.mesh.quaternion.premultiply(rot);
+      const M = this.portals.transform(P, P.partner);
+      pos.applyMatrix4(M);
+      quat.premultiply(new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(M)));
     }
-    this.mesh.position.copy(this.pos);
+    this.camera.position.copy(pos);
+    this.camera.quaternion.copy(quat);
   }
 }

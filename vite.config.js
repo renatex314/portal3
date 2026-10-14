@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 export default defineConfig({
   base: './',
   build: {
-    chunkSizeWarningLimit: 1500,
+    chunkSizeWarningLimit: 5000, // o motor de física (Rapier) vem com o WebAssembly embutido
     rollupOptions: {
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
