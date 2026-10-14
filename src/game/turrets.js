@@ -56,6 +56,11 @@ export class Turret extends Prop {
       return l;
     });
     this.tracerI = 0;
+    // a luz do clarão fica na cena, não no modelo: o modelo some quando a
+    // torreta é destruída e a contagem de luzes não pode mudar (recompilaria tudo)
+    this.flashLight = this.mesh.userData.flashLight;
+    this.mesh.remove(this.flashLight);
+    scene.add(this.flashLight);
     this.flashT = 0;
     this.barrelI = 0;
     this.eyeK = 1;
@@ -90,7 +95,8 @@ export class Turret extends Prop {
         f.scale.setScalar(0.16 + Math.random() * 0.1);
       }
     });
-    u.flashLight.intensity = this.flashT > 0 ? 6 : 0;
+    this.flashLight.intensity = this.flashT > 0 && !this.gone ? 6 : 0;
+    if (this.flashT > 0) this.flashLight.position.set(0, 0.8, 0.35).applyMatrix4(this.mesh.matrixWorld);
     for (const b of u.barrels) {
       b.userData.kick = Math.max(0, (b.userData.kick ?? 0) - dt * 25);
       b.position.z = 0.07 - b.userData.kick * 0.025;
@@ -229,7 +235,7 @@ export class Turret extends Prop {
   }
 
   dispose(scene) {
-    scene.remove(this.mesh, this.laser, ...this.tracers);
+    scene.remove(this.mesh, this.laser, this.flashLight, ...this.tracers);
   }
 }
 

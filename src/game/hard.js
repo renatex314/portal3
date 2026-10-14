@@ -7,7 +7,7 @@
 
 import { portalGun } from './models.js';
 
-const H = (n, def) => ({ ...def, id: 200 + n, n, code: `H${String(n + 1).padStart(2, '0')}`, series: 'hard', music: def.music ?? 'descent', heat: def.heat ?? true });
+const H = (n, def) => ({ ...def, id: 200 + n, n, code: `H${String(n + 1).padStart(2, '0')}`, series: 'hard', music: def.music ?? 'labTense', heat: def.heat ?? true });
 
 /** salão: paredes e teto de metal (sem chão) */
 export function hall(w, x0, x1, z0, z1, y0, top, mat = 'metal') {

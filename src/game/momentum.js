@@ -11,7 +11,7 @@
 
 import { lava, pillar, lamps } from './hard.js';
 
-const M = (n, def) => ({ ...def, id: 300 + n, n, code: `M${String(n + 1).padStart(2, '0')}`, series: 'momentum', music: def.music ?? 'ride', heat: def.heat ?? false });
+const M = (n, def) => ({ ...def, id: 300 + n, n, code: `M${String(n + 1).padStart(2, '0')}`, series: 'momentum', music: def.music ?? 'labEpic', heat: def.heat ?? false });
 
 const D = Math.SQRT1_2;
 

@@ -216,9 +216,11 @@ class Portal {
     sparks.renderOrder = 3;
     this.sparks = sparks;
     this.group.add(sparks);
-    this.light = new THREE.PointLight(this.color, 6, 6, 1.6);
-    this.light.position.z = 0.6;
-    this.group.add(this.light);
+    // a luz fica fora do grupo e sempre "visível" (apagada sem portal): se o
+    // número de luzes da cena mudasse ao abrir o portal, o three.js
+    // recompilaria todos os materiais — era a travada do primeiro portal
+    this.light = new THREE.PointLight(this.color, 0, 6, 1.6);
+    scene.add(this.light);
     this.group.matrixAutoUpdate = false;
     this.group.visible = false;
     this.front = front;
@@ -237,6 +239,7 @@ class Portal {
     this.group.matrix.copy(this.matrix);
     this.group.matrixWorldNeedsUpdate = true;
     this.group.visible = true;
+    this.light.position.copy(center).addScaledVector(normal, 0.6);
     this.placed = true;
     this.open = 0;
     this.age = 0;
@@ -245,6 +248,7 @@ class Portal {
   remove() {
     this.placed = false;
     this.group.visible = false;
+    this.light.intensity = 0;
     this.box = null;
   }
 
@@ -264,7 +268,7 @@ class Portal {
   }
 
   dispose() {
-    this.scene.remove(this.group);
+    this.scene.remove(this.group, this.light);
     for (const r of this.rt) r.dispose();
   }
 }
@@ -334,6 +338,7 @@ export class PortalSystem {
       orange.partner = blue;
       blue.owner = orange.owner = id;
       this.remote.set(id, { blue, orange });
+      this.prewarm(); // luzes novas na cena: recompila agora, não no meio do jogo
     }
     return this.remote.get(id);
   }
@@ -614,6 +619,58 @@ export class PortalSystem {
   }
 
   // ------------------------------------------------------------ renderização
+  /**
+   * Compila de antemão os shaders dos dois caminhos de renderização — a vista
+   * normal e a vista pelos portais (textura + um plano de corte) — e sobe as
+   * texturas para a placa de vídeo. Sem isso, cada material compila na hora
+   * em que o primeiro portal liga, e o jogo trava meio segundo.
+   */
+  prewarm() {
+    const r = this.renderer;
+    const cam = this.camera;
+    const prevTarget = r.getRenderTarget();
+    const prevClip = r.clippingPlanes;
+    const empty = (this.emptyScene ??= new THREE.Scene());
+    // as texturas de todos os portais são criadas na placa agora (na primeira
+    // vez que se desenha nelas, o navegador aloca e trava)
+    for (const P of this.list)
+      for (const rt of P.rt) {
+        r.setRenderTarget(rt);
+        r.render(empty, cam);
+      }
+    // qualquer alvo fora da tela serve: o pós-processamento também desenha num
+    r.setRenderTarget(this.blue.rt[1 - this.blue.read]);
+    for (const planes of [[], [this.clip.set(new THREE.Vector3(0, 1, 0), 1e6)]]) {
+      r.clippingPlanes = planes;
+      r.render(empty, cam); // fixa o estado de corte que o compile lê
+      r.compile(this.scene, cam);
+    }
+    // um desenho de verdade da vista pelo portal, com TUDO (sem descartar o que
+    // está fora da tela): alguns drivers só terminam de preparar o shader no
+    // primeiro uso, e a geometria de cada objeto só sobe na primeira vez que é desenhada
+    const culled = [];
+    this.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        o.frustumCulled = false;
+        culled.push(o);
+      }
+    });
+    r.render(this.scene, cam);
+    for (const o of culled) o.frustumCulled = true;
+    r.clippingPlanes = prevClip;
+    r.setRenderTarget(prevTarget);
+    const seen = new Set();
+    this.scene.traverse((o) => {
+      for (const m of [o.material].flat())
+        if (m)
+          for (const v of Object.values(m))
+            if (v?.isTexture && !seen.has(v) && !v.isRenderTargetTexture) {
+              seen.add(v);
+              r.initTexture(v);
+            }
+    });
+  }
+
   update(t, dt) {
     for (const P of this.list) {
       P.uniforms.uTime.value = t;
@@ -623,7 +680,7 @@ export class PortalSystem {
       const o = P.open;
       P.uniforms.uOpen.value = o >= 1 ? 1 : 1 + 2.2 * Math.pow(o - 1, 3) + 1.2 * Math.pow(o - 1, 2);
       P.rimMat.uniforms.uFlash.value = Math.max(0, 1 - P.age / 0.5) ** 2;
-      P.light.intensity = 6 + 14 * P.rimMat.uniforms.uFlash.value;
+      P.light.intensity = P.placed ? 6 + 14 * P.rimMat.uniforms.uFlash.value : 0;
       P.uniforms.uLinked.value = this.isLinked(P) ? 1 : 0;
     }
   }

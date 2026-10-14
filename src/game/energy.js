@@ -8,6 +8,7 @@ import { PORTAL_A, PORTAL_B } from './portals.js';
 
 const R = 0.16;
 const TRAIL = 14;
+const LIGHTS = 4; // bolas com luz própria ao mesmo tempo
 
 function glowTexture() {
   const cv = document.createElement('canvas');
@@ -52,36 +53,59 @@ export class EnergySystem {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
+    // luzes reservadas (sempre na cena, apagadas quando livres): criar e tirar
+    // luzes muda o número de luzes da cena e força recompilar todos os materiais
+    this.lights = Array.from({ length: LIGHTS }, () => {
+      const l = new THREE.PointLight(0xffa040, 0, 6, 1.6);
+      scene.add(l);
+      return l;
+    });
+    // bola-modelo invisível: só para os shaders dela serem compilados ao carregar a fase
+    const ghost = this.build();
+    ghost.group.visible = false;
+    ghost.trail.visible = false;
+    scene.add(ghost.group, ghost.trail);
   }
 
-  reset() {
-    for (const p of this.pellets) this.scene.remove(p.group, p.trail);
-    this.pellets = [];
-  }
-
-  spawn(L) {
+  /** malhas de uma bola (núcleo, casca, brilho) e do rastro */
+  build() {
     const g = new THREE.Group();
     g.add(new THREE.Mesh(this.coreGeo, this.coreMat));
-    // casca de plasma girando em volta do núcleo
     const shell = new THREE.Mesh(this.shellGeo, this.shellMat);
     g.add(shell);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     sp.scale.setScalar(1.3);
     g.add(sp);
-    const light = new THREE.PointLight(0xffa040, 6, 6, 1.6);
-    g.add(light);
-    g.position.copy(L.pos);
-    this.scene.add(g);
-    // rastro: as últimas posições, cada vez menores e mais apagadas
     const trail = new THREE.Points(
       new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL * 3), 3)),
       this.trailMat,
     );
     trail.geometry.setAttribute('k', new THREE.BufferAttribute(Float32Array.from({ length: TRAIL }, (_, i) => 1 - i / TRAIL), 1));
     trail.frustumCulled = false;
-    this.scene.add(trail);
+    return { group: g, shell, sprite: sp, trail };
+  }
+
+  reset() {
+    for (const p of this.pellets) this.scene.remove(p.group, p.trail);
+    for (const l of this.lights) {
+      l.userData.busy = false;
+      l.intensity = 0;
+    }
+    this.pellets = [];
+  }
+
+  spawn(L) {
+    // casca de plasma girando em volta do núcleo; rastro com as últimas posições
+    const { group: g, shell, sprite: sp, trail } = this.build();
+    g.position.copy(L.pos);
+    this.scene.add(g, trail);
+    const light = this.lights.find((l) => !l.userData.busy) ?? null;
+    if (light) {
+      light.userData.busy = true;
+      light.intensity = 6;
+    }
     const hist = Array.from({ length: TRAIL }, () => L.pos.clone());
-    const p = { pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, cooldown: 0 };
+    const p = { pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, light, cooldown: 0 };
     L.pellet = p;
     this.pellets.push(p);
     return p;
@@ -89,6 +113,10 @@ export class EnergySystem {
 
   kill(p) {
     this.scene.remove(p.group, p.trail);
+    if (p.light) {
+      p.light.userData.busy = false;
+      p.light.intensity = 0;
+    }
     p.trail.geometry.dispose();
     this.pellets = this.pellets.filter((q) => q !== p);
     if (p.from.pellet === p) {
@@ -152,6 +180,7 @@ export class EnergySystem {
         p.pos.copy(next);
       }
       p.group.position.copy(p.pos);
+      p.light?.position.copy(p.pos);
       p.shell.rotation.set(t * 3.1, t * 4.3, t * 2.2);
       // rastro (pula a amostra quando a bola atravessa um portal)
       if (p.hist[0].distanceTo(p.pos) > 1.5) for (const h of p.hist) h.copy(p.pos);

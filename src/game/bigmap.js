@@ -13,7 +13,7 @@ export const BIG_MAP = {
   id: 7,
   name: 'A Mina',
   who: 'Helena',
-  music: 'doc',
+  music: 'lab',
   free: true,
   lesson: 'Encontre os 12 cristais. Cuidado com as torretas.',
   build(w) {

@@ -7,9 +7,45 @@
 //   doc     — Minas Gerais: arpejo de viola caipira (Karplus-Strong) em ré maior
 //   descent — descida do poço: drone, "coração" e pings metálicos
 //   ride    — dentro da cápsula: baixo pulsante a 120 bpm
+//   lab       — câmaras de teste: sério e tenso — drone grave, baixo distorcido
+//               em colcheias, sequência em ré frígio, batida industrial com
+//               golpes metálicos e um motivo lento de "metais" (100 bpm)
+//   labTense  — desafios/torretas: caótico e dramático — baixo distorcido em
+//               semicolcheias com trítono, acordes em cluster, cordas em
+//               trêmolo subindo, sirene, viradas de tons (138 bpm)
+//   labEpic   — série Momento: ré menor a 92 bpm, cordas, tímpanos, ostinato
+//               grave e percussão industrial sob um tema sombrio
+// (composições próprias, no clima das faixas tensas de laboratório dos jogos de portal)
 // Efeitos: explosão, ronco da descida, vento da queda.
 
 const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+const BPM = { lab: 100, labTense: 138, labEpic: 92 };
+
+// melodias: por compasso, [semicolcheia de início, nota MIDI, duração em semicolcheias]
+// câmaras: motivo de "metais" lento sobre Ré – Ré – Si♭ – Lá (segundas menores, nada alegre)
+const LAB_THEME = [
+  [[0, 69, 8], [8, 70, 4], [12, 69, 4]],
+  [[0, 67, 8], [8, 65, 8]],
+  [[0, 65, 6], [6, 67, 2], [8, 70, 8]],
+  [[0, 69, 12], [12, 61, 4]],
+  [[0, 74, 8], [8, 75, 4], [12, 74, 4]],
+  [[0, 72, 8], [8, 70, 8]],
+  [[0, 70, 4], [4, 69, 4], [8, 65, 8]],
+  [[0, 64, 8], [8, 61, 8]],
+];
+// tensão: queda cromática de "metais" (Sol – Sol♭ – Mi♭ – Dó)
+const TENSE_FALL = [[0, 79, 4], [4, 78, 4], [8, 75, 4], [12, 72, 4]];
+// Momento: tema grave e dramático em ré menor (Rém – Si♭ – Solm – Lá)
+const EPIC = [
+  [[0, 74, 8], [8, 72, 4], [12, 70, 4]],
+  [[0, 69, 12], [12, 65, 4]],
+  [[0, 67, 6], [6, 70, 2], [8, 74, 8]],
+  [[0, 73, 8], [8, 76, 8]],
+  [[0, 77, 8], [8, 76, 4], [12, 74, 4]],
+  [[0, 74, 8], [8, 70, 8]],
+  [[0, 70, 4], [4, 72, 4], [8, 74, 4], [12, 70, 4]],
+  [[0, 69, 16]],
+];
 
 export class Soundtrack {
   constructor() {
@@ -59,6 +95,18 @@ export class Soundtrack {
     this.slowLP.connect(this.master);
     this.music.connect(this.slowLP);
     this.music.connect(this.reverb);
+    // eco rítmico da melodia (o tempo acompanha o clima tocando)
+    this.delay = ctx.createDelay(1.5);
+    this.delay.delayTime.value = 0.4;
+    const fb = ctx.createGain();
+    fb.gain.value = 0.34;
+    const dlp = ctx.createBiquadFilter();
+    dlp.type = 'lowpass';
+    dlp.frequency.value = 2600;
+    const dOut = ctx.createGain();
+    dOut.gain.value = 0.6;
+    this.delay.connect(dlp).connect(fb).connect(this.delay);
+    dlp.connect(dOut).connect(this.music);
     this.sfx = ctx.createGain();
     this.sfx.gain.value = 0.9;
     this.sfx.connect(this.slowLP);
@@ -117,6 +165,8 @@ export class Soundtrack {
     bus.gain.linearRampToValueAtTime(1, t + 3);
     bus.connect(this.music);
     const mood = { name, bus, next: t + 0.1, step: 0, nodes: [] };
+    const bpm = BPM[name];
+    if (bpm) this.delay.delayTime.setTargetAtTime((3 * 60) / bpm / 4, t, 0.05); // eco de 3 semicolcheias
     this._startDrones(mood);
     this.current = mood;
     this.moods.push(mood);
@@ -368,6 +418,218 @@ export class Soundtrack {
     o.stop(t + 0.4);
   }
 
+  /**
+   * voz de sintetizador: osciladores (desafinados entre si) → passa-baixa com
+   * envelope → volume → pan; `send` manda para o eco, `vib` (cents) dá vibrato.
+   */
+  _voice(bus, midi, t, dur, o = {}) {
+    const { types = ['square'], vol = 0.06, cutoff = 2400, env = 0, q = 1, attack = 0.006, release = 0.08, detune = 8, pan = 0, send = 0, vib = 0, dist = 0 } = o;
+    const ctx = this.ctx;
+    const end = t + dur + release;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.Q.value = q;
+    f.frequency.setValueAtTime(cutoff * (1 + env), t);
+    f.frequency.exponentialRampToValueAtTime(cutoff, t + Math.min(Math.max(dur, 0.02), 0.25));
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.setValueAtTime(vol, t + Math.max(attack, dur));
+    g.gain.exponentialRampToValueAtTime(0.0001, end);
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    f.connect(g).connect(p).connect(bus);
+    // distorção (antes do filtro): satura e "suja" o timbre
+    let input = f;
+    if (dist) {
+      input = ctx.createWaveShaper();
+      input.curve = this._curve(dist);
+      input.oversample = '2x';
+      input.connect(f);
+    }
+    if (send) {
+      const sg = ctx.createGain();
+      sg.gain.value = send;
+      p.connect(sg).connect(this.delay);
+    }
+    let lg = null;
+    if (vib) {
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 5.6;
+      lg = ctx.createGain();
+      lg.gain.setValueAtTime(0, t);
+      lg.gain.linearRampToValueAtTime(vib, t + Math.min(dur, 0.4));
+      lfo.connect(lg);
+      lfo.start(t);
+      lfo.stop(end + 0.05);
+    }
+    types.forEach((type, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = mtof(midi);
+      osc.detune.value = (i - (types.length - 1) / 2) * detune;
+      if (lg) lg.connect(osc.detune);
+      osc.connect(input);
+      osc.start(t);
+      osc.stop(end + 0.05);
+    });
+  }
+
+  _curve(amount) {
+    this.curves ??= new Map();
+    const key = Math.round(amount * 100);
+    if (!this.curves.has(key)) {
+      const n = 1024;
+      const c = new Float32Array(n);
+      const k = 1 + amount * 20;
+      for (let i = 0; i < n; i++) c[i] = Math.tanh(((i / (n - 1)) * 2 - 1) * k) / Math.tanh(k);
+      this.curves.set(key, c);
+    }
+    return this.curves.get(key);
+  }
+
+  /** golpe metálico (sino desafinado curto): a "batida industrial" */
+  _metal(bus, t, vol = 0.05, pitch = 1, decay = 0.28) {
+    const ctx = this.ctx;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1800;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    hp.connect(g).connect(bus);
+    for (const f of [587, 845, 1253, 1729, 2311]) {
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = f * pitch;
+      o.connect(hp);
+      o.start(t);
+      o.stop(t + decay + 0.02);
+    }
+    this._noiseHit(bus, t, { type: 'bandpass', freq: 3500 * pitch, q: 2, vol: vol * 0.8, dur: 0.06 });
+  }
+
+  /** impacto grave (início de seção): queda de senoide + estrondo filtrado */
+  _impact(bus, t, vol = 0.45) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(70, t);
+    o.frequency.exponentialRampToValueAtTime(28, t + 1.6);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+    o.connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + 2.3);
+    this._noiseHit(bus, t, { type: 'lowpass', freq: 380, q: 0.7, vol: vol * 0.9, dur: 2.4 });
+  }
+
+  _tom(bus, midi, t, vol = 0.22) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(mtof(midi) * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(mtof(midi), t + 0.08);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+    o.connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + 0.5);
+    this._noiseHit(bus, t, { type: 'bandpass', freq: 900, q: 1, vol: vol * 0.4, dur: 0.05 });
+  }
+
+  _crash(bus, t, vol = 0.06) {
+    this._noiseHit(bus, t, { type: 'highpass', freq: 4200, q: 0.5, vol, dur: 1.8 });
+  }
+
+  /** sirene: serra subindo por um passa-faixa estreito */
+  _siren(bus, t, dur, from, to, vol = 0.03) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(mtof(from), t);
+    o.frequency.exponentialRampToValueAtTime(mtof(to), t + dur);
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 5;
+    f.frequency.setValueAtTime(mtof(from) * 2, t);
+    f.frequency.exponentialRampToValueAtTime(mtof(to) * 2, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.3);
+    o.connect(f).connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + dur + 0.35);
+  }
+
+  _kick(bus, t, vol = 0.4) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(160, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+    o.connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + 0.35);
+  }
+
+  _noiseHit(bus, t, { type = 'highpass', freq = 7000, q = 0.7, vol = 0.05, dur = 0.05 }) {
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(bus);
+    src.start(t, Math.random() * 1.5);
+    src.stop(t + dur + 0.02);
+  }
+
+  _hat(bus, t, vol = 0.035, open = false) {
+    this._noiseHit(bus, t, { freq: 7500, vol, dur: open ? 0.22 : 0.045 });
+  }
+
+  _snare(bus, t, vol = 0.14) {
+    this._noiseHit(bus, t, { type: 'bandpass', freq: 1900, q: 0.8, vol, dur: 0.17 });
+    const o = this.ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(220, t);
+    o.frequency.exponentialRampToValueAtTime(150, t + 0.08);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol * 0.9, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+    o.connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + 0.12);
+  }
+
+  /** tímpano: senoide grave com leve queda de afinação e um "toque" de ruído */
+  _timpani(bus, midi, t, vol = 0.3) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(mtof(midi) * 1.06, t);
+    o.frequency.exponentialRampToValueAtTime(mtof(midi), t + 0.15);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
+    o.connect(g).connect(bus);
+    o.start(t);
+    o.stop(t + 1.7);
+    this._noiseHit(bus, t, { type: 'lowpass', freq: 400, vol: vol * 0.5, dur: 0.12 });
+  }
+
+  /** cordas sintetizadas: três serras por nota, ataque lento e vibrato */
+  _strings(bus, notes, t, dur, vol = 0.03, cutoff = 2200) {
+    for (const n of notes) this._voice(bus, n, t, dur, { types: ['sawtooth', 'sawtooth', 'sawtooth'], detune: 12, vol, cutoff, attack: 0.7, release: 1.2, vib: 10, pan: ((n % 5) - 2) * 0.15 });
+  }
+
   _drone(mood, midi, type = 'sine', vol = 0.05, cutoff = 400) {
     const ctx = this.ctx;
     const o = ctx.createOscillator();
@@ -416,7 +678,25 @@ export class Soundtrack {
       mood.d2 = this._drone(mood, 33, 'sawtooth', 0.04, 160);
     } else if (mood.name === 'ride') {
       this._drone(mood, 26, 'sine', 0.06);
+    } else if (mood.name === 'lab' || mood.name === 'labEpic') {
+      // drone de ré: sub grave + serra abafada que "respira" devagar
+      this._drone(mood, 26, 'sine', 0.06);
+      this._breath(mood, this._drone(mood, 38, 'sawtooth', 0.035, 160), 0.06, 220);
+    } else if (mood.name === 'labTense') {
+      this._drone(mood, 24, 'sine', 0.05);
+      this._breath(mood, this._drone(mood, 30, 'sawtooth', 0.03, 200), 0.11, 300);
     }
+  }
+
+  /** LFO lento no filtro de um drone */
+  _breath(mood, d, rate, depth) {
+    const lfo = this.ctx.createOscillator();
+    lfo.frequency.value = rate;
+    const lg = this.ctx.createGain();
+    lg.gain.value = depth;
+    lfo.connect(lg).connect(d.f.frequency);
+    lfo.start();
+    mood.nodes.push(lfo);
   }
 
   // ------------------------------------------------------------ sequenciador
@@ -514,6 +794,173 @@ export class Soundtrack {
     this._bass(m.bus, pat[m.step % 16], t, six * 0.95, 200 + x * 1600, 0.11);
     if (m.step % 4 === 0) this._thump(m.bus, t, 0.35);
     if (m.step % 64 === 0) this._pad(m.bus, [50, 53, 57, 62], t, six * 64, { cutoff: 800 + x * 1200, vol: 0.035 });
+    m.step++;
+    m.next = t + six;
+  }
+
+  // ------------------------------------------------------------ laboratório
+  /** toca as notas da melodia que começam nesta semicolcheia */
+  _melody(bar, s, t, six, play) {
+    for (const [at, n, len] of bar ?? []) if (at === s) play(n, len * six);
+  }
+
+  _lab(m, t) {
+    const six = 60 / BPM.lab / 4;
+    const s = m.step % 16;
+    const bar = Math.floor(m.step / 16) % 32;
+    const ci = bar % 4;
+    const root = [38, 38, 34, 33][ci]; // Ré, Ré, Si♭, Lá
+    const seq = [
+      [62, 63, 65, 69],
+      [62, 63, 65, 69],
+      [58, 62, 65, 69],
+      [57, 61, 64, 69],
+    ][ci];
+    const sec = bar < 4 ? 'intro' : bar < 12 ? 'drive' : bar < 20 ? 'theme' : bar < 24 ? 'void' : 'theme2';
+    const b = m.bus;
+    const beat = sec === 'drive' || sec === 'theme' || sec === 'theme2';
+    // pulso: baixo distorcido abafado em colcheias (com a segunda menor no fim)
+    if (sec !== 'void' && s % 2 === 0) {
+      const n = root + (s === 12 && ci < 2 ? 1 : s === 14 ? 12 : 0);
+      this._voice(b, n, t, six * 1.2, { types: ['sawtooth', 'square'], vol: 0.06, cutoff: 200 + (sec === 'theme2' ? 160 : 0), env: 2.5, q: 6, detune: 6, dist: 0.5 });
+    }
+    // sequência em semicolcheias, filtro abrindo ao longo da seção
+    const order = [0, 1, 0, 2, 0, 1, 0, 3, 0, 1, 0, 2, 1, 0, 3, 2];
+    if (sec !== 'intro' && sec !== 'void') {
+      const open = ((bar % 8) + s / 16) / 8;
+      this._voice(b, seq[order[s]], t, six * 0.5, { vol: 0.016, cutoff: 500 + open * 1600, env: 1.2, q: 3, pan: s % 2 ? 0.4 : -0.4, send: 0.18 });
+    }
+    // batida industrial: bumbo quebrado, golpe metálico no lugar da caixa
+    if (beat) {
+      if (s === 0 || s === 6 || s === 8 || (sec === 'theme2' && s === 11)) this._kick(b, t, 0.42);
+      if (s === 4 || s === 12) {
+        this._snare(b, t, 0.08);
+        this._metal(b, t, 0.035, s === 12 ? 0.94 : 1);
+      }
+      if (s % 2 === 0) this._hat(b, t, s % 4 === 2 ? 0.028 : 0.012);
+    } else if (s % 4 === 0) this._voice(b, 98, t, 0.015, { types: ['sine'], vol: 0.018, cutoff: 9000 }); // tique-taque
+    if (sec === 'void') {
+      if (s === 0 && bar % 2 === 0) this._impact(b, t, 0.35);
+      if (Math.random() < 0.08) this._metal(b, t, 0.02, 0.6 + Math.random() * 0.8, 0.6);
+    }
+    if (s === 0 && (sec === 'drive' || sec === 'theme2') && bar % 8 === 4) this._crash(b, t, 0.04);
+    // virada de tons no fim do ciclo
+    if (bar === 31 && s >= 8) this._tom(b, [50, 50, 47, 47, 43, 43, 40, 40][s - 8], t, s % 2 ? 0.12 : 0.2);
+    // motivo de "metais" + cordas
+    if (s === 0 && (sec === 'theme' || sec === 'theme2' || sec === 'void'))
+      this._strings(b, [root, root + 7, root + 12 + (ci === 3 ? 4 : 3)], t, six * 15, 0.016, 1300);
+    if (sec === 'theme' || sec === 'theme2')
+      this._melody(LAB_THEME[(bar - (sec === 'theme' ? 12 : 24)) % 8], s, t, six, (n, d) =>
+        this._voice(b, n + (sec === 'theme2' ? 12 : 0), t, d * 0.95, { types: ['sawtooth', 'sawtooth', 'square'], vol: 0.04, cutoff: 1500, env: 0.6, detune: 10, attack: 0.06, release: 0.3, vib: 6, send: 0.2, dist: 0.3 }),
+      );
+    m.step++;
+    m.next = t + six;
+  }
+
+  _labTense(m, t) {
+    const x = this.tension;
+    const six = 60 / BPM.labTense / 4;
+    const s = m.step % 16;
+    const bar = Math.floor(m.step / 16) % 16;
+    const ci = bar % 4;
+    const root = [36, 36, 37, 30][ci]; // Dó, Dó, Ré♭, Sol♭ (trítono)
+    const sec = bar < 4 ? 'build' : bar < 12 ? 'chaos' : bar < 14 ? 'break' : 'roll';
+    const b = m.bus;
+    // baixo distorcido em semicolcheias, com trítono e segunda menor
+    if (sec !== 'break') {
+      const off = [0, 0, 12, 0, 0, 0, 6, 0, 0, 0, 12, 0, 3, 0, 6, 1][s];
+      this._voice(b, root + off, t, six * 0.85, { types: ['sawtooth', 'square'], vol: 0.055, cutoff: 260 + (s / 16) * 500 + x * 700, env: 2, q: 6, detune: 7, dist: 0.7 });
+    }
+    // cordas em trêmolo subindo meio tom por compasso
+    if (sec !== 'break') {
+      const n = 72 + ci;
+      this._voice(b, n, t, six * 0.9, { types: ['sawtooth', 'sawtooth'], vol: sec === 'build' ? 0.012 + (bar / 4) * 0.008 : 0.014, cutoff: 2600, detune: 14, attack: 0.01, pan: -0.3 });
+      this._voice(b, n + 7, t, six * 0.9, { types: ['sawtooth', 'sawtooth'], vol: 0.009, cutoff: 2600, detune: 14, attack: 0.01, pan: 0.3 });
+    }
+    if (sec === 'build') {
+      if (s % 2 === 0) this._hat(b, t, 0.02);
+      if (bar === 3 && s % 2 === 0) this._snare(b, t, 0.04 + s * 0.008);
+    } else if (sec === 'chaos') {
+      if (s % 4 === 0 || s === 14) this._kick(b, t, 0.48);
+      if (s === 4 || s === 12) {
+        this._snare(b, t, 0.16);
+        this._metal(b, t, 0.04, 1.1);
+      }
+      this._hat(b, t, s % 2 ? 0.012 : 0.03);
+      // acordes de "metais" em cluster (tônica, segunda menor, trítono)
+      if ([0, 3, 6, 10].includes(s))
+        for (const i of [24, 25, 30]) this._voice(b, root + i, t, six * (s === 10 ? 3 : 1.6), { types: ['sawtooth', 'sawtooth'], vol: 0.016, cutoff: 1300, env: 2.2, detune: 12, dist: 0.4, pan: ((i % 3) - 1) * 0.4 });
+      if (bar >= 8)
+        this._melody(TENSE_FALL, s, t, six, (n, d) =>
+          this._voice(b, n, t, d * 0.95, { types: ['sawtooth', 'square'], vol: 0.04, cutoff: 1800, env: 0.8, detune: 9, vib: 10, send: 0.25, dist: 0.35 }),
+        );
+      if ((bar === 4 || bar === 8) && s === 0) this._siren(b, t, six * 32, 60, 72, 0.025);
+      if (ci === 3 && s >= 12) this._tom(b, [48, 45, 41, 38][s - 12], t, 0.2);
+    } else if (sec === 'break') {
+      if (bar === 12 && s === 0) {
+        this._impact(b, t, 0.5);
+        this._crash(b, t, 0.05);
+      }
+      if (s % 4 === 0) this._voice(b, 96, t, 0.015, { types: ['sine'], vol: 0.025, cutoff: 9000 });
+      if (Math.random() < 0.1) this._metal(b, t, 0.025, 0.5 + Math.random(), 0.7);
+    } else {
+      // rufo crescendo até voltar o caos
+      const k = ((bar - 14) * 16 + s) / 32;
+      this._snare(b, t, 0.03 + k * 0.12);
+      if (s % 4 === 0) this._kick(b, t, 0.3 + k * 0.2);
+      if (bar === 15 && s >= 8) this._tom(b, [52, 50, 48, 45, 43, 41, 38, 36][s - 8], t, 0.18);
+    }
+    if (s === 0 && (bar === 4 || bar === 8)) this._crash(b, t, 0.05);
+    m.step++;
+    m.next = t + six;
+  }
+
+  _labEpic(m, t) {
+    const six = 60 / BPM.labEpic / 4;
+    const s = m.step % 16;
+    const bar = Math.floor(m.step / 16) % 24;
+    const [root, tri] = [
+      [50, [0, 3, 7]],
+      [46, [0, 4, 7]],
+      [43, [0, 3, 7]],
+      [45, [0, 4, 7]],
+    ][bar % 4];
+    const sec = bar < 4 ? 'intro' : bar < 12 ? 'rise' : 'theme';
+    const b = m.bus;
+    // cordas: acorde grave que respira a cada compasso
+    if (s === 0) {
+      this._strings(b, [root - 12, root + tri[1], root + tri[2], root + 12], t, six * 15, sec === 'intro' ? 0.02 : 0.024, sec === 'theme' ? 2200 : 1500);
+      this._timpani(b, root - 24, t, sec === 'intro' ? 0.25 : 0.32);
+    }
+    if (sec === 'intro' && bar % 2 === 1 && s >= 12) this._timpani(b, root - 24, t, 0.05 + (s - 12) * 0.03); // rufo
+    if (sec !== 'intro') {
+      // ostinato grave das cordas em colcheias
+      if (s % 2 === 0) {
+        const pat = [0, 7, 12, 7, 0, 7, 12, tri[1] + 12];
+        this._voice(b, root - 12 + pat[s / 2], t, six * 1.6, { types: ['sawtooth', 'sawtooth'], vol: 0.03, cutoff: 900, env: 0.8, detune: 10, attack: 0.02 });
+      }
+      if (s % 4 === 0) this._voice(b, root - 24, t, six * 3.5, { types: ['sawtooth', 'square'], vol: 0.06, cutoff: 190, env: 2.5, q: 5, dist: 0.5 });
+      // percussão industrial em meio tempo
+      if (s === 0 || s === 10) this._kick(b, t, 0.5);
+      if (s === 8) {
+        this._snare(b, t, 0.12);
+        this._metal(b, t, 0.04, 0.85, 0.4);
+      }
+      if (s % 4 === 2) this._hat(b, t, 0.02);
+      if (sec === 'theme' && s === 14 && Math.random() < 0.5) this._metal(b, t, 0.02, 1.3);
+      if (s === 0 && (bar === 4 || bar === 12)) {
+        this._impact(b, t, 0.4);
+        this._crash(b, t, 0.05);
+      }
+    }
+    if (bar === 11 && s >= 8) this._tom(b, [45, 45, 43, 43, 40, 40, 38, 38][s - 8], t, s % 2 ? 0.12 : 0.2);
+    if (sec === 'theme') {
+      this._melody(EPIC[(bar - 12) % 8], s, t, six, (n, d) => {
+        this._voice(b, n, t, d * 0.95, { types: ['sawtooth', 'sawtooth', 'square'], vol: 0.04, cutoff: 2000, env: 0.5, detune: 11, attack: 0.05, vib: 12, send: 0.25, release: 0.3, dist: 0.25 });
+        // cordas dobrando a melodia uma oitava abaixo
+        this._voice(b, n - 12, t, d, { types: ['sawtooth', 'sawtooth', 'sawtooth'], vol: 0.02, cutoff: 1600, detune: 14, attack: 0.18, release: 0.6, vib: 10 });
+      });
+    }
     m.step++;
     m.next = t + six;
   }

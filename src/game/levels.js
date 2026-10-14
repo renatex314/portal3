@@ -72,7 +72,7 @@ export const LEVELS = [
     id: 1,
     name: 'A Bancada',
     who: 'Helena',
-    music: 'doc',
+    music: 'lab',
     lesson: 'Atravesse o vão usando dois portais.',
     build(w) {
       const booths = [];
@@ -118,7 +118,7 @@ export const LEVELS = [
     id: 2,
     name: 'Itabirito',
     who: 'Luciana',
-    music: 'doc',
+    music: 'lab',
     lesson: 'Busque a amostra lá no alto e coloque-a no botão.',
     build(w) {
       const booths = [];
@@ -157,7 +157,7 @@ export const LEVELS = [
     id: 3,
     name: 'Fogo!',
     who: 'Bigode',
-    music: 'doc',
+    music: 'lab',
     lesson: 'Velocidade que entra, velocidade que sai.',
     build(w) {
       const booths = [];
@@ -194,7 +194,7 @@ export const LEVELS = [
     id: 4,
     name: 'O Poço',
     who: 'Seu Tião',
-    music: 'descent',
+    music: 'labTense',
     lesson: 'Use a queda do poço para atravessar o abismo.',
     build(w) {
       const booths = [];
@@ -242,7 +242,7 @@ export const LEVELS = [
     id: 5,
     name: 'Calor',
     who: 'Marquinho',
-    music: 'descent',
+    music: 'labTense',
     lesson: 'Leve a amostra até a ilha do meio sem tocar na rocha fundida.',
     heat: true,
     build(w) {

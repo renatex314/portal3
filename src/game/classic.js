@@ -40,7 +40,7 @@ function glassWall(w, axis, a0, a1, c0, c1, h, glassTo = 4) {
 
 const lights = (w, pts, y, k = 45) => pts.forEach(([x, z]) => w.light(x, y, z, k));
 
-const C = (n, def) => ({ ...def, id: 100 + n, n, code: `C${String(n).padStart(2, '0')}`, series: 'classic', music: def.music ?? 'doc' });
+const C = (n, def) => ({ ...def, id: 100 + n, n, code: `C${String(n).padStart(2, '0')}`, series: 'classic', music: def.music ?? 'lab' });
 
 export const CLASSIC = [
   // ------------------------------------------------------------------ C00
@@ -398,7 +398,7 @@ export const CLASSIC = [
     name: 'Torretas',
     who: 'Marquinho',
     lesson: 'Passe pelas torretas: use as amostras como escudo ou derrube-as.',
-    music: 'descent',
+    music: 'labTense',
     build(w) {
       room(w, -8, 8, -24, 6, 8, { n: false, w: 'white', e: 'white', s: 'metal', ceil: 'white' });
       northWallWithExit(w, -8, 8, 8, -24, null);

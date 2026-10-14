@@ -177,9 +177,15 @@ segurando um objeto arremessa, `R` reinicia, `Esc` pausa. Precisa de teclado e m
 Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
 Visual: texturas procedurais com relevo e rugosidade (paredes, pisos e tetos diferentes, chapa
-antiderrapante, sujeira e desgaste), brilho das luzes, vinheta, poeira no ar e sombras de contato.
+antiderrapante, sujeira e desgaste), desfoque de movimento da câmera, mais forte em alta velocidade (botão “Desfoque” no menu e
+na pausa), brilho das luzes, vinheta, poeira no ar e sombras de contato.
 Arma com garras articuladas que balança, atrasa ao virar e abre segurando objetos; torretas com
 clarão e rastro de bala; portas com indicador; objetos desintegram na grade e na fornalha.
+
+Música: composições próprias sintetizadas ao vivo, num clima sério e tenso de laboratório — drone
+grave, baixo distorcido e batida industrial com golpes metálicos nas câmaras; versão caótica a 138 bpm
+(trítono, acordes em cluster, cordas em trêmolo, sirene) nos desafios e com torretas; cordas, tímpanos
+e tema sombrio na série Momento.
 
 Original: sem nomes, marcas ou arquivos de outros jogos.
 

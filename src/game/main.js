@@ -32,6 +32,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
+// conferir cada shader trava a CPU até a placa terminar de compilar; só no desenvolvimento
+renderer.debug.checkShaderErrors = import.meta.env.DEV;
 initEnvironment(renderer);
 
 const scene = new THREE.Scene();
@@ -513,6 +515,7 @@ function loadLevel(i, silent = false) {
   completed = false;
   inTube = false;
   sound.setMood(level.music);
+  portals.prewarm(); // compila tudo agora (inclusive a vista pelos portais), não na hora do primeiro portal
   $('lvl-num').textContent = levelLabel(level);
   $('lvl-name').textContent = level.name;
   $('lvl-goal').textContent = level.lesson;
@@ -1096,6 +1099,23 @@ $('final-menu').addEventListener('click', () => {
 });
 $('p-music').addEventListener('click', () => setAudio(!$('opt-music').classList.contains('on'), narrator.enabled));
 $('p-voice').addEventListener('click', () => setAudio($('opt-music').classList.contains('on'), !narrator.enabled));
+// desfoque de movimento (lembrado neste navegador)
+let blurOn = true;
+try {
+  blurOn = localStorage.getItem('tunel-desfoque') !== '0';
+} catch {}
+function setBlur(on) {
+  blurOn = on;
+  post.blur.enabled = on;
+  $('opt-blur').classList.toggle('on', on);
+  $('p-blur').classList.toggle('on', on);
+  try {
+    localStorage.setItem('tunel-desfoque', on ? '1' : '0');
+  } catch {}
+}
+setBlur(blurOn);
+$('opt-blur').addEventListener('click', () => setBlur(!blurOn));
+$('p-blur').addEventListener('click', () => setBlur(!blurOn));
 if (!narrator.available) setTimeout(() => !narrator.available && $('opt-voice').classList.remove('on'), 1500);
 if (matchMedia('(pointer: coarse)').matches) $('mobile').hidden = false;
 renderMenu();
@@ -1551,7 +1571,9 @@ function frame() {
   dissolver.update(dt);
   shadows.update(level ? [...cubes, ...turrets] : [], world, gravityAt);
   motes.userData.update(t, camera, window.innerHeight * renderer.getPixelRatio());
-  post.render(dt, t, clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), scene, camera);
+  const spd = running && level ? player.vel.length() : 0;
+  const ahead = spd > 0.1 ? player.vel.dot(camForward()) / spd : 0;
+  post.render(dt, t, clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), scene, camera, spd, ahead);
   requestAnimationFrame(frame);
 }
 

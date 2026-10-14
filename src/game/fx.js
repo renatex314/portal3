@@ -1,5 +1,5 @@
-// Acabamento visual: pós-processamento (brilho das luzes, vinheta, grão de
-// filme, aberração no tempo lento), poeira no ar, sombras de contato
+// Acabamento visual: pós-processamento (desfoque de movimento, brilho das
+// luzes, vinheta, grão de filme, aberração no tempo lento), poeira no ar, sombras de contato
 // embaixo dos objetos e o efeito de desintegração (grade e fornalha).
 
 import * as THREE from 'three';
@@ -8,6 +8,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { canvas } from './textures.js';
 
 // ------------------------------------------------------------------ pós-processamento
@@ -34,6 +35,118 @@ const FinishShader = {
     }`,
 };
 
+// ------------------------------------------------------------------ desfoque de movimento
+/**
+ * Desfoque da câmera: cada pixel é levado de volta para onde estava no quadro
+ * anterior (profundidade + matrizes das duas câmeras) e a cor é amostrada ao
+ * longo desse caminho. O que está colado na câmera (a arma) não borra e não
+ * "vaza" para o fundo; num salto de portal o histórico é zerado.
+ */
+const blurFS = /* glsl */ `
+  #include <packing>
+  uniform sampler2D tColor, tDepth;
+  uniform mat4 uInvVP, uPrevVP;
+  uniform float uStrength, uNear, uFar, uMaxLen, uRadial;
+  varying vec2 vUv;
+  float viewDist(float d){ return -perspectiveDepthToViewZ(d, uNear, uFar); }
+  void main(){
+    float d = texture2D(tDepth, vUv).x;
+    vec4 ndc = vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec4 w = uInvVP * ndc;
+    w /= w.w;
+    vec4 p = uPrevVP * w;
+    vec2 prev = p.xy / p.w * 0.5 + 0.5;
+    vec2 vel = (vUv - prev) * uStrength;
+    // em alta velocidade: rastro radial a partir do centro (sensação de "túnel")
+    vel += (vUv - 0.5) * uRadial;
+    float len = length(vel);
+    if (len > uMaxLen) vel *= uMaxLen / len;
+    float near = smoothstep(0.9, 1.6, viewDist(d)); // 0 na arma
+    vel *= near;
+    vec4 base = texture2D(tColor, vUv);
+    if (length(vel) * 1500.0 < 1.0) { gl_FragColor = base; return; }
+    vec3 sum = base.rgb;
+    float wsum = 1.0;
+    for (int i = 0; i < 12; i++) {
+      float k = (float(i) + 0.5) / 12.0 - 0.5;
+      vec2 uv = vUv + vel * k;
+      // não puxa a arma para dentro do fundo borrado
+      float ok = smoothstep(0.9, 1.6, viewDist(texture2D(tDepth, uv).x));
+      sum += texture2D(tColor, uv).rgb * ok;
+      wsum += ok;
+    }
+    gl_FragColor = vec4(sum / wsum, base.a);
+  }`;
+
+class MotionBlurPass extends Pass {
+  constructor(camera) {
+    super();
+    this.camera = camera;
+    this.strength = 0.6;
+    this.maxLen = 0.045;
+    this.radial = 0;
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        tColor: { value: null },
+        tDepth: { value: null },
+        uInvVP: { value: new THREE.Matrix4() },
+        uPrevVP: { value: new THREE.Matrix4() },
+        uStrength: { value: 0.6 },
+        uNear: { value: camera.near },
+        uFar: { value: camera.far },
+        uMaxLen: { value: 0.045 },
+        uRadial: { value: 0 },
+      },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: blurFS,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.quad = new FullScreenQuad(this.material);
+    this.vp = new THREE.Matrix4();
+    this.prevVP = new THREE.Matrix4();
+    this.prevPos = new THREE.Vector3();
+    this.prevFwd = new THREE.Vector3();
+    this.fresh = true;
+  }
+
+  /** chame num teletransporte (portal, renascer): o próximo quadro não borra */
+  reset() {
+    this.fresh = true;
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    this.vp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    const pos = cam.getWorldPosition(new THREE.Vector3());
+    const fwd = new THREE.Vector3(0, 0, -1).transformDirection(cam.matrixWorld);
+    // pulo grande de posição ou de direção = passou por um portal / renasceu
+    if (pos.distanceTo(this.prevPos) > 2.5 || fwd.dot(this.prevFwd) < 0.75) this.fresh = true;
+    const u = this.material.uniforms;
+    u.tColor.value = readBuffer.texture;
+    u.tDepth.value = readBuffer.depthTexture;
+    u.uInvVP.value.copy(this.vp).invert();
+    u.uPrevVP.value.copy(this.fresh ? this.vp : this.prevVP);
+    u.uStrength.value = this.strength;
+    u.uMaxLen.value = this.maxLen;
+    u.uRadial.value = this.fresh ? 0 : this.radial;
+    u.uNear.value = cam.near;
+    u.uFar.value = cam.far;
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.quad.render(renderer);
+    this.prevVP.copy(this.vp);
+    this.prevPos.copy(pos);
+    this.prevFwd.copy(fwd);
+    this.fresh = false;
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.quad.dispose();
+  }
+}
+
 /**
  * Troca o `renderer.render(cena, câmera)` final por: cena (com MSAA) → brilho
  * → tom/cor → acabamento. Os portais continuam renderizando direto nas
@@ -44,8 +157,11 @@ export class Post {
     this.renderer = renderer;
     this.enabled = true;
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    rt.depthTexture = new THREE.DepthTexture(1, 1); // o desfoque de movimento lê a profundidade
     this.composer = new EffectComposer(renderer, rt);
     this.composer.addPass(new RenderPass(scene, camera));
+    this.blur = new MotionBlurPass(camera);
+    this.composer.addPass(this.blur);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 1.6);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
@@ -59,8 +175,11 @@ export class Post {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
-  /** `slow` 0..1 (tempo lento) aumenta a aberração e a vinheta */
-  render(dt, t, slow = 0, scene, camera) {
+  /**
+   * `slow` 0..1 (tempo lento) aumenta a aberração e a vinheta; `speed` (m/s) e
+   * `ahead` (−1..1, quanto do movimento é para a frente) acentuam o desfoque
+   */
+  render(dt, t, slow = 0, scene, camera, speed = 0, ahead = 0) {
     if (!this.enabled) {
       this.renderer.render(scene, camera);
       return;
@@ -70,6 +189,12 @@ export class Post {
     u.uAberr.value = slow * 0.012;
     u.uVignette.value = 0.32 + slow * 0.25;
     this.bloom.strength = 0.45 + slow * 0.25;
+    // no tempo lento a câmera anda pouco por quadro: o rastro fica mais longo;
+    // acima de ~8 m/s o rastro cresce com a velocidade e ganha o borrão radial
+    const fast = THREE.MathUtils.smoothstep(speed, 8, 32);
+    this.blur.strength = (0.6 + slow * 1.4) * (1 + fast * 2.2);
+    this.blur.maxLen = 0.045 + fast * 0.075;
+    this.blur.radial = fast * 0.05 * ahead;
     this.composer.render(dt);
   }
 }
@@ -223,12 +348,25 @@ export class Dissolver {
   constructor(scene) {
     this.scene = scene;
     this.list = [];
+    // modelos invisíveis: os shaders do efeito são compilados ao carregar a fase
+    const tmpl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), this.material(new THREE.Color()));
+    const pts = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3)), this.sparkMaterial(new THREE.Color()));
+    tmpl.visible = pts.visible = false;
+    scene.add(tmpl, pts);
+  }
+
+  material(color) {
+    return new THREE.ShaderMaterial({ uniforms: { uT: { value: 0 }, uColor: { value: color.clone() } }, vertexShader: dissolveVS, fragmentShader: dissolveFS });
+  }
+
+  sparkMaterial(color) {
+    return new THREE.PointsMaterial({ color: color.clone().multiplyScalar(3), size: 0.04, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   }
 
   /** `color` da borda: azul na grade, laranja na fornalha/rocha fundida */
   add(mesh, color = new THREE.Color(0.45, 0.8, 1.0)) {
     mesh.updateMatrixWorld(true);
-    const mat = new THREE.ShaderMaterial({ uniforms: { uT: { value: 0 }, uColor: { value: color.clone() } }, vertexShader: dissolveVS, fragmentShader: dissolveFS });
+    const mat = this.material(color);
     const ghost = mesh.clone(true);
     ghost.traverse((o) => {
       if (o.isMesh) o.material = mat;
@@ -247,10 +385,7 @@ export class Dissolver {
       vel.push(new THREE.Vector3((Math.random() - 0.5) * 1.2, Math.random() * 1.5 + 0.3, (Math.random() - 0.5) * 1.2));
     }
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const sparks = new THREE.Points(
-      g,
-      new THREE.PointsMaterial({ color: color.clone().multiplyScalar(3), size: 0.04, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
-    );
+    const sparks = new THREE.Points(g, this.sparkMaterial(color));
     sparks.frustumCulled = false;
     this.scene.add(sparks);
     this.list.push({ ghost, mat, sparks, vel, t: 0 });
