@@ -971,12 +971,12 @@ export class World {
     return L;
   }
 
-  /** receptor da bola de energia: liga o sinal `opens` quando recebe uma */
-  catcher(x, y, z, normal, opens) {
+  /** receptor da bola de energia: liga o sinal `opens` quando recebe uma (`radius`: raio de captura) */
+  catcher(x, y, z, normal, opens, { radius = 0.8 } = {}) {
     const n = new THREE.Vector3(...normal);
     const g = this.socket(n, 0x6fc8ff);
     g.position.set(x, y, z);
-    const C = { pos: new THREE.Vector3(x, y, z).addScaledVector(n, 0.25), normal: n, opens, active: false, group: g };
+    const C = { pos: new THREE.Vector3(x, y, z).addScaledVector(n, 0.25), normal: n, opens, active: false, group: g, radius };
     this.catchers.push(C);
     return C;
   }

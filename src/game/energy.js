@@ -209,7 +209,7 @@ export class EnergySystem {
       p.sprite.material.rotation = t * 3;
       p.sprite.scale.setScalar(1.2 + Math.sin(t * 25) * 0.12);
       // receptor
-      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(p.pos) < 0.8);
+      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(p.pos) < (c.radius ?? 0.8));
       if (C) {
         C.active = true;
         p.from.done = true;

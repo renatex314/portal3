@@ -197,7 +197,7 @@ function applyRoomFlags(flags) {
 
 function fillMapSelect() {
   const sel = $('room-map');
-  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
+  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : L.code ? L.code : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
   sel.value = String(levelIdx);
 }
 $('room-map').addEventListener('change', (e) => {
@@ -539,6 +539,7 @@ progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.
 progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.momentum = Math.max(progress.momentum || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.frontier = Math.max(progress.frontier || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.boss = Math.max(progress.boss || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.campaign = Math.max(progress.campaign || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
 const saveProgress = () => {
@@ -548,7 +549,7 @@ const saveProgress = () => {
 };
 
 const levelLabel = (L) =>
-  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
+  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -1375,6 +1376,7 @@ function renderMenu() {
     ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
     ['Série Momento', 'arremessos encadeados: abra os portais nos painéis diagonais em pleno voo', (L) => L.series === 'momentum'],
     ['Série Fronteira', 'mapas enormes com tudo junto: lasers, funis, placas de lançamento, viagem no tempo, antigravidade, buracos negros e a Lua', (L) => L.series === 'frontier'],
+    ['Série Chefes', 'um inimigo gigante por fase: use a energia dele contra ele e acalme-o para abrir a saída', (L) => L.series === 'boss'],
     ['Campanha original', 'precisa da sua cópia do Portal (Valve): escolha o pacote gerado com "npm run pacote" ou a pasta do jogo — tudo é lido só no seu navegador', (L) => L.series === 'campaign'],
     ['Exploração', '', (L) => L.free],
   ];

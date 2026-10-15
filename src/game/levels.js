@@ -11,6 +11,7 @@ import { HARD } from './hard.js';
 import { MOMENTUM } from './momentum.js';
 import { MOMENTUM2 } from './momentum2.js';
 import { FRONTIER } from './fronteira.js';
+import { CHEFES } from './chefe.js';
 
 const G = 9.8;
 const DIRS = {
@@ -383,6 +384,8 @@ LEVELS.push(...MOMENTUM);
 LEVELS.push(...MOMENTUM2);
 // série Fronteira: mapas enormes com todas as mecânicas juntas (e a Lua)
 LEVELS.push(...FRONTIER);
+// série Chefes: um inimigo gigante por fase, resolvido com bolas de energia
+LEVELS.push(...CHEFES);
 // (a campanha original entra depois desta lista, pelo main.js — ver src/game/campaign)
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);

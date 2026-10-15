@@ -193,6 +193,12 @@ Lua pela claraboia abre o portal lá; o vácuo puxa tudo, e a Lua tem gravidade 
 
 Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
+**Série Chefes** — um inimigo gigante por fase, resolvido com bolas de energia e portais.
+
+| Chefe | Personagem | O que tem |
+|-------|------------|-----------|
+| B01 Sistema Nervoso | Helena | um crânio de 13 m com as veias e os nervos à mostra (raízes que se debatem até as paredes e o teto, mandíbula que bate os dentes). Ele cospe bolas de energia das têmporas (cruzam o salão), da boca (retas para você) e dos olhos (chuva torta). Leve a energia dele até os três gânglios (ombros e garganta) com os portais: a cada acerto os nervos recuam e os olhos esfriam, e no fim sobra só o feixe arrumado — o "sistema tranquilo" — e a porta de trás se abre. Resolvido de ponta a ponta pelo robô de teste |
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
 segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
@@ -334,7 +340,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js (série Chefes: o crânio do B01), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação
