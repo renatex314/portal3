@@ -22,6 +22,10 @@ import { initEnvironment, portalGun, sampleCube, drawGunHolo } from './models.js
 import { Post, dust, ContactShadows, Dissolver } from './fx.js';
 import { Frontier } from './frontier.js';
 import { Chronos } from './relogio.js';
+import './editor/editor.css';
+import { createEditor } from './editor/editor.js';
+import { store as mineStore } from './editor/store.js';
+import { compile as compileMine } from './editor/doc.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
@@ -198,7 +202,7 @@ function applyRoomFlags(flags) {
 
 function fillMapSelect() {
   const sel = $('room-map');
-  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : L.code ? L.code : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
+  sel.innerHTML = LEVELS.map((L, i) => L.editor ? '' : `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : L.code ? L.code : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
   sel.value = String(levelIdx);
 }
 $('room-map').addEventListener('change', (e) => {
@@ -686,7 +690,7 @@ const saveProgress = () => {
 };
 
 const levelLabel = (L) =>
-  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.series === 'experiment' ? `Experimento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
+  L.free ? 'Mapa livre' : L.series === 'mine' ? `Meu nível ${L.code}` : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.series === 'experiment' ? `Experimento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -987,9 +991,11 @@ function loadLevel(i, silent = false) {
   updateGems();
   levelTime = 0;
   completed = false;
+  REC.samples = [];
+  REC.acc = 0;
   inTube = false;
   sound.setMood(level.music);
-  portals.prewarm(); // compila tudo agora (inclusive a vista pelos portais), não na hora do primeiro portal
+  if (!editing) portals.prewarm(); // compila tudo agora (inclusive a vista pelos portais), não na hora do primeiro portal
   $('lvl-num').textContent = levelLabel(level);
   $('lvl-name').textContent = level.name;
   $('lvl-goal').textContent = level.lesson;
@@ -998,6 +1004,7 @@ function loadLevel(i, silent = false) {
   updateCrosshair();
   if (silent) return;
   playLines(data.intro ?? [], 1200);
+  if (level.series === 'mine') return;
   progress.last = i;
   saveProgress();
 }
@@ -1290,11 +1297,17 @@ function complete(final) {
   const t = levelTime;
   const prev = progress.best[level.id];
   if (!prev || t < prev) progress.best[level.id] = t;
-  if (level.series) progress[level.series] = Math.max(progress[level.series], level.n + 2);
+  if (level.series === 'mine') {
+    // níveis do jogador não mexem no progresso
+  } else if (level.series) progress[level.series] = Math.max(progress[level.series], level.n + 2);
   else progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
   saveProgress();
   document.exitPointerLock?.();
-  $('next').hidden = !LEVELS[levelIdx + 1] || LEVELS[levelIdx + 1].series !== level.series || !!LEVELS[levelIdx + 1].free;
+  if (testingMine && REC.samples.length > 10) {
+    editor?.saveProof({ dt: 1 / 30, samples: REC.samples.slice(), time: t });
+    toast('Prova gravada: o seu caminho até a saída ficou no editor (aba Robô).');
+  }
+  $('next').hidden = level.series === 'mine' || !LEVELS[levelIdx + 1] || LEVELS[levelIdx + 1].series !== level.series || !!LEVELS[levelIdx + 1].free;
   if (final) {
     showFinal(t);
     return;
@@ -1303,6 +1316,7 @@ function complete(final) {
   $('done-title').textContent = `${levelLabel(level)} concluíd${ending}`;
   $('done-time').textContent = `Tempo: ${fmt(t)}${prev && prev <= t ? ` · recorde ${fmt(prev)}` : ' · novo recorde!'}`;
   $('done').hidden = false;
+  $('done-editor').hidden = !testingMine;
 }
 
 function showFinal(t = levelTime) {
@@ -1363,6 +1377,11 @@ function updateCrosshair() {
 // ------------------------------------------------------------------ entrada
 const KEYS = { KeyW: 'f', ArrowUp: 'f', KeyS: 'b', ArrowDown: 'b', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'F5' && testingMine) {
+    e.preventDefault();
+    backToEditor();
+    return;
+  }
   if (KEYS[e.code]) input[KEYS[e.code]] = true;
   if (!running || paused) return;
   if (e.code === 'Space') {
@@ -1546,6 +1565,7 @@ document.addEventListener('pointerlockchange', () => {
   paused = !locked;
   $('pause').hidden = locked || !running || completed;
   if (!$('pause').hidden) fillMapSelect();
+  $('back-editor').hidden = !testingMine;
   $('room-map-label').textContent = mp() ? 'Mapa da sala (muda para todos):' : 'Mapa:';
   document.body.classList.toggle('playing', locked);
   for (const k of Object.keys(input)) input[k] = false;
@@ -1566,6 +1586,150 @@ function setAudio(music, voice) {
   if (!narrator.enabled) narrator.cancel();
   $('opt-music').classList.toggle('on', music);
   $('opt-voice').classList.toggle('on', narrator.enabled);
+}
+
+// ------------------------------------------------------------------ editor de níveis
+let editing = false; // o editor está aberto (câmera livre, nada de jogador)
+let testingMine = false; // jogando um nível a partir do editor (F5 volta)
+let editor = null;
+const EDIT_LEVEL0 = { id: 'editor', name: 'Editor', series: 'mine', n: 0, code: 'ED', who: 'Você', lesson: '', editor: true, build: () => ({ spawn: [0, 0, 0, 0] }) };
+let editLevel = EDIT_LEVEL0;
+LEVELS.push(editLevel); // a campanha entra no meio da lista depois: por isso o índice é sempre achado por objeto
+const mineLevels = new Map(); // id do documento → fase compilada (a mesma que está em LEVELS)
+const slotOf = (L) => LEVELS.indexOf(L);
+
+/** põe/atualiza o nível guardado na lista de fases do jogo e devolve o objeto */
+function mineLevel(doc, k) {
+  const L = compileMine(doc, k);
+  const old = mineLevels.get(doc.id);
+  if (old && slotOf(old) >= 0) LEVELS[slotOf(old)] = L;
+  else LEVELS.push(L);
+  mineLevels.set(doc.id, L);
+  return L;
+}
+
+function getEditor() {
+  editor ??= createEditor({
+    scene,
+    camera,
+    canvas,
+    world,
+    portals,
+    toast,
+    gravityAt,
+    makeGhost: makeCloneGhost,
+    // reconstrói o mundo com o documento atual (sem som, sem texto, sem compilar sombreadores à toa)
+    rebuild(L) {
+      const i = slotOf(editLevel);
+      editLevel = Object.assign(L, { editor: true });
+      LEVELS[i] = editLevel;
+      loadLevel(i, true);
+    },
+    // joga o nível: é a mesma fase, só que valendo
+    test(L) {
+      const i = slotOf(editLevel);
+      editLevel = Object.assign(L, { editor: true });
+      LEVELS[i] = editLevel;
+      editing = false;
+      testingMine = true;
+      $('menu').hidden = true;
+      $('done').hidden = true;
+      running = true;
+      completed = false;
+      loadLevel(i);
+      lock();
+    },
+    leave() {
+      editing = false;
+      running = false;
+      testingMine = false;
+      level = null; // o fundo do menu recarrega a primeira câmara
+      $('menu').hidden = false;
+      renderMenu();
+    },
+  });
+  return editor;
+}
+
+function openEditor(docId) {
+  sound.init();
+  $('menu').hidden = true;
+  $('pause').hidden = true;
+  $('done').hidden = true;
+  document.exitPointerLock?.();
+  running = false;
+  completed = false;
+  paused = true;
+  editing = true;
+  testingMine = false;
+  getEditor().open(docId);
+}
+
+function backToEditor() {
+  if (!testingMine || !editor?.doc) return;
+  document.exitPointerLock?.();
+  $('pause').hidden = true;
+  $('done').hidden = true;
+  running = false;
+  completed = false;
+  paused = true;
+  editing = true;
+  toggleSlowmo(false);
+  editor.resume();
+}
+$('back-editor').addEventListener('click', backToEditor);
+$('done-editor').addEventListener('click', backToEditor);
+$('open-editor').addEventListener('click', () => openEditor(null));
+
+/** grupo "Meus níveis" do menu: seus níveis (jogar/editar), novo e importar */
+function renderMine(grid) {
+  const h = document.createElement('div');
+  h.className = 'lvl-head';
+  h.innerHTML = '<b>Meus níveis</b><span>feitos por você no editor — ficam neste navegador; exporte para compartilhar</span>';
+  grid.appendChild(h);
+  const tools = document.createElement('div');
+  tools.className = 'lvl-tools';
+  const mk = (label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    tools.appendChild(b);
+  };
+  mk('＋ Novo nível', () => openEditor(null));
+  mk('⇪ Importar .json', async () => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json';
+    inp.addEventListener('change', async () => {
+      try {
+        const doc = await mineStore.importFile(inp.files[0]);
+        mineStore.save(doc);
+        toast(`“${doc.name}” importado.`);
+        renderMenu();
+      } catch (err) {
+        toast(`Não deu para importar: ${err.message}`);
+      }
+    });
+    inp.click();
+  });
+  grid.appendChild(tools);
+  mineStore.list().forEach((doc, k) => {
+    const L = mineLevel(doc, k);
+    const b = document.createElement('button');
+    b.className = 'lvl mine';
+    b.innerHTML = `<span class="n">${L.code}</span><b>${doc.name.replace(/</g, '&lt;')}</b><small>${doc.items.length} itens</small>${progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''}`;
+    b.addEventListener('click', () => startLevel(slotOf(L)));
+    const e = document.createElement('span');
+    e.className = 'edit';
+    e.textContent = '✎ editar';
+    e.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      openEditor(doc.id);
+    });
+    b.appendChild(e);
+    grid.appendChild(b);
+  });
 }
 
 function renderMenu() {
@@ -1601,9 +1765,12 @@ function renderMenu() {
       grid.appendChild(b);
     });
   }
+  renderMine(grid);
 }
 
 async function startLevel(i) {
+  if (LEVELS[i].series === 'mine' && mp()) return toast('Os seus níveis são só para o modo solo.');
+  if (!LEVELS[i].editor) testingMine = false;
   if (LEVELS[i].preload) {
     // campanha original: o mapa vem da instalação do jogador
     if (mp()) return toast('A campanha original é só no modo solo.');
@@ -1757,6 +1924,7 @@ import('./campaign/hook.js').then((m) => {
     m.dialogue.onSubtitle = campaignSubtitle;
     const before = LEVELS.findIndex((L) => L.free);
     LEVELS.splice(before < 0 ? LEVELS.length : before, 0, ...m.CAMPAIGN);
+    if (level) levelIdx = Math.max(0, LEVELS.indexOf(level)); // a lista cresceu no meio: o índice da fase atual andou
     renderMenu();
     const want = new URLSearchParams(location.search).get('campanha');
     const idx = want ? LEVELS.findIndex((L) => L.map === want) : -1;
@@ -1815,7 +1983,19 @@ function updateRex(dt) {
   }
 }
 
+// prova gravada do teste a partir do editor: o caminho a 30 quadros por segundo
+const REC = { samples: [], acc: 0 };
+function recordRun(dt) {
+  REC.acc += dt;
+  while (REC.acc >= 1 / 30) {
+    REC.acc -= 1 / 30;
+    const r = (v) => Math.round(v * 100) / 100;
+    REC.samples.push([r(player.pos.x), r(player.pos.y), r(player.pos.z), r(player.yaw), r(player.pitch), player.grounded ? 1 : 0, player.upSign]);
+  }
+}
+
 function update(dt, t) {
+  if (testingMine && !completed) recordRun(dt);
   data?.campaign?.runtime?.update(dt);
   updateBolts(dt, t);
   updateAim(realDt);
@@ -2292,7 +2472,15 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   realDt = dt;
   const t = clock.elapsedTime;
-  if (running && level) {
+  if (editing) {
+    editor.frame(dt);
+    gun.visible = false;
+    world.update(t, dt);
+    portals.update(t, dt);
+    for (const w of npcList) poseWorker(w, t, dt);
+    updateDinos(t, dt);
+    portals.render();
+  } else if (running && level) {
     netTick(dt);
     updateAvatars(dt, t);
     if (manualStep) {
@@ -2376,4 +2564,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  get campaign() { return campaign; }, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get editor() { return editor; }, openEditor, mineLevel, get editing() { return editing; }, get testingMine() { return testingMine; }, backToEditor, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

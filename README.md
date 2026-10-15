@@ -211,6 +211,17 @@ Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
 Todas foram resolvidas de ponta a ponta pelo robô de teste, que também provou cada tipo de paradoxo (cubo sobre o clone, bola de energia no caminho dele, destino ocupado e salto para antes da chegada).
 
+### Editor de níveis (estilo Portal 2)
+
+No menu, **🛠 Editor de níveis** (ou **＋ Novo nível** em *Meus níveis*). Os níveis ficam no navegador (`localStorage`); **Exportar** baixa um `.nivel.json` e **Importar** o lê de volta. Eles aparecem em *Meus níveis* e rodam como qualquer fase. `F5` testa e volta.
+
+- **① Câmara:** a câmara é feita de **células de 4 m** numa grade. *Abrir células* (A), *Fechar células* (X) e *Pintar faces* (P): branco aceita portal, preto/metal não, vidro. Clique ou arraste; `Shift` pinta a parede inteira. As paredes surgem sozinhas e a luz de teto é automática. O teto some do editor; **Andar −/+** (PgUp/PgDn) escolhe a altura em que você desenha.
+- **② Itens:** escolha na paleta e clique: botão, cubo, torreta, placa de lançamento e elevador encaixam no centro da célula; lançadores, receptores, lasers, portais fixos e placas de texto, na parede; portas e grades, numa face inteira de célula. `R` gira 90°, arraste move, `Del` apaga, `Ctrl+D` duplica, `Ctrl+Z/Y` desfaz/refaz. **＋ Ligar a…** conecta um botão/receptor a uma porta, plataforma ou funil (as linhas coloridas mostram as ligações). Blocos livres, rampas, painéis diagonais, zonas de gravidade, buracos negros e o resto estão na paleta; as alças ✥ ⟳ ⤢ (avançado) movem, giram e esticam com grade.
+- **Ferramentas:** **Régua** (distâncias e alturas), **Trajetória** (arco de cada placa de lançamento e caminho das bolas de energia, e um lançamento livre com ângulo e velocidade: mostra altura, alcance, tempo, velocidade e o que acontece no fim, atravessando portais fixos), **Alcance** (o que o jogador alcança andando, pulando, caindo, pelas placas e pelos portais fixos, e se o elevador de saída entra), **Validar** (botão sem porta, partida dentro da parede, sem superfície de portal…) e **Robô** (ao completar o nível no teste, o seu caminho vira uma *prova* que o editor reproduz como fantasma; ela fica desatualizada se o nível mudar).
+- Câmera: botão direito + `WASD` voa (`Q`/`E` descem e sobem, `Shift` acelera, roda ajusta a velocidade), botão do meio arrasta, roda aproxima, `F` foca. `1`/`2` trocam de aba.
+
+A trajetória e o alcance são **estimativas** do centro do corpo com a física do jogo (validadas contra o voo real de uma placa: pouso a ≤ 0,1 m); não incluem funis nem o jogador mudando de direção no ar.
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
 segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
@@ -352,7 +363,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), experimento.js e relogio.js (série Experimento: o relógio do tempo, clones e paradoxos), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), experimento.js e relogio.js (série Experimento: o relógio do tempo, clones e paradoxos), editor/ (editor de níveis: câmara em células, itens, trajetória, alcance, validação e robô gravado), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

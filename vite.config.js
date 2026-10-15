@@ -61,6 +61,9 @@ function portalData() {
 export default defineConfig({
   base: './',
   plugins: [portalData()],
+  resolve: { dedupe: ['three'] },
+  // o editor de níveis usa as alças do three/examples: pré-empacota junto com o three (uma cópia só)
+  optimizeDeps: { include: ['three', 'three/examples/jsm/controls/TransformControls.js'] },
   build: {
     chunkSizeWarningLimit: 5000, // o motor de física (Rapier) vem com o WebAssembly embutido
     rollupOptions: {
