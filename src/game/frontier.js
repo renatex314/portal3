@@ -18,6 +18,29 @@ const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const FUNNEL_R = 1.3;
+const _rq = new THREE.Quaternion();
+const _ro = new THREE.Vector3();
+const _rd = new THREE.Vector3();
+/** raio × cubo de meia-aresta `h` em `p` com giro `q`: distância ou null */
+function rayBox(o, d, p, q, h) {
+  _rq.copy(q).invert();
+  _ro.copy(o).sub(p).applyQuaternion(_rq);
+  _rd.copy(d).applyQuaternion(_rq);
+  let t0 = 0;
+  let t1 = Infinity;
+  for (const a of ['x', 'y', 'z']) {
+    if (Math.abs(_rd[a]) < 1e-9) {
+      if (Math.abs(_ro[a]) > h) return null;
+      continue;
+    }
+    let ta = (-h - _ro[a]) / _rd[a];
+    let tb = (h - _ro[a]) / _rd[a];
+    if (ta > tb) [ta, tb] = [tb, ta];
+    t0 = Math.max(t0, ta);
+    t1 = Math.min(t1, tb);
+  }
+  return t0 <= t1 ? t0 : null;
+}
 
 // cilindro de raio 1 indo de y = 0 a y = 1 (é esticado de ponta a ponta de cada trecho)
 const UNIT = new THREE.CylinderGeometry(1, 1, 1, 16, 1, true).translate(0, 0.5, 0);
@@ -114,15 +137,105 @@ export class Frontier {
   }
 
   // ------------------------------------------------------------------ feixes
-  beamMesh() {
+  beamMesh(pool = this.beams) {
     const core = new THREE.Mesh(UNIT, this.laserCore);
     const glow = new THREE.Mesh(UNIT, this.laserGlow);
     core.frustumCulled = glow.frustumCulled = false;
     glow.renderOrder = 8;
     this.group.add(core, glow);
     const b = { core, glow };
-    this.beams.push(b);
+    pool.push(b);
     return b;
+  }
+
+  /**
+   * O laser do passado: com o laranja temporal aberto, o feixe é refeito como era Δ segundos antes
+   * (cubos e portas nas posições da foto). O que entra no laranja sai no azul do presente: devolve
+   * essas saídas [{ o, d }]. Os trechos do passado ficam guardados para a vista do azul.
+   */
+  updatePast(ctx) {
+    const R = ctx.relogio;
+    const O = this.portals.orange;
+    const on = !!R && O.placed && O.delta > 0 && this.portals.isLinked(O) && this.world.lasers.length > 0;
+    if (!on) {
+      this.pastKey = null;
+      this.pastN = 0;
+      this.pastExtra = [];
+      return this.pastExtra;
+    }
+    const sample = R.samples[R.indexAt(R.tw - O.delta)];
+    const k = this.pastKey;
+    if (k && k.sample === sample && k.delta === O.delta && k.c.equals(O.center) && k.n.equals(O.normal)) return this.pastExtra;
+    this.pastKey = { sample, delta: O.delta, c: O.center.clone(), n: O.normal.clone() };
+    const snap = sample.w;
+    const props = [];
+    R.props().forEach((c, i) => {
+      const e = snap.props[i];
+      if (c.kind === 'cube' && e && !e.gone) props.push({ c, p: e.p, q: e.q });
+    });
+    const segs = [];
+    const extra = [];
+    R.inPast(O.delta, () => {
+      for (const L of this.world.lasers) {
+        let o = L.pos;
+        let d = L.dir;
+        let ignore = null;
+        for (let hop = 0; hop < 6; hop++) {
+          const res = this.trace(o, d, { ignore, glass: true, past: props, temporal: true });
+          for (const [a, b] of res.segs) segs.push([a, b]);
+          if (res.temporal) {
+            const pos = res.point.clone();
+            const vel = res.temporal.dir.clone();
+            this.portals.carry(res.temporal.P, pos, vel);
+            vel.normalize();
+            extra.push({ o: pos.addScaledVector(vel, 0.03), d: vel });
+            break;
+          }
+          if (!res.point) break;
+          if (res.prop?.redirect) {
+            const f = new THREE.Vector3(0, 0, 1).applyQuaternion(res.snap.q).normalize();
+            o = res.snap.p.clone().addScaledVector(f, 0.36);
+            d = f;
+            ignore = res.prop;
+            continue;
+          }
+          break;
+        }
+      }
+    });
+    this.pastBeams ??= [];
+    segs.forEach(([a, b], i) => {
+      const beam = this.pastBeams[i] ?? this.beamMesh(this.pastBeams);
+      const dir = _v.subVectors(b, a);
+      const len = dir.length();
+      dir.divideScalar(Math.max(len, 1e-6));
+      for (const [m, r] of [
+        [beam.core, 0.022],
+        [beam.glow, 0.11],
+      ]) {
+        m.visible = false;
+        m.position.copy(a);
+        m.quaternion.setFromUnitVectors(UP, dir);
+        m.scale.set(r, len, r);
+      }
+    });
+    for (let i = segs.length; i < this.pastBeams.length; i++) this.pastBeams[i].core.visible = this.pastBeams[i].glow.visible = false;
+    this.pastN = segs.length;
+    this.pastExtra = extra;
+    return extra;
+  }
+
+  /** vista do azul temporal: os feixes de agora saem e entram os do passado */
+  pastView(on) {
+    if (on) {
+      this._pv = this.beams.map((b) => b.core.visible);
+      for (const b of this.beams) b.core.visible = b.glow.visible = false;
+      for (let i = 0; i < (this.pastN ?? 0); i++) this.pastBeams[i].core.visible = this.pastBeams[i].glow.visible = true;
+    } else if (this._pv) {
+      this.beams.forEach((b, i) => (b.core.visible = b.glow.visible = !!this._pv[i]));
+      for (const b of this.pastBeams ?? []) b.core.visible = b.glow.visible = false;
+      this._pv = null;
+    }
   }
 
   drawBeam(a, b) {
@@ -162,7 +275,7 @@ export class Frontier {
    * objeto ou entra num portal ligado e continua do outro lado. Devolve os
    * trechos [a, b] e o que encerrou o feixe.
    */
-  trace(o, d, { props = true, ignore = null, maxSeg = 8, maxDist = 400, glass = false } = {}) {
+  trace(o, d, { props = true, ignore = null, maxSeg = 8, maxDist = 400, glass = false, past = null, temporal = false } = {}) {
     const segs = [];
     o = o.clone();
     d = d.clone().normalize();
@@ -171,7 +284,20 @@ export class Frontier {
     for (let i = 0; i < maxSeg; i++) {
       const hit = this.world.raycast(o, d, maxDist, filter);
       let ph = null;
-      if (props) ph = this.physics.castRay(o, d, hit ? hit.dist : maxDist, (p) => p === ignore || p.gone, true);
+      let snapHit = null;
+      if (props && past) {
+        // o passado: os cubos nas posições da foto (caixas orientadas)
+        for (const e of past) {
+          if (e.c === ignore) continue;
+          const t = rayBox(o, d, e.p, e.q, 0.3);
+          if (t !== null && t < (hit ? hit.dist : maxDist) && (!snapHit || t < snapHit.dist)) snapHit = { dist: t, e };
+        }
+        if (snapHit) {
+          const end = o.clone().addScaledVector(d, snapHit.dist);
+          segs.push([o, end, d]);
+          return { segs, prop: snapHit.e.c, snap: snapHit.e, point: end };
+        }
+      } else if (props) ph = this.physics.castRay(o, d, hit ? hit.dist : maxDist, (p) => p === ignore || p.gone, true);
       if (ph && (!hit || ph.dist < hit.dist)) {
         const end = o.clone().addScaledVector(d, ph.dist);
         segs.push([o, end, d]);
@@ -183,12 +309,13 @@ export class Frontier {
       }
       segs.push([o, hit.point.clone(), d]);
       const P = this.portals.list.find((Q) => {
-        // o azul temporal não leva a lugar nenhum (é o salto), mas o feixe que entra no laranja do passado sai no azul do presente
         if (!this.portals.isLinked(Q) || Q.partner.delta > 0 || Q.box !== hit.box) return false;
+        if (Q.delta > 0 && !temporal) return false; // o laranja do passado só vale para o feixe do passado (veja updatePast)
         const l = Q.local(hit.point);
         return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && Math.abs(l.z) < 0.05;
       });
       if (!P) return { segs, point: hit.point, normal: hit.normal, box: hit.box };
+      if (P.delta > 0) return { segs, point: hit.point, temporal: { P, dir: d.clone() } };
       const pos = hit.point.clone();
       const vel = d.clone();
       this.portals.carry(P, pos, vel);
@@ -384,9 +511,10 @@ export class Frontier {
     for (const c of ctx.props) if (c.redirect) c.lit = false;
     let burn = 0;
     let nearest = Infinity;
-    for (const L of W.lasers) {
-      let o = L.pos;
-      let d = L.dir;
+    // os feixes de agora e os que saem do azul vindos do laranja do passado
+    for (const L of [...W.lasers, ...this.updatePast(ctx)]) {
+      let o = L.pos ?? L.o;
+      let d = L.dir ?? L.d;
       let ignore = null;
       for (let hop = 0; hop < 6; hop++) {
         const res = this.trace(o, d, { ignore, glass: true });

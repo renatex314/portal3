@@ -70,7 +70,7 @@ export const EXPERIMENTO = [
           ['Helena', 'A ponte só sobe enquanto alguém pisa na placa, e a rocha tem cinquenta metros. Você é um só: precisa de outro você na placa.'],
           ['Helena', 'Pise na placa e espere. Com o tempo parado, a roda do mouse escolhe quantos segundos voltar: laranja no passado, azul no presente. Entre no azul e atravesse: o seu passado continua na placa.'],
         ],
-        hints: [{ after: 60, lines: [['Helena', 'A travessia leva uns doze segundos. Fique na placa mais que isso, pare o tempo, volte uns doze segundos ou mais e corra: o seu passado só sai da placa quando o loop fecha.']] }],
+        hints: [{ after: 60, lines: [['Helena', 'Da parede leste até o elevador são uns vinte segundos correndo. Fique na placa mais que isso, pare o tempo, volte uns vinte e cinco segundos e corra sem parar: o seu passado só sai da placa quando o loop fecha.']] }],
       };
     },
   }),
@@ -148,14 +148,14 @@ export const EXPERIMENTO = [
   E(3, {
     name: 'Três em Um',
     who: 'Seu Tião',
-    lesson: 'A porta só abre com os três botões pisados ao mesmo tempo: dois clones e você. Dois saltos, um dentro do outro.',
+    lesson: 'A porta só abre com os três botões pisados ao mesmo tempo: dois clones e você. O botão perto da porta segura o sinal três segundos depois que você sai dele.',
     build(w) {
       hall(w, -14, 14, -20, 10, 6, { n: false });
       northWallWithExit(w, -14, 14, 6, -20, 'd1');
       // três botões: um com cada "eu"
       w.button(-10, 0, -2, 'd1'); // B1 (oeste)
       w.button(0, 0, 6, 'd1'); // B2 (sul)
-      w.button(5, 0, -17, 'd1'); // B3 (perto da porta)
+      w.button(5, 0, -17, 'd1', { hold: 3 }); // B3 (perto da porta): segura 3 s depois de solto, para você correr até a porta
       for (const [x, z] of [[-10, -2], [0, 6], [5, -17]]) w.strip(x - 0.8, 0.005, z - 0.9, x + 0.8, 0.03, z - 0.8, 0xffb347, 2);
       panel(w, -14, 0, -6, -13.9, 5, 2); // oeste, do lado de B1
       panel(w, -4, 0, 9.9, 4, 5, 10); // sul, do lado de B2
@@ -170,7 +170,7 @@ export const EXPERIMENTO = [
         intro: [
           ['Seu Tião', 'Três botões, uma porta. Ela só abre com os três pisados ao mesmo tempo, e você é um só.'],
           ['Seu Tião', 'Salte do primeiro botão para perto do segundo e deixe o passado pisando o primeiro. Pise o segundo e salte de novo, para perto do terceiro: agora são dois passados e você.'],
-          ['Seu Tião', 'O segundo salto precisa cair depois do primeiro: não dá para voltar a antes da própria chegada. E o passado precisa durar até a porta abrir.'],
+          ['Seu Tião', 'O segundo salto precisa cair depois do primeiro: não dá para voltar a antes da própria chegada. E os dois passados precisam continuar nos botões enquanto você corre: o botão da porta segura só três segundos.'],
         ],
         hints: [
           { after: 150, lines: [['Seu Tião', 'Primeiro salto: azul na parede oeste, laranja na parede sul, com bastante tempo (uns dez segundos). Segundo: azul na sul, laranja ao lado da porta, uns três segundos.']] },

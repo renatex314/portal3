@@ -960,6 +960,7 @@ function loadLevel(i, silent = false) {
         cubes: () => cubes,
         turrets: () => turrets,
         held: () => held,
+        beams: frontier,
         makeGhost: makeCloneGhost,
         t: () => clock.elapsedTime,
         dtReal: () => realDt,
@@ -2151,6 +2152,7 @@ function update(dt, t) {
     player,
     props,
     t,
+    relogio,
     sfx,
     hurt: (dps, h, dir) => {
       health -= dps * h;
@@ -2174,9 +2176,14 @@ function update(dt, t) {
   // ---- botões, receptores e portas (sinais)
   const feet = player.pos.clone().addScaledVector(new THREE.Vector3(0, -1, 0), 0.9 * player.upSign);
   const peers = [...peerFeet(), ...(relogio?.feet() ?? [])];
+  const echoes = relogio?.echoes() ?? []; // cópias do passado do objeto que viajou com você
   for (const b of world.buttons) {
     const near = (p, dy0, dy1) => Math.hypot(p.x - b.pos.x, p.z - b.pos.z) < 0.85 && p.y - b.pos.y > dy0 && p.y - b.pos.y < dy1;
-    const pressed = props.some((c) => !c.held && !c.gone && !c.remote?.held && near(c.pos, 0, 1.0)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
+    const pressed =
+      props.some((c) => !c.held && !c.cloneHeld && !c.gone && !c.remote?.held && near(c.pos, 0, 1.0)) ||
+      echoes.some((p) => near(p, 0, 1.0)) ||
+      near(feet, -0.1, 0.5) ||
+      peers.some((f) => near(f, -0.1, 0.5));
     if (b.hold) b.count = pressed ? b.hold : Math.max(0, b.count - wdt); // sinal que continua ligado depois de solto
     if (pressed !== b.pressed) {
       b.pressed = pressed; // a placa e as luzes se animam em world.update

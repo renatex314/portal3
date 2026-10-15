@@ -10,9 +10,17 @@
 //    linha do tempo). O mundo volta ao instante de destino e o seu eu que saltou
 //    vira um CLONE que repete o que você fez — pisa em botões — até o momento do
 //    salto, quando mergulha no azul "eco" e some.
+//  • O QUE ACONTECEU SE REPETE: depois do salto, cubos e torretas seguem a gravação
+//    ("no trilho") — o que o seu passado segurou, empurrou, arremessou ou mudou de
+//    lugar com o tempo parado, e o que caiu ou rolou sozinho. Só sai do trilho o que
+//    você (o viajante) perturbar: pegar, empurrar, um portal seu no caminho, uma porta
+//    diferente da gravação ou outro objeto já fora do trilho; daí em diante é física.
+//    O objeto que você leva no salto existe duas vezes até o instante do salto: a
+//    cópia do passado (cinza) refaz a gravação e some no azul.
 //  • PARADOXO: se o clone não puder repetir o passado (bola de energia no caminho
-//    dele, porta/cubo na rota, chão que sumiu, destino ocupado…) o loop colapsa e
-//    você volta ao instante do salto, com os portais como estavam.
+//    dele, porta/cubo na rota, chão que sumiu, destino ocupado, o objeto que ele usou
+//    não está no lugar ou foi tirado dele…) o loop colapsa e você volta ao instante
+//    do salto, com os portais como estavam.
 
 import * as THREE from 'three';
 import { PORTAL_A, PORTAL_B } from './portals.js';
@@ -22,6 +30,8 @@ const KEEP = 120; // segundos de história
 const MAX_DELTA = 30;
 const STEP = 0.5; // passo da roda do mouse (s)
 const ECHO = 0.8; // o azul "eco" abre para o mergulho do clone nesse tempo final
+const MERGE = 12; // quadros sem mexer num objeto que ainda contam como o mesmo "uso" dele (0,4 s)
+const MISPLACED = 0.6; // m: o objeto não está onde o seu passado o encontrou → paradoxo
 
 const V3 = THREE.Vector3;
 const _path = new V3();
@@ -90,6 +100,8 @@ export class Chronos {
     this.next = 0;
     this.pre = null;
     this.blocked = false;
+    this.resetDriven();
+    this.gap = false;
     this.record(0);
     this.next = RATE;
     this.setHolo(false);
@@ -165,9 +177,39 @@ export class Chronos {
       mv: !!player.grounded && player.vel.clone().setY(0).lengthSq() > 0.4,
       pt: this.portalState(),
       h: this.props().indexOf(this.ctx.held?.() ?? null),
+      hm: this.pushed(),
+      ...this.gapMoves(),
       w: this.snapshot(),
     });
     while (this.samples.length > 2 && t - this.samples[0].t > KEEP) this.samples.shift();
+  }
+
+  /** cubos que você está empurrando (perto de você e se mexendo): o clone também os empurra */
+  pushed() {
+    const { player } = this.ctx;
+    const held = this.ctx.held?.();
+    const prev = this.samples[this.samples.length - 1]?.w.props;
+    const out = [];
+    this.props().forEach((p, k) => {
+      const q = prev?.[k];
+      // (no trilho, quem mexe é a gravação, não você)
+      if (p === held || p.gone || p.kind !== 'cube' || !q || q.gone || this.driven?.has(p)) return;
+      if (Math.hypot(p.pos.x - player.pos.x, p.pos.z - player.pos.z) < 1.0 && Math.abs(p.pos.y - player.pos.y) < 1.4 && p.pos.distanceTo(q.p) > 0.012) out.push(k);
+    });
+    return out;
+  }
+
+  /** primeiro quadro depois de uma pausa: os objetos que mudaram de lugar com o mundo parado foram mexidos por você */
+  gapMoves() {
+    if (!this.gap) return {};
+    this.gap = false;
+    const prev = this.samples[this.samples.length - 1]?.w.props;
+    const pm = [];
+    this.props().forEach((p, k) => {
+      const q = prev?.[k];
+      if (q && (q.gone !== !!p.gone || (!p.gone && p.pos.distanceTo(q.p) > 0.05))) pm.push(k);
+    });
+    return { gap: true, pm };
   }
 
   indexAt(t) {
@@ -264,6 +306,7 @@ export class Chronos {
   pause(on = !this.paused) {
     if (on === this.paused || this.sweep) return;
     this.paused = on;
+    if (!on) this.gap = true;
     if (on) this.delta = THREE.MathUtils.clamp(this.delta, STEP, Math.max(STEP, this.maxDelta()));
     this.setFreeze(on);
     this.setHolo(on);
@@ -337,6 +380,7 @@ export class Chronos {
       this.syncFreeze();
       this.holoUpdate();
       this.syncAll();
+      this.driveProps();
       return 0;
     }
     this.tw += dt;
@@ -346,7 +390,7 @@ export class Chronos {
       this.next += RATE;
     }
     this.syncAll();
-    this.checkParadox(dt);
+    if (!this.driveProps()) this.checkParadox(dt);
     return dt;
   }
 
@@ -359,7 +403,7 @@ export class Chronos {
     const a = s[i];
     const b = s[Math.min(s.length - 1, i + 1)];
     // um salto de posição entre dois quadros guardados (o jogador parou o tempo e andou, ou atravessou um portal): sem interpolar
-    const jumped = a.p.distanceTo(b.p) > 2.5;
+    const jumped = !!b.gap || a.p.distanceTo(b.p) > 2.5;
     const k = jumped ? 0 : Math.max(0, Math.min(1, f - i));
     return { p: a.p.clone().lerp(b.p, k), yaw: a.yaw + (b.yaw - a.yaw) * k, up: a.up, mv: a.mv && !jumped, grounded: a.grounded, jumped };
   }
@@ -385,7 +429,7 @@ export class Chronos {
       const c = this.clones[i];
       const pose = this.clonePose(c);
       if (!pose) {
-        this.carryProps(c, true);
+        if (c.echo) c.echo.mesh.visible = false;
         // ainda não nasceu ou já mergulhou no azul (o loop fechou); ele continua na história: um novo salto
         // para antes do fim dele o traz de volta
         if (c.ghost) c.ghost.group.visible = false;
@@ -400,7 +444,7 @@ export class Chronos {
       if (this.tw < c.end - ECHO - 0.02) c.echoed = c.closed = false;
       c.ghost ??= this.ctx.makeGhost();
       c.ghost.set(this.feetOf(pose.p, pose.up), pose.yaw, pose.up, pose.mv, t, dt, 0.55);
-      this.carryProps(c);
+      if (c.echo) this.poseEcho(c, this.tw);
       this.cloneBlue(c).visible = true;
       this.syncClonePortals(c, this.tw, true);
       // últimos instantes: o azul "eco" abre para o clone mergulhar
@@ -416,42 +460,230 @@ export class Chronos {
     this.updateEco();
   }
 
+  // ------------------------------------------------------------------ objetos que o seu passado mexeu
+  /** estado gravado do objeto `k` no quadro fracionário `f` do script (sem interpolar sobre pausas e teletransportes) */
+  propAt(script, f, k) {
+    const i = Math.max(0, Math.min(script.length - 1, Math.floor(f)));
+    const a = script[i];
+    const b = script[Math.min(script.length - 1, i + 1)];
+    const pa = a.w.props[k];
+    if (!pa) return null;
+    const pb = b.w.props[k];
+    const smooth = pb && !b.gap && !pa.gone && !pb.gone && pa.p.distanceTo(pb.p) < 2.5;
+    const t = smooth ? Math.max(0, Math.min(1, f - i)) : 0;
+    return { p: pa.p.clone().lerp(smooth ? pb.p : pa.p, t), q: pa.q.clone().slerp(smooth ? pb.q : pa.q, t), v: pa.v, a: pa.a, gone: pa.gone, held: a.h === k };
+  }
+
+  /** trechos do script em que você mexeu em cada objeto: [{ k, j0, j1 }] (índices do script) */
+  episodes(script, skip = -1) {
+    const open = new Map();
+    const out = [];
+    script.forEach((s, j) => {
+      for (const k of new Set([...(s.h >= 0 ? [s.h] : []), ...(s.hm ?? []), ...(s.pm ?? [])])) {
+        if (k === skip) continue;
+        const e = open.get(k);
+        if (e && j - e.j1 <= MERGE) e.j1 = j;
+        else {
+          if (e) out.push(e);
+          open.set(k, { k, j0: j, j1: j });
+        }
+      }
+    });
+    return [...out, ...open.values()];
+  }
+
+  /** a gravação mais nova que cobre o instante t (a do último salto que passou por ele) */
+  railSource(t = this.tw) {
+    for (let i = this.clones.length - 1; i >= 0; i--) {
+      const c = this.clones[i];
+      if (t >= c.born - 1e-6 && t <= c.end + 1e-6) return c;
+    }
+    return null;
+  }
+
+  /** o viajante (você, depois do salto) mexeu nesse objeto? então ele sai do trilho */
+  disturbed(prop, st, held, free) {
+    const { player, portals, world } = this.ctx;
+    if (prop === held) return true;
+    const h = prop.half ?? new V3(0.3, 0.3, 0.3);
+    const pMin = prop.pos.clone().sub(h);
+    const pMax = prop.pos.clone().add(h);
+    // você encostado e andando
+    const meMin = player.pos.clone().sub(player.half).subScalar(0.06);
+    const meMax = player.pos.clone().add(player.half).addScalar(0.06);
+    if (overlap(meMin, meMax, pMin, pMax) && Math.hypot(player.vel.x, player.vel.z) > 0.3) return true;
+    // outro objeto que já saiu do trilho bateu nele
+    for (const o of free) {
+      if (o === prop || o.gone) continue;
+      const oh = o.half ?? h;
+      if (overlap(o.pos.clone().sub(oh), o.pos.clone().add(oh), pMin, pMax, -0.03)) return true;
+    }
+    // um portal seu (que não existia na gravação) no caminho gravado
+    for (const P of [portals.blue, portals.orange]) {
+      if (!P.placed || P.delta > 0 || P.partner?.delta > 0 || !portals.isLinked(P)) continue;
+      const a = P.local(prop.pos);
+      const b = P.local(st.p);
+      if (Math.sign(a.z) !== Math.sign(b.z) && Math.abs(a.z - b.z) < 2.5) {
+        const k = a.z / (a.z - b.z);
+        const x = a.x + (b.x - a.x) * k;
+        const y = a.y + (b.y - a.y) * k;
+        if ((x / (PORTAL_A + 0.3)) ** 2 + (y / (PORTAL_B + 0.3)) ** 2 <= 1) return true;
+      }
+    }
+    // uma porta/plataforma que está diferente da gravação perto dele
+    const src = this.railSource();
+    const snap = src && src.script[this.indexIn(src)].w;
+    if (snap)
+      for (let k = 0; k < world.doors.length; k++) {
+        const d = world.doors[k];
+        const was = snap.doors[k];
+        if (!was || Math.abs(was[0] - d.open) < 0.05) continue;
+        if (overlap(d.box.min.clone().subScalar(0.4), d.box.max.clone().addScalar(0.4), pMin, pMax)) return true;
+      }
+    return false;
+  }
+
+  /** índice do quadro do script do clone no instante atual */
+  indexIn(c, t = this.tw) {
+    return Math.max(0, Math.min(c.script.length - 1, Math.floor((t - c.script[0].t) / RATE + 1e-6)));
+  }
+
+  /** sai do trilho: continua com a velocidade gravada (a física assume) */
+  leaveRail(prop, st) {
+    prop.cloneHeld = false;
+    if (!st || st.gone || prop.gone || prop === this.ctx.held?.()) return;
+    const moving = !this.frozenProps;
+    prop.place(prop.pos.clone(), prop.quat.clone(), st.v && moving ? { x: st.v[0], y: st.v[1], z: st.v[2] } : null);
+    if (st.a && moving) prop.body?.setAngvel({ x: st.a[0], y: st.a[1], z: st.a[2] }, true);
+  }
+
   /**
-   * O clone segura o que você segurava: o objeto segue a posição gravada enquanto o clone o tem na mão
-   * e, ao soltar (ou ao mergulhar no azul), sai com a velocidade gravada.
-   * Se quem segura é você, o objeto é seu.
+   * Depois de um salto, o mundo refaz a gravação: cada cubo/torreta fica no trilho (segue o
+   * estado gravado) até você o perturbar. Os usos que o seu passado faz de um objeto são
+   * obrigatórios: se ele não estiver no lugar, ou estiver na sua mão, é paradoxo.
+   * Devolve true se houve paradoxo (o loop já foi desfeito).
    */
-  carryProps(c, stop = false) {
+  driveProps() {
+    if (this.sweep) return false;
     const props = this.props();
-    const s = c.script;
-    let want = null;
-    if (!stop && !this.sweep) {
-      const f = (this.tw - s[0].t) / RATE;
-      const i = Math.max(0, Math.min(s.length - 1, Math.floor(f)));
-      const a = s[i];
-      const b = s[Math.min(s.length - 1, i + 1)];
-      const prop = a.h >= 0 ? props[a.h] : null;
-      const pa = prop && a.w.props[a.h];
-      if (prop && pa && !pa.gone && prop !== this.ctx.held?.() && !prop.gone) {
-        const pb = b.h === a.h ? b.w.props[a.h] : null;
-        const k = pb && pa.p.distanceTo(pb.p) < 2.5 ? Math.max(0, Math.min(1, f - i)) : 0;
-        want = { prop, p: pa.p.clone().lerp(pb?.p ?? pa.p, k), q: pa.q.clone().slerp(pb?.q ?? pa.q, k), v: pa.v };
+    const held = this.ctx.held?.();
+    const src = this.railSource();
+    // o objeto que viajou com você: a cópia do passado refaz a gravação; o de verdade é seu
+    const echoed = new Set();
+    for (const c of this.clones) if (c.echo && this.clonePose(c)) echoed.add(c.echo.k);
+    // os usos que os clones fazem agora
+    for (const c of this.clones) {
+      if (!c.eps?.length || !this.clonePose(c)) continue;
+      const f = (this.tw - c.script[0].t) / RATE;
+      for (const e of c.eps) {
+        if (f < e.j0 - 1e-6 || f >= e.j1 + 1 || echoed.has(e.k)) continue;
+        const prop = props[e.k];
+        const st = prop && this.propAt(c.script, f, e.k);
+        if (!st || st.gone) continue;
+        if (prop === held) {
+          this.rollback(c.cp, 'você pegou o objeto que o seu passado estava usando', prop.pos.clone());
+          return true;
+        }
+        if (this.free.has(prop)) {
+          // fora do trilho: só dá se ainda estiver onde o seu passado o encontrou
+          if (prop.gone || prop.pos.distanceTo(st.p) > MISPLACED) {
+            this.rollback(c.cp, 'o objeto que o seu passado usou não estava mais no lugar', prop.pos.clone());
+            return true;
+          }
+          this.free.delete(prop);
+          this.snap.add(prop);
+        }
       }
     }
-    const had = c.carry;
-    if (had && (!want || want.prop !== had.prop)) {
-      // soltou: segue com a velocidade de então
-      if (!had.prop.gone && had.prop !== this.ctx.held?.()) {
-        const v = had.v;
-        had.prop.place(had.p, had.q, v && !this.frozenProps ? { x: v[0], y: v[1], z: v[2] } : null);
+    const f = src ? (this.tw - src.script[0].t) / RATE : 0;
+    const next = new Map();
+    props.forEach((prop, k) => {
+      const was = this.driven.get(prop);
+      const st = src && !echoed.has(k) && !this.free.has(prop) ? this.propAt(src.script, f, k) : null;
+      if (!st) {
+        if (was) this.leaveRail(prop, this.propAt(was.src.script, (this.tw - was.src.script[0].t) / RATE, k));
+        return;
       }
-      c.carry = null;
+      if (was?.src === src || this.snap.has(prop)) {
+        if (!this.snap.has(prop) && this.disturbed(prop, st, held, this.free)) {
+          this.free.add(prop);
+          this.leaveRail(prop, st);
+          return;
+        }
+      } else if (prop.gone !== st.gone || (!st.gone && prop.pos.distanceTo(st.p) > 0.2)) {
+        // entrou numa gravação nova (outro salto) mas não está como ela diz: segue livre
+        this.free.add(prop);
+        if (was) this.leaveRail(prop, st);
+        return;
+      }
+      this.snap.delete(prop);
+      if (st.gone) {
+        if (!prop.gone) prop.vanish();
+      } else {
+        if (prop.gone) {
+          prop.gone = false;
+          prop.body?.setEnabled(true);
+        }
+        prop.place(st.p, st.q, null);
+        prop.sync();
+      }
+      prop.cloneHeld = st.held; // segurado pelo clone: não aperta botão (como não apertava)
+      next.set(prop, { src });
+    });
+    this.driven = next;
+    return false;
+  }
+
+  /** esquece os objetos em uso (salto e paradoxo: o mundo foi refeito por `restore`) */
+  resetDriven() {
+    for (const prop of this.driven?.keys() ?? []) prop.cloneHeld = false;
+    this.driven = new Map();
+    this.free = new Set();
+    this.snap = new Set();
+  }
+
+  /** a cópia do passado do objeto que viajou com você, no instante t */
+  poseEcho(c, t) {
+    const E = c.echo;
+    const st = this.propAt(c.script, (t - c.script[0].t) / RATE, E.k);
+    E.mesh.visible = !!st && !st.gone;
+    if (!E.mesh.visible) return null;
+    E.mesh.position.copy(st.p);
+    E.mesh.quaternion.copy(st.q);
+    return st;
+  }
+
+  /** cópias do passado que apertam botões agora (as que o clone não está segurando) */
+  echoes() {
+    const out = [];
+    for (const c of this.clones) {
+      if (!c.echo || !this.clonePose(c)) continue;
+      const st = this.propAt(c.script, (this.tw - c.script[0].t) / RATE, c.echo.k);
+      if (st && !st.gone && !st.held) out.push(st.p);
     }
-    if (want) {
-      want.prop.place(want.p, want.q, null);
-      want.prop.sync();
-      c.carry = want;
-    }
+    return out;
+  }
+
+  /** modelo cinza da cópia do passado (como o clone) */
+  makeEcho(prop) {
+    const m = prop.mesh.clone(true);
+    m.traverse((o) => {
+      if (o.isLight) o.visible = false;
+      if (!o.material) return;
+      o.material = [o.material].flat().map((src) => {
+        const mat = src.clone();
+        for (const key of ['color', 'emissive']) {
+          if (!mat[key]?.isColor) continue;
+          const l = mat[key].r * 0.3 + mat[key].g * 0.59 + mat[key].b * 0.11;
+          mat[key].setRGB(l, l, l);
+        }
+        return mat;
+      });
+      if (o.material.length === 1) o.material = o.material[0];
+    });
+    m.matrixAutoUpdate = true;
+    this.ctx.scene.add(m);
+    return m;
   }
 
   /** o azul de saída de um clone (a versão do futuro): um portal em tons de cinza, sempre visível */
@@ -476,7 +708,11 @@ export class Chronos {
   }
 
   dropClone(c) {
-    c.carry = null;
+    if (c.echo) {
+      c.echo.mesh.parent?.remove(c.echo.mesh);
+      c.echo.mesh.traverse((o) => [o.material].flat().forEach((m) => m?.dispose?.()));
+      c.echo = null;
+    }
     c.ghost?.group.parent?.remove(c.ghost.group);
     if (c.pair) {
       this.ctx.portals.removeRemote(c.id);
@@ -659,6 +895,27 @@ export class Chronos {
       doorOffset(d, snap.doors[k][0], d.mesh.position);
       undo.push(() => d.mesh.position.copy(old));
     });
+    // botões: afundados e verdes se estavam pisados
+    world.buttons.forEach((b, k) => {
+      const was = snap.buttons[k];
+      if (!was || !b.plate) return;
+      const y = b.plate.position.y;
+      const col = b.plate.material.color.clone();
+      const em = b.plate.material.emissive.clone();
+      const lc = b.lights?.color?.clone();
+      const on = was[0] ? 1 : 0;
+      b.plate.position.y = 0.16 - 0.07 * on;
+      b.plate.material.color.set(on ? 0x27ae60 : 0xc0392b);
+      b.plate.material.emissive.set(on ? 0x0a4a20 : 0x5a0a05);
+      if (on) b.lights?.color?.setRGB(0.3, 2.6, 0.7);
+      else b.lights?.color?.setRGB(2.6, 0.25, 0.12);
+      undo.push(() => {
+        b.plate.position.y = y;
+        b.plate.material.color.copy(col);
+        b.plate.material.emissive.copy(em);
+        if (lc) b.lights.color.copy(lc);
+      });
+    });
     this.props().forEach((c, k) => {
       const p = snap.props[k];
       if (!p || !c.mesh) return;
@@ -706,12 +963,14 @@ export class Chronos {
     const T = this.tw - delta;
     const s = this.samples[this.indexAt(T)];
     this._undoPast = this.applyVisual(s.w);
+    this.ctx.beams?.pastView(true);
     // o marcador e o holograma da pausa são só para quem está no presente: dentro da vista do azul
     // o marcador fica colado na câmera virtual e cobre tudo de branco
     this._hide = [this.eco?.g, this.holo?.group].filter((g) => g?.visible);
     for (const g of this._hide) g.visible = false;
     // clones: onde estavam então; e você mesmo, onde estava
     this._cloneVis = this.clones.map((c) => c.ghost?.group.visible);
+    for (const c of this.clones) if (c.echo) this.clonePose(c, T) ? this.poseEcho(c, T) : (c.echo.mesh.visible = false);
     const t = this.ctx.t();
     const dt = this.ctx.dtReal?.() ?? 1 / 60;
     this.clones.forEach((c) => {
@@ -728,6 +987,7 @@ export class Chronos {
   }
 
   endPast() {
+    this.ctx.beams?.pastView(false);
     for (const g of this._hide ?? []) g.visible = true;
     this._hide = null;
     this._undoPast?.();
@@ -735,6 +995,7 @@ export class Chronos {
     if (this._pastSelf) this._pastSelf.group.visible = false;
     this.clones.forEach((c, i) => {
       if (c.ghost) c.ghost.group.visible = !!this._cloneVis?.[i];
+      if (c.echo) this.clonePose(c) ? this.poseEcho(c, this.tw) : (c.echo.mesh.visible = false);
     });
   }
 
@@ -789,6 +1050,15 @@ export class Chronos {
     const orange = blue.partner;
     const delta = orange.delta;
     if (!(delta > 0)) return false;
+    // o que você fez com o mundo parado logo antes de saltar também é passado: o último quadro
+    // guardado passa a ser este instante (com você onde estava ao entrar no azul)
+    if ((this.paused || this.gap) && this.samples.length > 1) {
+      const last = this.samples.pop();
+      this.gap = true;
+      this.record(last.t);
+      const s = this.samples[this.samples.length - 1];
+      if (this.pre) Object.assign(s, { p: this.pre.pos.clone(), yaw: this.pre.yaw, pitch: this.pre.pitch, up: this.pre.up });
+    }
     const cp = this.makeCheckpoint(blue, orange);
     const Td = this.tw - delta;
     if (Td < this.samples[0].t - 1e-6 || Td < this.arrival - 1e-6) {
@@ -804,15 +1074,29 @@ export class Chronos {
       this.rollback(cp, 'o destino está ocupado');
       return false;
     }
-    // 3) o objeto segurado viaja com você
+    this.resetDriven();
+    // 3) o objeto segurado viaja com você; até o instante do salto ele existe duas vezes:
+    //    a cópia do passado refaz a gravação dele e some no azul com o clone
     const held = this.ctx.held?.();
+    const heldK = held ? this.props().indexOf(held) : -1;
     if (held) {
       const pos = player.eye().addScaledVector(player.forward(), 1.4);
       held.place(pos, held.quat);
     }
-    // 4) o seu passado vira um clone
+    // 4) o seu passado vira um clone (com os usos que ele fez de cada objeto)
     this.clones = this.clones.filter((c) => c.end >= Td || (this.dropClone(c), false));
-    this.clones.push({ id: `clone${++this.cloneSeq}`, born: this.samples[i].t, end: tail[tail.length - 1].t, script: tail, ghost: null, cp, exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() }, bad: {} });
+    this.clones.push({
+      id: `clone${++this.cloneSeq}`,
+      born: this.samples[i].t,
+      end: tail[tail.length - 1].t,
+      script: tail,
+      eps: this.episodes(tail, heldK),
+      echo: heldK >= 0 ? { k: heldK, mesh: this.makeEcho(held) } : null,
+      ghost: null,
+      cp,
+      exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() },
+      bad: {},
+    });
     this.samples = this.samples.slice(0, i + 1);
     this.tw = this.samples[i].t;
     this.next = this.tw + RATE;
@@ -898,7 +1182,7 @@ export class Chronos {
       why ??= test('solid', solid, 0.1, 'algo bloqueou o caminho do seu passado');
       let cube = false;
       for (const p of this.props()) {
-        if (p.gone || p.held || p === c.carry?.prop) continue;
+        if (p.gone || p.held || this.driven.has(p)) continue;
         if (overlap(min, max, p.pos.clone().addScaledVector(new V3(1, 1, 1), -0.3), p.pos.clone().addScaledVector(new V3(1, 1, 1), 0.3), 0.08)) cube = true;
       }
       why ??= test('cube', cube, 0.1, 'um objeto ficou no caminho do seu passado');
@@ -934,6 +1218,7 @@ export class Chronos {
     for (const c of this.clones) if (!cp.clones.includes(c)) this.dropClone(c);
     this.sweep?.undo?.();
     this.sweep = null;
+    this.resetDriven();
     this.samples = cp.samples;
     this.clones = cp.clones;
     this.tw = cp.tw;
