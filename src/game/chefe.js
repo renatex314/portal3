@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { northWallWithExit } from './levels.js';
 import { canvas, heightToNormal } from './textures.js';
+import { dressHall, PANEL_Z, PANEL_X } from './chefeSala.js';
 import { RocketTurret, Rocket, explosion, coreModel } from './campaign/boss.js';
 
 const SK = new THREE.Vector3(0, 26, -55); // centro do crânio
@@ -523,6 +524,7 @@ function createFight(ctx, S) {
     T.cool = 0.8 + i * 1.0; // as duas atiram, uma defasada da outra
     return T;
   });
+  let rise = 0; // as torretas sobem dos alçapões no começo e descem quando ele se acalma
   let tipped = false;
   let tip = 0; // dicas na primeira vez que o laser trava em você
   const rockets = [];
@@ -557,8 +559,12 @@ function createFight(ctx, S) {
       ctx.player.eye(eye);
       S.look.copy(eye);
       const idle = !!core || S.calm;
+      rise = THREE.MathUtils.clamp(rise + dt * (S.calm ? -0.7 : 0.55), 0, 1);
+      const lift = rise * rise * (3 - 2 * rise);
       turrets.forEach((T, i) => {
-        T.enabled = !idle;
+        T.group.position.y = -3.8 * (1 - lift);
+        T.group.visible = rise > 0.01;
+        T.enabled = !idle && rise >= 0.999;
         const shot = T.update(dt, eye, world);
         if (T.lock === 0) tipped = false;
         if (T.enabled && T.lock > 0.3 && !tipped && tip < 2) {
@@ -662,16 +668,21 @@ export const CHEFES = [
     who: 'Helena',
     lesson: 'Fique na frente do portal azul e saia do caminho quando o foguete vier: ele sai no laranja, direto no crânio. Queime os três núcleos que caem.',
     build(w) {
-      // salão (bem menor que antes): paredes laterais e da frente de concreto claro (aceitam portal), fundo e teto de metal
-      w.box(-25, 0, -73, -24, 38, -9, 'white');
-      w.box(24, 0, -73, 25, 38, -9, 'white');
-      w.box(-25, 0, -10, 25, 38, -9, 'white');
+      // salão: paredes de metal escuro com painéis brancos de portal encaixados; teto de metal
+      w.box(-25, 0, -73, -24, 38, -9, 'metal');
+      w.box(24, 0, -73, 25, 38, -9, 'metal');
+      w.box(-25, 0, -10, 25, 38, -9, 'metal');
       w.box(-25, 38, -79, 25, 39, -9, 'metal');
+      for (const z of PANEL_Z) {
+        w.box(-24, 2, z - 3, -23.8, 31, z + 3, 'white');
+        w.box(23.8, 2, z - 3, 24, 31, z + 3, 'white');
+      }
+      for (const x of PANEL_X) w.box(x - 3, 1, -10.2, x + 3, 14, -10, 'white');
       // chão com o buraco da fornalha entre o jogador e o chefe
-      w.box(-24, -2, -72, 24, 0, -31, 'white');
-      w.box(-24, -2, -25, 24, 0, -10, 'white');
-      w.box(-24, -2, -31, -3, 0, -25, 'white');
-      w.box(3, -2, -31, 24, 0, -25, 'white');
+      w.box(-24, -2, -72, 24, 0, -31, 'metal');
+      w.box(-24, -2, -25, 24, 0, -10, 'metal');
+      w.box(-24, -2, -31, -3, 0, -25, 'metal');
+      w.box(3, -2, -31, 24, 0, -25, 'metal');
       w.box(-3, -2, -31, 3, -1, -25, 'rock');
       w.incinerator(-2.95, -1, -30.95, 2.95, 0.9, -25.05);
       for (const [x0, z0, x1, z1] of [
@@ -691,12 +702,16 @@ export const CHEFES = [
         [-14, 30, -46],
         [14, 30, -46],
       ])
-        w.light(x, y, z, 260, 0xdfe8ff, 70, false);
+        w.light(x, y, z, 190, 0xd8e2ff, 70, false);
+      for (const x of [-22, 22]) w.light(x, 27, -16, 120, 0xff9a40, 40, false); // âmbar, como os alertas
       const warm = w.light(-9, 15, -43, 150, 0xff4030, 46, false);
       const cold = w.light(9, 15, -43, 150, 0x4a7aff, 46, false);
       // estado compartilhado entre a animação do chefe e a luta
       const S = { stage: 0, calm: false, flash: 0, gape: 0, look: new THREE.Vector3(0, 1.6, -14) };
       buildBoss(w, S, { warm, cold });
+      dressHall(w, { skull: SK, shoulders: [new THREE.Vector3(-10.6, 9.2, -57.4), new THREE.Vector3(10.6, 9.2, -57.4)] });
+      w.sign(-9, 19.5, -9.97, Math.PI, [['CÂMARA CENTRAL', 96, 150], ['NÚCLEOS INSTÁVEIS', 70, 270, '#c0392b'], ['não encoste nas bolas de energia', 38, 380, '#55575c', 'Arial, sans-serif'], ['LABORATÓRIO ANTÍPODA · NOVA LIMA (MG)', 30, 455, '#8a8c90', 'Arial, sans-serif']], 5, 2.5, 0);
+      w.sign(9, 19.5, -9.97, Math.PI, [['ATENÇÃO', 120, 160, '#c0392b'], ['torretas de foguete ativas', 56, 280], ['devolva o foguete pelo portal', 40, 380, '#55575c', 'Arial, sans-serif'], ['SISTEMA NERVOSO · B01', 30, 455, '#8a8c90', 'Arial, sans-serif']], 5, 2.5, 0);
       // os olhos cospem bolas de energia que varrem o salão e quicam: não dá para ficar parado
       const eyes = [-1, 1].map((sx, i) => {
         const L = w.launcher(2.4 * sx, 25.7, -50.2, [0, -0.3, 1], { delay: 2 + i * 2.5, life: 8, speed: 7 });

@@ -197,7 +197,7 @@ Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
 | Chefe | Personagem | O que tem |
 |-------|------------|-----------|
-| B01 Sistema Nervoso | Helena | luta no estilo do Portal 1 contra um crânio de 13 m com as veias e os nervos à mostra: uma torreta de foguetes trava o laser em você e atira; saia da frente e deixe o foguete entrar no portal azul (numa parede branca atrás de você) — o laranja já está na parede, apontando para o crânio. Cada acerto derruba um núcleo pela boca, que você leva (`E`) até a fornalha no meio do salão. Com três queimados os nervos recuam, sobra só o feixe arrumado (o "sistema tranquilo") e a porta de trás abre. Resolvido de ponta a ponta pelo robô de teste |
+| B01 Sistema Nervoso | Helena | luta no estilo do Portal 1 contra um crânio de 13 m com as veias e os nervos à mostra: uma torreta de foguetes trava o laser em você e atira; saia da frente e deixe o foguete entrar no portal azul (numa parede branca atrás de você) — o laranja já está na parede, apontando para o crânio. Cada acerto derruba um núcleo pela boca, que você leva (`E`) até a fornalha no meio do salão. A câmara é uma sala industrial escura no clima da do Portal 1 (painéis brancos de portal em paredes de metal, pilares com luz de alerta, passarelas, tubulações, treliças, bancos de máquinas piscando, ventiladores, cabos grossos do teto ao crânio; as torretas sobem de alçapões no chão). Com três queimados os nervos recuam, sobra só o feixe arrumado (o "sistema tranquilo") e a porta de trás abre. Resolvido de ponta a ponta pelo robô de teste |
 
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
@@ -340,7 +340,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js (série Chefes: o crânio do B01), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação
