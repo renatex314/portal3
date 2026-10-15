@@ -33,40 +33,44 @@ function hall(w, x0, x1, z0, z1, h, m = {}) {
 }
 /** painel de concreto claro encostado numa parede (aceita portal) */
 const panel = (w, x0, y0, z0, x1, y1, z1) => w.box(x0, y0, z0, x1, y1, z1, 'white');
+/** as portas de botão batem na hora que o botão solta: nenhum portal normal te leva para o outro lado a tempo */
+const snap = (w) => w.doors.forEach((d) => d.id?.startsWith('d') && (d.speedBack = 16));
 const lights = (w, pts, y, k = 45) => pts.forEach(([x, z]) => w.light(x, y, z, k));
 
 export const EXPERIMENTO = [
   // ------------------------------------------------------------------ E01
   E(0, {
-    name: 'Tempo Parado',
+    name: 'A Ponte',
     who: 'Helena',
-    lesson: 'A ponte só fica de pé por 7 s depois que você sai da placa. A travessia leva o dobro: pare o tempo (2) no meio dela.',
+    lesson: 'A ponte só fica de pé enquanto alguém pisa na placa. Deixe o seu passado na placa e atravesse por cima.',
     build(w) {
-      // corredor sobre a rocha fundida: plataforma de partida, 44 m de ponte e a saída
-      w.box(-8, -1, -2, 8, 0, 10, 'white');
-      w.box(-8, -1, -64, 8, 0, -54, 'white');
+      // plataforma de partida, 52 m de rocha fundida e a saída; só a partida tem painéis de portal
+      w.box(-8, -1, -2, 8, 0, 10, 'metal');
+      w.box(-8, -1, -64, 8, 0, -54, 'metal');
       lava(w, -8, 8, -54, -2, -4);
       w.box(-9, -1, -65, -8, 7, 11, 'metal');
       w.box(8, -1, -65, 9, 7, 11, 'metal');
       w.box(-9, 7, -65, 9, 8, 11, 'metal');
       w.box(-8, -1, 10, 8, 7, 11, 'metal');
       w.box(-8, -1, -65, 8, 7, -64, 'metal');
-      // a ponte sobe da rocha quando a placa está (ou esteve há pouco) ligada
+      panel(w, -8, 0, 1, -7.9, 5, 9); // oeste (o azul, no presente)
+      panel(w, 7.9, 0, 1, 8, 5, 9); // leste (o laranja, no passado)
       w.door('bridge', -1.7, -4.4, -54, 1.7, -4.0, -2, { axis: 'y', dist: 4.0, speed: 1.8 });
-      w.button(0, 0, 6, 'bridge', { hold: 7 });
+      w.button(0, 0, 6, 'bridge');
       w.strip(-1.2, 0.005, 5.2, 1.2, 0.03, 5.3, 0x8fe3ff, 2);
       w.exitElevator(0, 0, -60);
-      sign(w, -7.97, 3.2, 4, Math.PI / 2, 'E01', 'TEMPO PARADO', 'tecla 2 · pausa o tempo do mundo');
+      sign(w, -7.97, 3.2, -0.5, Math.PI / 2, 'E01', 'A PONTE', 'pausa · passado · azul no presente');
       lights(w, [[0, 6], [0, -20], [0, -40], [0, -58]], 6.2, 60);
       return {
         spawn: [0, 0, 8, 0],
-        gun: 'none',
+        gun: 'both',
         relogio: true,
         intro: [
           ['Helena', 'Esse é o relógio de pulso do experimento. A tecla 2 para o tempo do mundo: tudo congela, menos você.'],
-          ['Helena', 'A ponte só fica de pé por sete segundos depois que você sai da placa, e são quarenta e quatro metros. Pise na placa, corra e pare o tempo no meio da ponte.'],
+          ['Helena', 'A ponte só sobe enquanto alguém pisa na placa, e a rocha tem cinquenta metros. Você é um só: precisa de outro você na placa.'],
+          ['Helena', 'Pise na placa e espere. Com o tempo parado, a roda do mouse escolhe quantos segundos voltar: laranja no passado, azul no presente. Entre no azul e atravesse: o seu passado continua na placa.'],
         ],
-        hints: [{ after: 45, lines: [['Helena', 'Saia da placa, corra pela ponte e aperte 2 antes de ela cair. Com o mundo parado, a ponte não cai: termine a travessia e só então aperte 2 de novo.']] }],
+        hints: [{ after: 60, lines: [['Helena', 'A travessia leva uns doze segundos. Fique na placa mais que isso, pare o tempo, volte uns doze segundos ou mais e corra: o seu passado só sai da placa quando o loop fecha.']] }],
       };
     },
   }),
@@ -84,6 +88,7 @@ export const EXPERIMENTO = [
       // só estes painéis aceitam portal: um do lado do botão, outro do lado da porta
       panel(w, -12, 0, -14, -11.9, 5, -4); // parede oeste
       panel(w, -8, 0, -16, -3, 5, -15.9); // parede norte, à esquerda da porta
+      snap(w);
       sign(w, 11.97, 3.2, 0, -Math.PI / 2, 'E02', 'DOIS DE MIM', 'pausa · passado · azul no presente');
       lights(w, [[0, 2], [-6, -10], [6, -10]], 5.6, 45);
       return {
@@ -91,7 +96,7 @@ export const EXPERIMENTO = [
         gun: 'both',
         relogio: true,
         intro: [
-          ['Helena', 'A porta de saída só abre enquanto alguém está pisando no botão do canto — e dá tempo de sobra para ela fechar até você chegar.'],
+          ['Helena', 'A porta de saída só abre enquanto alguém está pisando no botão do canto, e ela bate na hora em que o botão solta: nem um portal te leva até lá a tempo.'],
           ['Helena', 'Pise no botão, pare o tempo (2) e escolha na roda do mouse quantos segundos voltar. O laranja cai no passado, perto da porta; o azul, no presente, perto do botão.'],
           ['Helena', 'Entre no azul: você sai no passado, e o seu eu de antes continua no botão enquanto você corre para a porta.'],
         ],
@@ -123,6 +128,7 @@ export const EXPERIMENTO = [
       w.strip(-0.8, 0.005, 19.1, 0.8, 0.03, 19.2, 0xffb347, 2);
       panel(w, -10, 0, -20, -4, 5, -19.9); // norte, à esquerda da porta (o laranja cai aqui, no passado)
       panel(w, -6, 0, 23.9, 6, 5, 24); // sul, na ilha (o azul cai aqui, no presente)
+      snap(w);
       sign(w, -13.97, 3.2, -12, Math.PI / 2, 'E03', 'A ILHA', 'carrinho · botão · passado');
       lights(w, [[0, -12], [0, 4], [0, 20], [-8, -12], [8, -12]], 6.2, 55);
       return {
@@ -154,6 +160,7 @@ export const EXPERIMENTO = [
       panel(w, -14, 0, -6, -13.9, 5, 2); // oeste, do lado de B1
       panel(w, -4, 0, 9.9, 4, 5, 10); // sul, do lado de B2
       panel(w, 3, 0, -20, 9, 5, -19.9); // norte, à direita da porta, do lado de B3
+      snap(w);
       sign(w, 13.97, 3.2, 0, -Math.PI / 2, 'E04', 'TRÊS EM UM', 'três botões · dois saltos');
       lights(w, [[0, 0], [-9, -2], [0, 7], [5, -16], [0, -12]], 5.6, 48);
       return {
@@ -196,16 +203,16 @@ export const EXPERIMENTO = [
       panel(w, 3, 0, -30, 9, 5, -29.9); // sala 2, ao lado da saída d2
       // a bola de energia varre a sala 2 (e o seu passado, se ele cruzar com ela)
       w.launcher(-12, 1.1, -12, [1, 0, 0], { delay: 2, life: 7, speed: 6.5 });
+      snap(w);
       sign(w, 11.97, 3.2, 8, -Math.PI / 2, 'E05', 'PARADOXO', 'o passado precisa de caminho livre');
       lights(w, [[0, 6], [-8, 6], [0, -12], [8, -12], [0, -24]], 5.6, 50);
       return {
         spawn: [6, 0, 12, 0],
         gun: 'both',
         relogio: true,
-        cubes: [[3, 0, 9]], // um cubo solto: se ele ficar no caminho do seu passado, é paradoxo
         intro: [
           ['Dona Cida', 'Duas portas. A primeira só abre com alguém no botão da sala; a segunda, no botão da sala de trás — e os dois ficam longe das portas.'],
-          ['Dona Cida', 'Dois saltos, um dentro do outro. E um aviso: o seu passado repete exatamente o que você fez. Se uma porta, uma bola de energia ou um cubo estiver no caminho dele, o tempo vê o paradoxo e desfaz o loop.'],
+          ['Dona Cida', 'Dois saltos, um dentro do outro. E um aviso: o seu passado repete exatamente o que você fez. Se uma porta ou uma bola de energia estiver no caminho dele, o tempo vê o paradoxo e desfaz o loop.'],
         ],
         hints: [
           { after: 180, lines: [['Dona Cida', 'Salte uns quatro segundos do botão da primeira sala para perto da porta d1. Atravesse, pise o segundo botão, espere, e salte de novo uns três segundos para perto da saída.']] },

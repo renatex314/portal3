@@ -203,11 +203,11 @@ Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
 | Teste | Personagem | O que tem |
 |-------|------------|-----------|
-| E01 Tempo Parado | Helena | ponte de 44 m que só fica de pé 7 s depois de você sair da placa: só dá para atravessar parando o tempo no meio |
-| E02 Dois de Mim | Helena | a porta só abre com alguém no botão do canto; o passado fica no botão enquanto você corre para a porta |
+| E01 A Ponte | Helena | 52 m de rocha fundida; a ponte só fica de pé com alguém na placa. Só o seu passado, voltado uns 14 s ou mais, segura a placa enquanto você atravessa |
+| E02 Dois de Mim | Helena | a porta só abre com alguém no botão do canto e bate na hora que ele solta; o passado fica no botão enquanto você corre para a porta |
 | E03 A Ilha | Kelly | carrinho vai e volta sobre a rocha fundida até o botão da ilha; a porta de saída é do outro lado |
 | E04 Três em Um | Seu Tião | três botões ao mesmo tempo: dois saltos, um dentro do outro (dois clones e você) |
-| E05 Paradoxo | Dona Cida | duas portas em sequência, cada uma com o botão longe, bola de energia varrendo a segunda sala e um cubo solto: o passado de um salto precisa de caminho livre para o outro |
+| E05 Paradoxo | Dona Cida | duas portas em sequência, cada uma com o botão longe, bola de energia varrendo a segunda sala: o passado de um salto precisa de caminho livre para o outro |
 
 Todas foram resolvidas de ponta a ponta pelo robô de teste, que também provou cada tipo de paradoxo (cubo sobre o clone, bola de energia no caminho dele, destino ocupado e salto para antes da chegada).
 

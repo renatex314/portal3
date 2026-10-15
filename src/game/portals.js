@@ -988,10 +988,20 @@ export class PortalSystem {
       // portal temporal: a vista de dentro é o mundo como estava Δ segundos antes
       const past = Q.delta > 0 ? this.pastView : null;
       past?.begin(Q.delta);
+      // o corpo do presente não existe no passado: só o seu eu de então (o fantasma cinza)
+      if (past) v.layers.disable(1);
+      // o azul é do presente: no passado ele ainda não existe (nem a luz dele)
+      const hidP = past ? [P.group.visible, P.light.intensity] : null;
+      if (past) {
+        P.group.visible = false;
+        P.light.intensity = 0;
+      }
       r.setRenderTarget(P.rt[1 - P.read]);
       r.clear();
       r.render(this.scene, v);
       past?.end();
+      if (past) v.layers.enable(1);
+      if (past) [P.group.visible, P.light.intensity] = hidP;
       Q.group.visible = wasVisible;
     }
     r.clippingPlanes = prevClip;
