@@ -25,6 +25,13 @@ import { Frontier } from './frontier.js';
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// só escreve no DOM quando o texto muda (escrever o mesmo texto todo quadro refaz o layout)
+const textCache = new Map();
+function setText(id, text) {
+  if (textCache.get(id) === text) return;
+  textCache.set(id, text);
+  $(id).textContent = text;
+}
 
 // ------------------------------------------------------------------ renderer / cena
 const canvas = $('c');
@@ -1525,7 +1532,8 @@ try {
 } catch {}
 function setBlur(on) {
   blurOn = on;
-  post.blur.enabled = on;
+  post.blur.on = on;
+  post.sceneRT.resolveDepthBuffer = on; // sem desfoque ninguém lê a profundidade: poupa a cópia dela a cada quadro
   $('opt-blur').classList.toggle('on', on);
   $('p-blur').classList.toggle('on', on);
   try {
@@ -2031,7 +2039,7 @@ function update(dt, t) {
   ZOOM.fov = THREE.MathUtils.lerp(ZOOM.fov ?? 75, baseFov, 1 - Math.exp(-dt * (SLOW.on ? 10 : 4)));
   camera.fov = ZOOM.fov / ZOOM.k;
   document.body.classList.toggle('zoomed', ZOOM.k > 1.15);
-  $('zoom-v').textContent = `${ZOOM.k.toFixed(1).replace('.', ',')}×`;
+  setText('zoom-v', `${ZOOM.k.toFixed(1).replace('.', ',')}×`);
   camera.updateProjectionMatrix();
   player.applyCamera(dt, 0);
   // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
@@ -2039,7 +2047,7 @@ function update(dt, t) {
   body.group.visible = !player.inTransit;
   deadFlash = Math.max(0, deadFlash - dt * 1.5);
   $('flash').style.opacity = deadFlash;
-  $('timer').textContent = fmt(levelTime);
+  setText('timer', fmt(levelTime));
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
   $('use-hint').hidden = !(look && !held) && !held;
@@ -2051,7 +2059,19 @@ let realDt = 1 / 60;
 let manualStep = false;
 let manualT = 0;
 
+// com o menu/pausa por cima (fundo escurecido e borrado) metade dos quadros basta:
+// a placa de vídeo descansa e ninguém nota atrás do painel
+const coverEls = [...document.querySelectorAll('.overlay'), $('menu')].filter(Boolean);
+let coverFlip = false;
+
 function frame() {
+  if (!manualStep && coverEls.some((e) => !e.hidden)) {
+    coverFlip = !coverFlip;
+    if (coverFlip) {
+      requestAnimationFrame(frame);
+      return;
+    }
+  }
   const dt = Math.min(clock.getDelta(), 0.05);
   realDt = dt;
   const t = clock.elapsedTime;

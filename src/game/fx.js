@@ -4,36 +4,90 @@
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { canvas } from './textures.js';
 
 // ------------------------------------------------------------------ pós-processamento
-const FinishShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uTime: { value: 0 },
-    uAberr: { value: 0 },
-    uVignette: { value: 0.32 },
-    uGrain: { value: 0.035 },
-  },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-  fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse; uniform float uTime, uAberr, uVignette, uGrain; varying vec2 vUv;
-    void main(){
-      vec2 d = vUv - 0.5;
-      float r2 = dot(d, d);
-      vec2 off = d * r2 * uAberr * 8.0;
-      vec3 c = vec3(texture2D(tDiffuse, vUv + off).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - off).b);
-      c *= 1.0 - uVignette * smoothstep(0.1, 1.0, r2 * 2.0);
-      float n = fract(sin(dot(gl_FragCoord.xy + fract(uTime * 7.31) * 113.0, vec2(12.9898, 78.233))) * 43758.5453);
-      c += (n - 0.5) * uGrain;
-      gl_FragColor = vec4(c, 1.0);
-    }`,
-};
+/**
+ * Último passe: tom (ACES) + sRGB — o que o OutputPass fazia — junto com a
+ * aberração, a vinheta e o grão. O tom é aplicado em cada amostra, então o
+ * resultado é idêntico ao de dois passes, com uma leitura e uma escrita a
+ * menos da tela inteira.
+ */
+const FINISH_FS = /* glsl */ `
+  precision highp float;
+  uniform sampler2D tDiffuse; uniform float uTime, uAberr, uVignette, uGrain; varying vec2 vUv;
+  #include <tonemapping_pars_fragment>
+  #include <colorspace_pars_fragment>
+  vec3 grade(vec2 uv){
+    vec4 c = texture2D(tDiffuse, uv);
+    #ifdef ACES_FILMIC_TONE_MAPPING
+      c.rgb = ACESFilmicToneMapping(c.rgb);
+    #endif
+    #ifdef SRGB_TRANSFER
+      c = sRGBTransferOETF(c);
+    #endif
+    return c.rgb;
+  }
+  void main(){
+    vec2 d = vUv - 0.5;
+    float r2 = dot(d, d);
+    vec2 off = d * r2 * uAberr * 8.0;
+    vec3 c = uAberr > 1e-5 ? vec3(grade(vUv + off).r, grade(vUv).g, grade(vUv - off).b) : grade(vUv);
+    c *= 1.0 - uVignette * smoothstep(0.1, 1.0, r2 * 2.0);
+    float n = fract(sin(dot(gl_FragCoord.xy + fract(uTime * 7.31) * 113.0, vec2(12.9898, 78.233))) * 43758.5453);
+    c += (n - 0.5) * uGrain;
+    gl_FragColor = vec4(c, 1.0);
+  }`;
+
+class FinishPass extends Pass {
+  constructor() {
+    super();
+    this.uniforms = {
+      tDiffuse: { value: null },
+      uTime: { value: 0 },
+      uAberr: { value: 0 },
+      uVignette: { value: 0.32 },
+      uGrain: { value: 0.035 },
+      toneMappingExposure: { value: 1 },
+    };
+    this.material = new THREE.RawShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: /* glsl */ `
+        precision highp float;
+        uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix;
+        attribute vec3 position; attribute vec2 uv; varying vec2 vUv;
+        void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: FINISH_FS,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.quad = new FullScreenQuad(this.material);
+    this._key = null;
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.toneMappingExposure.value = renderer.toneMappingExposure;
+    const key = renderer.outputColorSpace + '|' + renderer.toneMapping;
+    if (key !== this._key) {
+      this._key = key;
+      this.material.defines = {};
+      if (THREE.ColorManagement.getTransfer(renderer.outputColorSpace) === THREE.SRGBTransfer) this.material.defines.SRGB_TRANSFER = '';
+      if (renderer.toneMapping === THREE.ACESFilmicToneMapping) this.material.defines.ACES_FILMIC_TONE_MAPPING = '';
+      this.material.needsUpdate = true;
+    }
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.quad.render(renderer);
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.quad.dispose();
+  }
+}
 
 // ------------------------------------------------------------------ desfoque de movimento
 /**
@@ -46,10 +100,11 @@ const blurFS = /* glsl */ `
   #include <packing>
   uniform sampler2D tColor, tDepth;
   uniform mat4 uInvVP, uPrevVP;
-  uniform float uStrength, uNear, uFar, uMaxLen, uRadial;
+  uniform float uStrength, uNear, uFar, uMaxLen, uRadial, uOn;
   varying vec2 vUv;
   float viewDist(float d){ return -perspectiveDepthToViewZ(d, uNear, uFar); }
   void main(){
+    if (uOn < 0.5) { gl_FragColor = texture2D(tColor, vUv); return; }
     float d = texture2D(tDepth, vUv).x;
     vec4 ndc = vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
     vec4 w = uInvVP * ndc;
@@ -79,12 +134,15 @@ const blurFS = /* glsl */ `
   }`;
 
 class MotionBlurPass extends Pass {
-  constructor(camera) {
+  /** `source`: o alvo da cena (com MSAA e profundidade) de onde ele lê */
+  constructor(camera, source) {
     super();
     this.camera = camera;
+    this.source = source;
     this.strength = 0.6;
     this.maxLen = 0.045;
     this.radial = 0;
+    this.on = true; // desligado, só copia a cena (o passe não pode sair da cadeia)
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         tColor: { value: null },
@@ -96,6 +154,7 @@ class MotionBlurPass extends Pass {
         uFar: { value: camera.far },
         uMaxLen: { value: 0.045 },
         uRadial: { value: 0 },
+        uOn: { value: 1 },
       },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: blurFS,
@@ -115,7 +174,7 @@ class MotionBlurPass extends Pass {
     this.fresh = true;
   }
 
-  render(renderer, writeBuffer, readBuffer) {
+  render(renderer, writeBuffer) {
     const cam = this.camera;
     cam.updateMatrixWorld();
     this.vp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
@@ -124,10 +183,11 @@ class MotionBlurPass extends Pass {
     // pulo grande de posição ou de direção = passou por um portal / renasceu
     if (pos.distanceTo(this.prevPos) > 2.5 || fwd.dot(this.prevFwd) < 0.75) this.fresh = true;
     const u = this.material.uniforms;
-    u.tColor.value = readBuffer.texture;
-    u.tDepth.value = readBuffer.depthTexture;
+    u.tColor.value = this.source.texture;
+    u.tDepth.value = this.source.depthTexture;
     u.uInvVP.value.copy(this.vp).invert();
     u.uPrevVP.value.copy(this.fresh ? this.vp : this.prevVP);
+    u.uOn.value = this.on ? 1 : 0;
     u.uStrength.value = this.strength;
     u.uMaxLen.value = this.maxLen;
     u.uRadial.value = this.fresh ? 0 : this.radial;
@@ -188,29 +248,49 @@ const ShockShader = {
  * → tom/cor → acabamento. Os portais continuam renderizando direto nas
  * texturas deles (em espaço linear, sem tom), então nada muda para eles.
  */
+/** desenha a cena no alvo com MSAA; os passes seguintes trabalham em alvos sem MSAA */
+class ScenePass extends Pass {
+  constructor(scene, camera, target) {
+    super();
+    this.scene = scene;
+    this.camera = camera;
+    this.target = target;
+    this.needsSwap = false;
+  }
+
+  render(renderer) {
+    renderer.setRenderTarget(this.target);
+    renderer.render(this.scene, this.camera);
+  }
+}
+
 export class Post {
   constructor(renderer, scene, camera) {
     this.renderer = renderer;
     this.enabled = true;
-    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
-    rt.depthTexture = new THREE.DepthTexture(1, 1); // o desfoque de movimento lê a profundidade
+    // só a cena precisa de MSAA (e de profundidade para o desfoque); o resto são
+    // passes de tela cheia — antes todos escreviam em alvos com MSAA 4×, à toa
+    this.sceneRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    this.sceneRT.depthTexture = new THREE.DepthTexture(1, 1);
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.composer = new EffectComposer(renderer, rt);
-    this.composer.addPass(new RenderPass(scene, camera));
-    this.blur = new MotionBlurPass(camera);
+    this.composer.addPass(new ScenePass(scene, camera, this.sceneRT));
+    this.blur = new MotionBlurPass(camera, this.sceneRT);
     this.composer.addPass(this.blur);
     this.shock = new ShaderPass(ShockShader);
     this.composer.addPass(this.shock);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 1.6);
     this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
-    this.finish = new ShaderPass(FinishShader);
+    this.finish = new FinishPass();
     this.composer.addPass(this.finish);
     this.resize();
   }
 
   resize() {
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    const pr = this.renderer.getPixelRatio();
+    this.composer.setPixelRatio(pr);
     this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.sceneRT.setSize(Math.floor(window.innerWidth * pr), Math.floor(window.innerHeight * pr));
   }
 
   /** dispara a onda de choque (distorção); a posição na tela vem de `shockAt` a cada quadro */

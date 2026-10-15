@@ -161,6 +161,8 @@ const sparkFS = /* glsl */ `
     #include <colorspace_fragment>
   }`;
 
+const PORTAL_DEPTH = 0.6; // fundo da caixa rasa atrás do portal
+
 class Portal {
   constructor(name, scene, renderer, color) {
     this.name = name;
@@ -203,7 +205,7 @@ class Portal {
     this.group = new THREE.Group();
     const front = new THREE.Mesh(new THREE.PlaneGeometry(PORTAL_A * 2, PORTAL_B * 2), mat);
     front.position.z = 0.006;
-    const depth = 0.6;
+    const depth = PORTAL_DEPTH;
     const innerMat = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: displayVS, fragmentShader: displayFS, side: THREE.BackSide });
     const inner = new THREE.Mesh(new THREE.BoxGeometry(PORTAL_A * 2, PORTAL_B * 2, depth).translate(0, 0, -depth / 2), innerMat);
     this.group.add(front, inner);
@@ -331,6 +333,11 @@ const _v2 = new THREE.Vector3();
 const _m = new THREE.Matrix4();
 const _ax = new THREE.Vector3();
 const _pm = new THREE.Matrix4();
+const _c4 = new THREE.Vector4();
+const _pv = new THREE.Matrix4();
+const _r1 = new THREE.Vector4();
+const _r2 = new THREE.Vector4();
+const NONE = new THREE.Vector4(); // marca: portal todo atrás da câmera
 const _sphere = new THREE.Sphere();
 
 export class PortalSystem {
@@ -856,6 +863,71 @@ export class PortalSystem {
     }
   }
 
+  /**
+   * Retângulo (em pixels de `W`×`H`) que o portal P ocupa na tela de uma câmera
+   * (`vp` = projeção × vista): caixa de projeção dos 8 cantos do volume dele,
+   * com folga para o filtro. `null` se algum canto passa do plano próximo (portal
+   * colado na câmera) — aí vale a tela inteira; `NONE` se ele está todo atrás da câmera.
+   */
+  footprint(P, vp, near, W, H, out) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    let behind = 0;
+    let close = false;
+    for (let i = 0; i < 8; i++) {
+      _c4.set(i & 1 ? PORTAL_A : -PORTAL_A, i & 2 ? PORTAL_B : -PORTAL_B, i & 4 ? 0.01 : -PORTAL_DEPTH, 1).applyMatrix4(P.matrix).applyMatrix4(vp);
+      if (_c4.w <= 0) {
+        behind++;
+        continue;
+      }
+      if (_c4.w < near * 2) close = true;
+      const x = (_c4.x / _c4.w * 0.5 + 0.5) * W;
+      const y = (_c4.y / _c4.w * 0.5 + 0.5) * H;
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y);
+      y1 = Math.max(y1, y);
+    }
+    if (behind === 8) return NONE;
+    if (behind || close) return null;
+    return out.set(x0, y0, x1, y1);
+  }
+
+  /**
+   * A tela do portal só lê da textura os pixels onde ela aparece, então a vista
+   * pelo portal é desenhada só no retângulo da tela que o portal ocupa — com o
+   * portal longe ou de lado, uma fração da tela. Quando o próprio portal aparece
+   * na vista dele (corredor entre os dois), a textura do quadro anterior também
+   * é lida ali, então esse retângulo entra na conta. Com portais de outros
+   * jogadores na cena, desenha tudo como antes.
+   */
+  scissorTo(P, rt, vp) {
+    const cam = this.camera;
+    const W = rt.width;
+    const H = rt.height;
+    const r1 = this.remote.size ? null : this.footprint(P, _pm, cam.near, W, H, _r1);
+    const r2 = r1 && r1 !== NONE ? this.footprint(P, vp, this.vcam.near, W, H, _r2) : null;
+    // sem retângulo (portal colado na câmera real ou na virtual): vale a tela inteira
+    if (!r1 || r1 === NONE || !r2) {
+      rt.scissorTest = false;
+      return;
+    }
+    const PAD = 4;
+    const both = r2 !== NONE;
+    const x0 = Math.max(0, Math.floor(Math.min(r1.x, both ? r2.x : Infinity) - PAD));
+    const y0 = Math.max(0, Math.floor(Math.min(r1.y, both ? r2.y : Infinity) - PAD));
+    const x1 = Math.min(W, Math.ceil(Math.max(r1.z, both ? r2.z : -Infinity) + PAD));
+    const y1 = Math.min(H, Math.ceil(Math.max(r1.w, both ? r2.w : -Infinity) + PAD));
+    if (x1 <= x0 || y1 <= y0 || (x1 - x0) * (y1 - y0) > 0.85 * W * H) {
+      rt.scissorTest = false;
+      return;
+    }
+    rt.scissor.set(x0, y0, x1 - x0, y1 - y0);
+    rt.scissorTest = true;
+  }
+
   render() {
     if (!this.enabled) return;
     const r = this.renderer;
@@ -876,6 +948,7 @@ export class PortalSystem {
       v.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
       v.matrixWorld.multiplyMatrices(M, cam.matrixWorld);
       v.matrixWorldInverse.copy(v.matrixWorld).invert();
+      this.scissorTo(P, P.rt[1 - P.read], _pv.multiplyMatrices(v.projectionMatrix, v.matrixWorldInverse));
       // corta tudo que estiver atrás do portal de saída
       this.clip.setFromNormalAndCoplanarPoint(Q.normal, Q.center);
       r.clippingPlanes = [this.clip];
