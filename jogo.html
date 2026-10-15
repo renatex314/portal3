@@ -120,6 +120,26 @@
       </div>
     </section>
 
+    <!-- campanha original: de onde vêm os arquivos do Portal -->
+    <section id="campaign-src" class="overlay" hidden>
+      <div class="box wide">
+        <small>campanha original</small>
+        <h2>Use a sua cópia do Portal</h2>
+        <p>
+          Os mapas, as falas e as legendas vêm do <b>Portal</b> (Valve) que você tem, e não do site. Escolha o pacote
+          gerado com <code>npm run pacote</code> (um arquivo <code>portal-campanha.zip</code>) ou a pasta do Portal
+          instalado (a que tem as pastas <code>portal</code> e <code>hl2</code>).
+        </p>
+        <p class="muted">Tudo é lido só neste navegador: nada é enviado. No Chrome e no Edge a escolha fica lembrada.</p>
+        <div class="row">
+          <button class="big" data-src="pacote">Escolher o pacote (.zip)</button>
+          <button class="chip" data-src="pasta">Escolher a pasta do Portal</button>
+          <button class="chip" data-src="cancelar">Cancelar</button>
+        </div>
+        <p class="src-msg note warn" aria-live="polite"></p>
+      </div>
+    </section>
+
     <!-- fim de fase -->
     <section id="done" class="overlay" hidden>
       <div class="box">

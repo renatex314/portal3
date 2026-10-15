@@ -406,6 +406,7 @@ export class PortalSystem {
     if (P.fixed) return { ok: false };
     const hit = this.world.raycast(origin, dir, 400);
     if (!hit) return { ok: false };
+    if (hit.box.surfaceFit) return this.tryPlaceSurface(P, hit, dir);
     if (!hit.box.portalable) return { ok: false, point: hit.point, normal: hit.normal };
     const n = hit.normal.clone();
     let up;
@@ -500,6 +501,77 @@ export class PortalSystem {
     return { ok: true, point: final, normal: n, up, boxIndex: this.world.solids.indexOf(box) };
   }
 
+  /**
+   * Mapas importados (campanha): a parede é feita de vários pincéis, então o
+   * portal cabe se cada ponto da borda tiver, logo atrás, uma face que aceita
+   * portal no mesmo plano — e nada sólido na frente.
+   */
+  tryPlaceSurface(P, hit, dir) {
+    const fail = { ok: false, point: hit.point, normal: hit.normal };
+    const n = hit.normal.clone();
+    if (!hit.box.portalAt(n)) return fail;
+    let up;
+    if (Math.abs(n.y) > 0.5) {
+      up = dir.clone().projectOnPlane(n);
+      if (up.lengthSq() < 1e-6) up.set(0, 0, -1);
+      up.normalize();
+      if (n.y < 0) up.negate();
+    } else up = new THREE.Vector3(0, 1, 0).projectOnPlane(n).normalize();
+    const right = new THREE.Vector3().crossVectors(up, n).normalize();
+    const plane = n.dot(hit.point);
+    const back = new THREE.Vector3();
+    const front = new THREE.Vector3();
+    const backed = (q) => {
+      back.copy(q).addScaledVector(n, 0.05);
+      const h = this.world.raycast(back, n.clone().negate(), 0.12);
+      return h && h.normal.dot(n) > 0.999 && Math.abs(n.dot(h.point) - plane) < 0.01 && h.box.portalAt?.(h.normal);
+    };
+    const blocked = (q) => {
+      front.copy(q).addScaledVector(n, 0.06);
+      for (const b of this.world.solids) {
+        if (b.noRay || b.disabled) continue;
+        if (b.planes ? b.planes.every((pl) => pl.n.dot(front) < pl.d) : !b.obb && front.x > b.min.x && front.x < b.max.x && front.y > b.min.y && front.y < b.max.y && front.z > b.min.z && front.z < b.max.z) return true;
+      }
+      return false;
+    };
+    const fits = (c) => {
+      if (this.blockedAt?.(c)) return false; // volumes sem portal (func_noportal_volume)
+      const samples = [c.clone()];
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        samples.push(c.clone().addScaledVector(right, Math.cos(a) * PORTAL_A * 0.98).addScaledVector(up, Math.sin(a) * PORTAL_B * 0.98));
+      }
+      for (const [x, y] of [[0.5, 0.5], [-0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]])
+        samples.push(c.clone().addScaledVector(right, x * PORTAL_A).addScaledVector(up, y * PORTAL_B));
+      for (const q of samples) if (!backed(q) || blocked(q)) return false;
+      for (const O of this.list) {
+        if (O === P || !O.placed) continue;
+        if (O.normal.dot(n) > 0.99 && Math.abs(O.normal.dot(c) - O.normal.dot(O.center)) < 0.02) {
+          const d = c.clone().sub(O.center);
+          const du = d.dot(right) / (PORTAL_A * 2);
+          const dv = d.dot(up) / (PORTAL_B * 2);
+          if (du * du + dv * dv < 1) return false;
+        }
+      }
+      return true;
+    };
+    const center = hit.point.clone();
+    let final = fits(center) ? center : null;
+    // como no jogo original, o portal "escorrega" para a posição válida mais próxima
+    outer: for (let r = 0.15; !final && r <= 1.8; r += 0.15)
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const c = center.clone().addScaledVector(right, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r);
+        if (fits(c)) {
+          final = c;
+          break outer;
+        }
+      }
+    if (!final) return fail;
+    P.setFrame(final.addScaledVector(n, 0.002), n, up, hit.box);
+    return { ok: true, point: final, normal: n, up, boxIndex: this.world.solids.indexOf(hit.box) };
+  }
+
   // ------------------------------------------------------------ física
   /**
    * Portais ligados em cuja boca está o centro de um corpo (o corpo está
@@ -527,6 +599,11 @@ export class PortalSystem {
     for (const P of mouths) {
       const n = P.normal;
       const plane = n.dot(P.center) + 0.01;
+      if (box.pts) {
+        // sólido convexo importado: passa se todos os vértices estão atrás do plano
+        if (box.pts.every((p) => n.dot(p) <= plane)) return true;
+        continue;
+      }
       if (box.obb) {
         // caixa girada (painel diagonal): passa se ela inteira está atrás do plano
         const o = box.obb;

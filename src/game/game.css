@@ -177,3 +177,16 @@ body.zoomed #zoom-ui { opacity: 1; }
 #era b { font-family: var(--display); font-size: 26px; color: #7fe3c4; transition: color 0.4s; }
 #era.future b { color: #ffb070; }
 #era small { font-size: 11px; color: var(--muted); }
+#campaign-src .src-msg:empty { display: none; }
+#campaign-src code { font-size: 0.92em; background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 5px; }
+
+/* créditos da campanha original (texto vindo da cópia do Portal do jogador) */
+#campaign-credits { position: fixed; inset: 0; z-index: 45; background: #050505; color: #ffb600; display: grid; grid-template-columns: 1fr 1fr; gap: 3vw; padding: 5vh 4vw; font: 15px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-shadow: 0 0 6px rgba(255,182,0,0.45); transition: opacity 1.2s; cursor: pointer; }
+#campaign-credits.out { opacity: 0; }
+#campaign-credits pre { margin: 0; font: inherit; white-space: pre-wrap; }
+#campaign-credits .cr-left { border: 1px dashed rgba(255,182,0,0.6); padding: 14px 18px; overflow: hidden; }
+#campaign-credits .cr-right { display: grid; grid-template-rows: 1fr auto; gap: 2vh; min-height: 0; }
+#campaign-credits .cr-names { border: 1px dashed rgba(255,182,0,0.6); padding: 0 18px; overflow: hidden; position: relative; }
+#campaign-credits .cr-names pre { position: absolute; left: 18px; right: 18px; top: 0; }
+#campaign-credits .cr-art { font-size: 11px; line-height: 1.12; white-space: pre; min-height: 23em; }
+#campaign-credits .cr-skip { position: fixed; right: 18px; bottom: 12px; margin: 0; font-size: 11px; opacity: 0.5; }

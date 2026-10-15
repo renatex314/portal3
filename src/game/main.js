@@ -431,6 +431,7 @@ progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.
 progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.momentum = Math.max(progress.momentum || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.frontier = Math.max(progress.frontier || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.campaign = Math.max(progress.campaign || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
 const saveProgress = () => {
   try {
@@ -439,7 +440,7 @@ const saveProgress = () => {
 };
 
 const levelLabel = (L) =>
-  L.free ? 'Mapa livre' : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
+  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -447,6 +448,11 @@ const cycleSpot = (i) => {
 
 // ------------------------------------------------------------------ fases
 function clearLevel() {
+  portals.blockedAt = null;
+  viewOverride = null;
+  clearTimeout(fadeTimer);
+  document.getElementById('campaign-fade')?.style.setProperty('opacity', '0');
+  campaign?.dialogue.stopAll();
   world.reset();
   portals.reset();
   energy.reset();
@@ -475,6 +481,139 @@ function clearLevel() {
   $('subs').classList.remove('show');
 }
 
+const CORE_VOICES = ['Portal.Glados_core.Curiosity_', 'Portal.Glados_core.Aggressive_', 'Portal.Glados_core.Crazy_'];
+/** cubo (amostra) — ou, na campanha original, um núcleo da luta final */
+function makeCube(x, y, z, opts = {}) {
+  const core = opts.core !== undefined;
+  const m = core ? campaign.coreModel(opts.core) : sampleCube(opts);
+  dyn.add(m);
+  const c = new Cube(physics, portals, m, x, y, z, opts);
+  c.ioName = opts.ioName;
+  if (core) {
+    c.ioClass = 'prop_glados_core';
+    c.coreLines = CORE_VOICES[opts.core] ? campaign.dialogue.soundNames(CORE_VOICES[opts.core]) : [];
+    c.coreDelay = opts.coreDelay ?? 0.4;
+    c.grabUnlock = !!opts.grabUnlock;
+    if (opts.frozen) {
+      c.frozen = true;
+      c.body.setBodyType(1, true); // preso no lugar até EnableMotion
+    }
+  }
+  cubes.push(c);
+  return c;
+}
+
+/**
+ * Tela escurecendo/clareando (env_fade da campanha original). `from`: começa na
+ * cor, segura `hold` s e clareia em `dur` s; senão escurece em `dur` s, segura e
+ * volta — a não ser com `stay` ("fica escuro" até o próximo esmaecimento).
+ */
+let fadeTimer = 0;
+function screenFade(color, dur, hold, from, stay) {
+  let el = document.getElementById('campaign-fade');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'campaign-fade';
+    el.style.cssText = 'position:fixed;inset:0;pointer-events:none;opacity:0;z-index:40';
+    document.body.appendChild(el);
+  }
+  clearTimeout(fadeTimer);
+  const to = (opacity, secs) => {
+    el.style.transition = `opacity ${Math.max(0, secs)}s linear`;
+    el.style.opacity = String(opacity);
+  };
+  el.style.background = color;
+  if (from) {
+    to(1, 0);
+    fadeTimer = setTimeout(() => to(0, dur), Math.max(0, hold) * 1000);
+  } else {
+    requestAnimationFrame(() => to(1, dur));
+    if (!stay) fadeTimer = setTimeout(() => to(0, 0.5), (dur + Math.max(hold, 0.3)) * 1000);
+  }
+}
+
+/** fim da campanha original: tela própria (o final cantado do original não é reproduzido) */
+function completeCampaign() {
+  if (completed) return;
+  completed = true;
+  sfx.win();
+  document.exitPointerLock?.();
+  progress.campaign = 99;
+  saveProgress();
+  $('done-title').textContent = 'Campanha original concluída';
+  $('done-time').textContent = `Tempo na última fase: ${fmt(levelTime)} · mortes no total: ${deaths}`;
+  $('next').hidden = true;
+  $('done').hidden = false;
+}
+
+// módulo da campanha original (carregado sob demanda)
+let campaign = null;
+
+// câmera de cena (point_viewcontrol): enquanto ligada, a tela mostra esse ponto de vista
+let viewOverride = null;
+
+// ganchos que o sistema de entidades da campanha original usa
+const campaignCtx = {
+  world,
+  portals,
+  player,
+  cubes: () => cubes,
+  spawnCube(pos, opts = {}) {
+    const c = makeCube(pos.x, pos.y, pos.z, opts);
+    c.ioOutputs = opts.outputs;
+    return c;
+  },
+  removeCube(c) {
+    if (c.gone) return;
+    if (held === c) release();
+    dissolver.add(c.mesh, new THREE.Color(0.4, 1.0, 0.8));
+    c.vanish();
+    c.killed = true;
+    cubes = cubes.filter((x) => x !== c);
+  },
+  die: () => die(),
+  hurt(amount) {
+    health -= amount;
+    hurtT = 0;
+    hurtFlash = 1;
+    if (health <= 0) die();
+  },
+  complete(map) {
+    if (map === 'final') return completeCampaign();
+    // elevador de chegada também tem uma troca de mapa (de volta à câmara anterior): ignora
+    const to = LEVELS.findIndex((L) => L.map && L.map === (map ?? '').toLowerCase());
+    if (to >= 0 && to <= levelIdx) return;
+    complete(false);
+  },
+  fade: (...a) => screenFade(...a),
+  view: (v) => (viewOverride = v),
+  teleport(pos, yaw) {
+    player.spawn(pos.x, pos.y, pos.z, yaw);
+  },
+  toast: (m) => toast(m),
+  scene: (file) => campaign.dialogue.playScene(file),
+  sound: (name, vol) => campaign.dialogue.playSound(name, vol),
+  stopSound: (h, fade) => campaign.dialogue.stopSound(h, fade),
+  async credits() {
+    document.exitPointerLock?.();
+    const d = await campaign.loadCredits(campaign.dialogue);
+    if (d) await campaign.playCredits(campaign.dialogue, d);
+  },
+  setVolume: (h, v) => campaign.dialogue.setVolume(h, v),
+};
+// legenda das falas da campanha (texto vindo da instalação: entra como texto, nunca como HTML)
+let subTimer = 0;
+function campaignSubtitle(who, text, secs) {
+  const subs = $('subs');
+  const w = document.createElement('span');
+  w.className = 'who';
+  w.textContent = who;
+  subs.replaceChildren(w, document.createTextNode(text));
+  subs.classList.add('show');
+  clearTimeout(subTimer);
+  subTimer = setTimeout(() => subs.classList.remove('show'), secs * 1000);
+}
+
 const spawnOffset = () => (mp() ? [0, 1.3, -1.3, 2.6][net.slot % 4] : 0);
 
 function loadLevel(i, silent = false) {
@@ -486,10 +625,11 @@ function loadLevel(i, silent = false) {
   const [x, y, z, yaw] = data.spawn;
   player.spawn(x + spawnOffset(), y, z, yaw);
   physics.setPlayer(player.half);
-  for (const [cx, cy, cz, opts] of data.cubes ?? []) {
-    const m = sampleCube(opts);
-    dyn.add(m);
-    cubes.push(new Cube(physics, portals, m, cx, cy, cz, opts));
+  for (const [cx, cy, cz, opts] of data.cubes ?? []) makeCube(cx, cy, cz, opts);
+  // campanha original: as entidades do mapa (botões, portas, elevadores…) ganham vida
+  if (data.campaign) {
+    data.campaign.runtime = new campaign.CampaignRuntime(level.bsp(), data.campaign, campaignCtx);
+    data.campaign.runtime.start();
   }
   for (const b of [...(data.booths ?? []), ...(data.npcs ?? [])]) {
     const p = PEOPLE[b.who];
@@ -704,6 +844,8 @@ function use() {
   }
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camForward();
+  // campanha original: botões de apertar (func_button) vêm antes de pegar objetos
+  if (data?.campaign?.runtime?.use(origin, dir)) return;
   const hit = rayCube(origin, dir, 2.8);
   // por trás de uma torreta ativa: E desliga (e ela tomba)
   const ti = turrets.findIndex((t) => t.canDisableFrom(player.pos) && (!hit || hit.c === t));
@@ -712,11 +854,16 @@ function use() {
     return;
   }
   if (!hit) return;
+  if (hit.c.frozen) {
+    if (!hit.c.grabUnlock) return; // núcleo ainda preso na máquina
+    data.campaign.runtime.unfreeze(hit.c);
+  }
   if (hit.c.remote?.held && performance.now() - hit.c.remote.t < 500) return toast('Outra pessoa está segurando essa amostra.');
   const wall = world.raycast(origin, dir, hit.t);
   if (wall) return;
   held = hit.c;
   held.held = true;
+  data?.campaign?.runtime?.onPickup(held);
   held.farTime = 0;
   held.space.identity(); // segurado do mesmo lado do jogador
   // segura mantendo o giro relativo ao olhar (cubo no múltiplo de 90° mais perto;
@@ -817,7 +964,7 @@ function die() {
   release();
   const [x, y, z, yaw] = data.spawn;
   player.spawn(x + spawnOffset(), y, z, yaw);
-  playLines([[level.who, ['Opa. Volta pro começo e tenta de novo.', 'Essa doeu. De novo!', 'Calma, sô. Mais uma vez.'][Math.floor(Math.random() * 3)]]]);
+  if (level.series !== 'campaign') playLines([[level.who, ['Opa. Volta pro começo e tenta de novo.', 'Essa doeu. De novo!', 'Calma, sô. Mais uma vez.'][Math.floor(Math.random() * 3)]]]);
 }
 
 function complete(final) {
@@ -836,7 +983,8 @@ function complete(final) {
     showFinal(t);
     return;
   }
-  $('done-title').textContent = `${levelLabel(level)} concluíd${level.code ? 'o' : 'a'}`;
+  const ending = level.series === 'campaign' ? (level.name.startsWith('Câmaras') ? 'as' : 'a') : level.code ? 'o' : 'a';
+  $('done-title').textContent = `${levelLabel(level)} concluíd${ending}`;
   $('done-time').textContent = `Tempo: ${fmt(t)}${prev && prev <= t ? ` · recorde ${fmt(prev)}` : ' · novo recorde!'}`;
   $('done').hidden = false;
 }
@@ -1039,6 +1187,14 @@ document.addEventListener('pointerlockchange', () => {
   document.body.classList.toggle('playing', locked);
   for (const k of Object.keys(input)) input[k] = false;
 });
+// o navegador recusou travar o mouse (ex.: o clique "expirou" enquanto a campanha
+// original carregava o mapa): mostra a pausa, e o "Continuar" trava de novo
+document.addEventListener('pointerlockerror', () => {
+  if (!running || completed || DEBUG) return;
+  paused = true;
+  $('pause').hidden = false;
+  fillMapSelect();
+});
 
 // ------------------------------------------------------------------ menus
 function setAudio(music, voice) {
@@ -1058,9 +1214,11 @@ function renderMenu() {
     ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
     ['Série Momento', 'arremessos encadeados: abra os portais nos painéis diagonais em pleno voo', (L) => L.series === 'momentum'],
     ['Série Fronteira', 'mapas enormes com tudo junto: lasers, funis, placas de lançamento, viagem no tempo, antigravidade, buracos negros e a Lua', (L) => L.series === 'frontier'],
+    ['Campanha original', 'precisa da sua cópia do Portal (Valve): escolha o pacote gerado com "npm run pacote" ou a pasta do jogo — tudo é lido só no seu navegador', (L) => L.series === 'campaign'],
     ['Exploração', '', (L) => L.free],
   ];
   for (const [title, sub, pick] of groups) {
+    if (!LEVELS.some(pick)) continue;
     const h = document.createElement('div');
     h.className = 'lvl-head';
     h.innerHTML = `<b>${title}</b>${sub ? `<span>${sub}</span>` : ''}`;
@@ -1080,7 +1238,20 @@ function renderMenu() {
   }
 }
 
-function startLevel(i) {
+async function startLevel(i) {
+  if (LEVELS[i].preload) {
+    // campanha original: o mapa vem da instalação do jogador
+    if (mp()) return toast('A campanha original é só no modo solo.');
+    toast('Carregando o mapa…');
+    try {
+      await LEVELS[i].preload();
+      $('toast').classList.remove('show');
+    } catch (err) {
+      console.error(err);
+      toast(err.message);
+      return;
+    }
+  }
   sound.init();
   setAudio($('opt-music').classList.contains('on'), $('opt-voice').classList.contains('on'));
   if (mp()) {
@@ -1213,6 +1384,18 @@ $('p-blur').addEventListener('click', () => setBlur(!blurOn));
 if (!narrator.available) setTimeout(() => !narrator.available && $('opt-voice').classList.remove('on'), 1500);
 if (matchMedia('(pointer: coarse)').matches) $('mobile').hidden = false;
 renderMenu();
+// campanha original: carrega o módulo, põe os mapas no menu e, com
+// jogo.html?campanha=testchmb_a_00, já começa direto no mapa
+import('./campaign/hook.js').then((m) => {
+    campaign = m;
+    m.dialogue.onSubtitle = campaignSubtitle;
+    const before = LEVELS.findIndex((L) => L.free);
+    LEVELS.splice(before < 0 ? LEVELS.length : before, 0, ...m.CAMPAIGN);
+    renderMenu();
+    const want = new URLSearchParams(location.search).get('campanha');
+    const idx = want ? LEVELS.findIndex((L) => L.map === want) : -1;
+    if (idx >= 0) startLevel(idx);
+  });
 
 // ------------------------------------------------------------------ loop
 const clock = new THREE.Clock();
@@ -1267,6 +1450,7 @@ function updateRex(dt) {
 }
 
 function update(dt, t) {
+  data?.campaign?.runtime?.update(dt);
   levelTime += dt;
   world.update(t, dt);
   portals.update(t, dt);
@@ -1729,6 +1913,10 @@ function frame() {
       updateDinos(t, dt);
       player.applyCamera(dt);
     }
+    if (viewOverride) {
+      camera.position.copy(viewOverride.pos);
+      camera.quaternion.setFromEuler(new THREE.Euler(viewOverride.pitch, viewOverride.yaw, 0, 'YXZ'));
+    }
     portals.render();
   } else {
     // fundo do menu: câmara 1 girando devagar
@@ -1789,4 +1977,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

@@ -383,6 +383,7 @@ LEVELS.push(...MOMENTUM);
 LEVELS.push(...MOMENTUM2);
 // série Fronteira: mapas enormes com todas as mecânicas juntas (e a Lua)
 LEVELS.push(...FRONTIER);
+// (a campanha original entra depois desta lista, pelo main.js — ver src/game/campaign)
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);
 

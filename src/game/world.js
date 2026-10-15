@@ -267,6 +267,31 @@ function rayObb(origin, dir, obb, maxDist) {
   return { dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal };
 }
 
+/** raio contra sólido convexo (interseção dos semiespaços n·p ≤ d) */
+function rayConvex(origin, dir, planes, maxDist) {
+  let tmin = 0;
+  let tmax = maxDist;
+  let hitN = null;
+  for (const pl of planes) {
+    const den = pl.n.dot(dir);
+    const dist = pl.d - pl.n.dot(origin);
+    if (Math.abs(den) < 1e-9) {
+      if (dist < 0) return null;
+      continue;
+    }
+    const t = dist / den;
+    if (den < 0) {
+      if (t > tmin) {
+        tmin = t;
+        hitN = pl.n;
+      }
+    } else if (t < tmax) tmax = t;
+    if (tmin > tmax) return null;
+  }
+  if (!hitN) return null; // começou dentro
+  return { dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal: hitN.clone() };
+}
+
 export function aabbOverlap(aMin, aMax, bMin, bMax, eps = 0) {
   return aMin.x < bMax.x - eps && aMax.x > bMin.x + eps && aMin.y < bMax.y - eps && aMax.y > bMin.y + eps && aMin.z < bMax.z - eps && aMax.z > bMin.z + eps;
 }
@@ -514,6 +539,130 @@ export class World {
     this.solids.push(b);
     this.physics?.addBox(b);
     return b;
+  }
+
+  // ------------------------------------------------- mapas importados (campanha)
+  /** material de cada tipo de face importada; null = face escondida */
+  importedMat(kind, faceIndex = 0) {
+    const M = materials();
+    if (!M.lamp) {
+      M.lamp = { mat: new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff6e8).multiplyScalar(2.2), toneMapped: false }), portalable: false };
+      M.darkFace = { mat: M.dark, portalable: false };
+      M.hidden = new THREE.MeshBasicMaterial({ visible: false });
+    }
+    if (!kind) return M.hidden;
+    if (kind === 'door') return M.door;
+    if (kind === 'button') return (M.buttonFace ??= new THREE.MeshStandardMaterial({ color: 0xc0392b, emissive: 0x5a0a05, roughness: 0.5 }));
+    const m = kind === 'dark' ? M.darkFace : kind === 'goo' ? M.magma : M[kind] ?? M.metal;
+    return m.faces ? m.faces[faceIndex] : m.mat;
+  }
+
+  /** caixa alinhada com um tipo por face (ordem +x −x +y −y +z −z); aceita portal face a face */
+  importedBox(min, max, faces, { solid = true, noRay = false, kinematic = false } = {}) {
+    const mats = faces.map((k, i) => this.importedMat(k, i));
+    const mesh = new THREE.Mesh(worldBoxGeo(min, max), mats);
+    mesh.receiveShadow = true;
+    if (faces.every((k) => !k)) mesh.visible = false;
+    if (faces.includes('glass')) mesh.renderOrder = 5;
+    this.group.add(mesh);
+    const portalFaces = faces.map((k) => k === 'white');
+    const b = {
+      min: min.clone(),
+      max: max.clone(),
+      mat: faces.find((k) => k) ?? 'metal',
+      portalable: portalFaces.some(Boolean),
+      portalAt: (n) => portalFaces[Math.abs(n.x) > 0.5 ? (n.x > 0 ? 0 : 1) : Math.abs(n.y) > 0.5 ? (n.y > 0 ? 2 : 3) : n.z > 0 ? 4 : 5],
+      surfaceFit: true,
+      noRay,
+      mesh,
+      solid,
+      imported: true,
+    };
+    if (solid) {
+      this.solids.push(b);
+      this.physics?.addBox(b, kinematic);
+    }
+    return b;
+  }
+
+  /**
+   * Sólido convexo qualquer (pincel inclinado): `pts` são os vértices e
+   * `planes` [{ n, d, kind }] as faces (n aponta para fora; dentro: n·p ≤ d).
+   */
+  convex(pts, planes, { solid = true, noRay = false, kinematic = false } = {}) {
+    const pos = [];
+    const uv = [];
+    const geo = new THREE.BufferGeometry();
+    const mats = [];
+    let start = 0;
+    planes.forEach((pl) => {
+      const on = pts.filter((p) => Math.abs(pl.n.dot(p) - pl.d) < 2e-3);
+      if (on.length < 3) return;
+      const c = on.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / on.length);
+      const t = new THREE.Vector3().subVectors(on[0], c).normalize();
+      const bt = new THREE.Vector3().crossVectors(pl.n, t);
+      on.sort((a, b) => {
+        const da = a.clone().sub(c);
+        const db = b.clone().sub(c);
+        return Math.atan2(da.dot(bt), da.dot(t)) - Math.atan2(db.dot(bt), db.dot(t));
+      });
+      const ax = Math.abs(pl.n.x) > Math.abs(pl.n.y) && Math.abs(pl.n.x) > Math.abs(pl.n.z) ? 0 : Math.abs(pl.n.y) > Math.abs(pl.n.z) ? 1 : 2;
+      const push = (p) => {
+        pos.push(p.x, p.y, p.z);
+        if (ax === 0) uv.push(p.z / TILE, p.y / TILE);
+        else if (ax === 1) uv.push(p.x / TILE, p.z / TILE);
+        else uv.push(p.x / TILE, p.y / TILE);
+      };
+      for (let i = 1; i + 1 < on.length; i++) {
+        push(on[0]);
+        push(on[i]);
+        push(on[i + 1]);
+      }
+      const n = (on.length - 2) * 3;
+      geo.addGroup(start, n, mats.length);
+      mats.push(this.importedMat(pl.kind, pl.n.y > 0.7 ? 2 : pl.n.y < -0.7 ? 3 : 0));
+      start += n;
+    });
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, mats);
+    mesh.receiveShadow = true;
+    if (planes.every((p) => !p.kind)) mesh.visible = false;
+    if (planes.some((p) => p.kind === 'glass')) mesh.renderOrder = 5;
+    this.group.add(mesh);
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const p of pts) {
+      min.min(p);
+      max.max(p);
+    }
+    const b = {
+      min,
+      max,
+      mat: planes.find((p) => p.kind)?.kind ?? 'metal',
+      planes: planes.map((p) => ({ n: p.n.clone(), d: p.d, portal: p.kind === 'white' })),
+      pts: pts.map((p) => p.clone()),
+      portalable: planes.some((p) => p.kind === 'white'),
+      portalAt: (n) => b.planes.some((p) => p.portal && p.n.dot(n) > 0.999),
+      surfaceFit: true,
+      noRay,
+      mesh,
+      solid,
+      imported: true,
+    };
+    if (solid) {
+      this.solids.push(b);
+      this.physics?.addConvex(b, kinematic);
+    }
+    return b;
+  }
+
+  /** liga/desliga um sólido importado (func_brush com Enable/Disable) */
+  setSolidEnabled(b, on) {
+    b.mesh.visible = on && b.mesh.material !== undefined && (Array.isArray(b.mesh.material) ? b.mesh.material.some((m) => m.visible !== false) : true);
+    b.disabled = !on;
+    if (b.collider) b.collider.setEnabled(on);
   }
 
   /**
@@ -1464,6 +1613,12 @@ export class World {
     let best = null;
     for (const b of this.solids) {
       if (filter && !filter(b)) continue;
+      if (b.noRay || b.disabled) continue;
+      if (b.planes) {
+        const h = rayConvex(origin, dir, b.planes, maxDist);
+        if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+        continue;
+      }
       if (b.obb) {
         const h = rayObb(origin, dir, b.obb, maxDist);
         if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
@@ -1516,7 +1671,11 @@ export class World {
 
   pointInSolid(p, except = null) {
     for (const b of this.solids) {
-      if (b === except) continue;
+      if (b === except || b.disabled) continue;
+      if (b.planes) {
+        if (b.planes.every((pl) => pl.n.dot(p) < pl.d)) return b;
+        continue;
+      }
       if (b.obb) {
         const l = p.clone().sub(b.obb.c).applyQuaternion(b.obb.qi);
         if (Math.abs(l.x) < b.obb.half.x && Math.abs(l.y) < b.obb.half.y && Math.abs(l.z) < b.obb.half.z) return b;
@@ -1533,6 +1692,11 @@ export class World {
     magma.offset.set(t * 0.02, t * 0.013);
     materials().magma.mat.emissiveIntensity = 0.95 + Math.sin(t * 1.7) * 0.2;
     for (const d of this.doors) {
+      // movimento próprio (trem/elevador da campanha importada, que segue trilhos)
+      if (d.drive) {
+        d.drive(dt);
+        continue;
+      }
       // caminho: vetor qualquer (plataformas diagonais) ou um eixo × distância (portas)
       const path = d.path ?? _path.set(0, 0, 0);
       if (!d.path) path[d.axis] = d.dist;

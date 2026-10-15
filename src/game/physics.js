@@ -80,6 +80,25 @@ export class Physics {
     this.ents.set(col.handle, { kind: 'static', box });
   }
 
+  /** sólido convexo (pincel inclinado de mapa importado) */
+  addConvex(b, kinematic = false) {
+    if (!this.world) return;
+    const c = new THREE.Vector3().addVectors(b.min, b.max).multiplyScalar(0.5);
+    const local = new Float32Array(b.pts.length * 3);
+    b.pts.forEach((p, i) => local.set([p.x - c.x, p.y - c.y, p.z - c.z], i * 3));
+    const desc = RAPIER.ColliderDesc.convexHull(local);
+    if (!desc) return;
+    desc.setFriction(0.8);
+    let col;
+    if (kinematic) {
+      const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(c.x, c.y, c.z));
+      col = this.world.createCollider(desc, body);
+      b.kbody = body;
+    } else col = this.world.createCollider(desc.setTranslation(c.x, c.y, c.z));
+    b.collider = col;
+    this.ents.set(col.handle, { kind: 'static', box: b });
+  }
+
   /** acompanha uma caixa que mudou de lugar (porta) */
   moveBox(box) {
     if (!box.kbody) return;

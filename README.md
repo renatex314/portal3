@@ -226,7 +226,57 @@ Som do jogo: **gravações reais de domínio público (CC0)**, com a síntese ao
 - Não são as trilhas nem os sons originais dos jogos Portal (Valve), que têm direitos autorais.
 A visita (documentário) continua com a música sintetizada.
 
-Original: sem nomes, marcas ou arquivos de outros jogos.
+Original: sem nomes, marcas ou arquivos de outros jogos (a campanha original, abaixo, usa os arquivos
+da cópia do Portal do próprio jogador; nenhum deles vem com o site).
+
+### Campanha original (com a sua cópia do Portal)
+
+Quem tem o **Portal** (Valve) pode jogar a campanha original inteira dentro deste jogo: as câmaras
+00 a 19, as três fases de fuga, a luta final e o encerramento com a música e a letra dos créditos.
+Nada da Valve fica neste repositório nem no site publicado (GitHub Pages) — os mapas, as falas, as
+legendas e a música vêm **da cópia do próprio jogador** e são lidos só no navegador dele.
+
+**1. Gere o pacote (uma vez, no computador que tem o Portal):**
+
+```bash
+npm run pacote                                        # pasta padrão (CrossOver)
+npm run pacote -- "/caminho/para/steamapps/common/Portal"
+```
+
+Sai um `portal-campanha.zip` (~180 MB) com só o que a campanha usa: os 18 mapas sem iluminação,
+visibilidade e texturas embutidas (314 MB → 17 MB), as falas e músicas tocadas por eles, as cenas, os
+scripts de som, o roteiro dos créditos e as legendas/textos em português do Brasil e inglês. O
+arquivo está no `.gitignore` — **não publique o pacote**: o conteúdo é da Valve. Guarde-o no seu
+computador (ou leve para outro aparelho seu).
+
+**2. Jogue:** no site (ou em `npm run dev`), abra uma câmara da seção "Campanha original" e escolha
+o `portal-campanha.zip` — ou, num computador com o Portal instalado, a pasta do jogo (a que tem as
+pastas `portal` e `hl2`). No Chrome e no Edge a escolha fica lembrada para a próxima visita.
+
+- **No desenvolvimento:** `npm run dev` lê direto a instalação em `PORTAL_DIR` (padrão: a pasta do
+  CrossOver), sem perguntar; `jogo.html?campanha=testchmb_a_00` já começa num mapa.
+
+Como funciona:
+
+- **Mapas** (`src/game/campaign/bsp.js`, `convert.js`): cada pincel vira uma caixa (ou sólido
+  convexo) com os materiais **daqui** — concreto claro onde o original aceita portal, metal onde não
+  aceita, vidro, painéis de luz e rocha fundida no lugar da gosma. Portais se apoiam em vários
+  pincéis seguidos e respeitam os volumes "sem portal" do original.
+- **Lógica** (`io.js`): o sistema de entradas/saídas das entidades — gatilhos com filtros, relés,
+  temporizadores, contadores, portas, botões, elevadores em trilhos, dispensadores de cubos,
+  portais fixos da fase, grades, bolas de energia e receptores, torretas, esmaecimentos, câmeras de
+  cena, músicas e troca de fase. Peças presas a uma porta ou trilho andam junto com ela. A arma é
+  achada e melhorada nas mesmas câmaras do original.
+- **Falas** (`dialogue.js`, `scenes.js`): as cenas da GLaDOS tocam os áudios da cópia do jogador,
+  com as legendas do próprio jogo em português do Brasil (ou inglês, se não houver).
+- **Luta final** (`boss.js`): a sequência é a do mapa original (núcleos que caem, incinerador,
+  foguetes desviados pelos portais), com desenho **próprio** para a máquina, os núcleos, a torreta
+  de foguetes e as cabines dos elevadores.
+- **Créditos** (`credits.js`): a música, a letra digitada, os nomes e a arte em ASCII seguem o
+  roteiro `scripts/credits.txt` da cópia do jogador, numa tela de terminal daqui.
+- **Pacote** (`scripts/pacote-portal.mjs`, `zip.js`, `source.js`): o .zip é lido por partes
+  (`File.slice` + `DecompressionStream`), sem carregar os 180 MB de uma vez.
+- O código da campanha é carregado à parte, só quando o jogo abre (~60 KB).
 
 ### Multiplayer na rede local
 
