@@ -275,18 +275,21 @@ function peerFeet() {
 scene.add(dyn);
 
 // ------------------------------------------------------------------ clones do passado (relógio do tempo)
-/** um raptor translúcido azul: o "você do passado" */
+/** um raptor em tons de cinza (opaco): as outras versões de você no tempo */
 function makeCloneGhost() {
   const w = makeDino('raptor', { helmet: 0x8fe3ff, vest: 0x38d8ff });
-  const mats = [];
   w.group.traverse((o) => {
     if (!o.material) return;
     o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
     for (const m of [o.material].flat()) {
-      m.transparent = true;
-      m.depthWrite = false;
-      m.emissive?.setRGB(0.08, 0.35, 0.55);
-      mats.push(m);
+      if (m.color) {
+        const l = m.color.r * 0.3 + m.color.g * 0.59 + m.color.b * 0.11;
+        m.color.setRGB(l, l, l);
+      }
+      if (m.emissive) {
+        const l = (m.emissive.r * 0.3 + m.emissive.g * 0.59 + m.emissive.b * 0.11) * 0.6;
+        m.emissive.setRGB(l, l, l);
+      }
     }
   });
   scene.add(w.group);
@@ -298,7 +301,6 @@ function makeCloneGhost() {
       w.group.rotation.set(0, yaw + Math.PI, up < 0 ? Math.PI : 0);
       w.P.pose = moving ? 'walk' : 'idle';
       poseDino(w, t, dt);
-      for (const m of mats) m.opacity = alpha;
     },
   };
 }
@@ -357,10 +359,10 @@ const chronosFx = {
   },
   echo(exit, open, pos) {
     sfx.echo(open);
-    if (open) timeRing(exit.c.clone().addScaledVector(exit.n, 0.04), exit.n, new THREE.Color(0.4, 1.6, 3), 0.8, 1, true);
+    if (open) timeRing(exit.c.clone().addScaledVector(exit.n, 0.04), exit.n, new THREE.Color(1.4, 1.4, 1.4), 0.8, 1, true);
     else if (pos) {
-      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), new THREE.Vector3(0, 1, 0), new THREE.Color(0.5, 1.8, 3), 0.7, 2.6);
-      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), exit.n, new THREE.Color(0.5, 1.8, 3), 0.7, 2.2);
+      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), new THREE.Vector3(0, 1, 0), new THREE.Color(1.6, 1.6, 1.6), 0.7, 2.6);
+      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), exit.n, new THREE.Color(1.6, 1.6, 1.6), 0.7, 2.2);
     }
   },
   toast: (m) => toast(m),

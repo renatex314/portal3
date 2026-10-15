@@ -57,11 +57,9 @@ const displayFS = /* glsl */ `
     float r = length(e);
     if (r > 1.0) discard;
     vec3 view = texture2D(map, gl_FragCoord.xy / uRes).rgb;
-    // portal temporal: a vista do passado sai ciano, com linhas de varredura correndo
+    // portal temporal: a vista do passado sai só em tons de cinza, sem nada por cima
     float lum = dot(view, vec3(0.3, 0.59, 0.11));
-    vec3 past = mix(vec3(lum), view, 0.35) * vec3(0.62, 0.95, 1.3) + vec3(0.0, 0.05, 0.1);
-    past *= 0.88 + 0.12 * sin(gl_FragCoord.y * 1.3 - uTime * 7.0);
-    view = mix(view, past, uPast);
+    view = mix(view, vec3(lum), uPast);
     // sem par: plasma girando na cor do portal, mais claro perto da borda
     float ang = uTime * 0.7 + r * 3.2;
     vec2 sp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * e * 2.4;
@@ -407,6 +405,22 @@ export class PortalSystem {
       blue.owner = orange.owner = id;
       this.remote.set(id, { blue, orange });
       this.prewarm(); // luzes novas na cena: recompila agora, não no meio do jogo
+    }
+    return this.remote.get(id);
+  }
+
+  /** par de portais de um clone do tempo (a versão do futuro): em tons de cinza, mas funciona como qualquer par */
+  clonePair(id) {
+    if (!this.remote.has(id)) {
+      const g = new THREE.Color(0.85, 0.85, 0.85);
+      const blue = new Portal('blue', this.scene, this.renderer, g);
+      const orange = new Portal('orange', this.scene, this.renderer, g);
+      blue.partner = orange;
+      orange.partner = blue;
+      blue.owner = orange.owner = id;
+      blue.gray = orange.gray = true;
+      this.remote.set(id, { blue, orange });
+      this.prewarm();
     }
     return this.remote.get(id);
   }
@@ -871,7 +885,7 @@ export class PortalSystem {
       // a luz do portal pulsa junto com a aura
       P.light.intensity = P.placed ? 9 + 1.5 * Math.sin(t * 2.6) + 14 * P.rimMat.uniforms.uFlash.value : 0;
       P.uniforms.uLinked.value = this.isLinked(P) ? 1 : 0;
-      P.uniforms.uPast.value += ((P.partner.delta > 0 ? 1 : 0) - P.uniforms.uPast.value) * Math.min(1, dt * 8);
+      P.uniforms.uPast.value += ((P.partner.delta > 0 || P.gray ? 1 : 0) - P.uniforms.uPast.value) * Math.min(1, dt * 8);
       if (P.delta > 0) {
         // o laranja do passado só existe lá: no presente fica a marca-holograma (feita pelo relógio)
         P.group.visible = false;

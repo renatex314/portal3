@@ -78,11 +78,12 @@ export class Chronos {
   // ------------------------------------------------------------------ estado
   clear() {
     if (this.frozenProps) this.setFreeze(false);
-    for (const c of this.clones ?? []) c.ghost?.group.parent?.remove(c.ghost.group);
+    for (const c of this.clones ?? []) this.dropClone(c);
     this.paused = false;
     this.tw = 0;
     this.samples = [];
     this.clones = [];
+    this.cloneSeq ??= 0;
     this.arrival = -Infinity; // instante de chegada do último salto (não dá para saltar para antes dele)
     this.sweep = null;
     this.frozenProps = false;
@@ -117,6 +118,41 @@ export class Chronos {
     };
   }
 
+  /** os seus portais normais agora (o par temporal não entra: ele é o salto); reaproveita o objeto se nada mudou */
+  portalState() {
+    const { portals } = this.ctx;
+    const { blue, orange } = portals;
+    const temporal = orange.placed && orange.delta > 0;
+    const fr = (P, on, old) => {
+      if (!on || !P.placed) return null;
+      if (old && old.box === P.box && old.c.equals(P.center) && old.n.equals(P.normal)) return old;
+      return { c: P.center.clone(), n: P.normal.clone(), u: P.up.clone(), box: P.box };
+    };
+    const old = this.samples[this.samples.length - 1]?.pt;
+    const b = fr(blue, !temporal, old?.b);
+    const o = fr(orange, !temporal, old?.o);
+    return old && old.b === b && old.o === o ? old : { b, o };
+  }
+
+  /** os portais que o clone disparou, no instante t do script dele */
+  syncClonePortals(c, t, alive) {
+    const { portals } = this.ctx;
+    const s = c.script[Math.max(0, Math.min(c.script.length - 1, Math.floor((t - c.script[0].t) / RATE + 1e-6)))];
+    const want = alive ? s.pt : null;
+    for (const which of ['b', 'o']) {
+      const f = want?.[which] ?? null;
+      if (!f && !c.pair) continue;
+      c.pair ??= portals.clonePair(c.id);
+      const P = which === 'b' ? c.pair.blue : c.pair.orange;
+      if (!f) {
+        if (P.placed) P.remove();
+      } else if (!P.placed || c.shown?.[which] !== f) {
+        P.setFrame(f.c, f.n, f.u, f.box);
+        (c.shown ??= {})[which] = f;
+      }
+    }
+  }
+
   record(t) {
     const { player } = this.ctx;
     this.samples.push({
@@ -127,6 +163,7 @@ export class Chronos {
       pitch: player.pitch,
       grounded: !!player.grounded,
       mv: !!player.grounded && player.vel.clone().setY(0).lengthSq() > 0.4,
+      pt: this.portalState(),
       w: this.snapshot(),
     });
     while (this.samples.length > 2 && t - this.samples[0].t > KEEP) this.samples.shift();
@@ -350,8 +387,10 @@ export class Chronos {
         // ainda não nasceu ou já mergulhou no azul (o loop fechou); ele continua na história: um novo salto
         // para antes do fim dele o traz de volta
         if (c.ghost) c.ghost.group.visible = false;
+        if (c.portal) c.portal.visible = false;
+        this.syncClonePortals(c, this.tw, false);
         if (c.end < this.samples[0].t - 1) {
-          c.ghost?.group.parent?.remove(c.ghost.group);
+          this.dropClone(c);
           this.clones.splice(i, 1);
         }
         continue;
@@ -359,6 +398,8 @@ export class Chronos {
       if (this.tw < c.end - ECHO - 0.02) c.echoed = c.closed = false;
       c.ghost ??= this.ctx.makeGhost();
       c.ghost.set(this.feetOf(pose.p, pose.up), pose.yaw, pose.up, pose.mv, t, dt, 0.55);
+      this.cloneBlue(c).visible = true;
+      this.syncClonePortals(c, this.tw, true);
       // últimos instantes: o azul "eco" abre para o clone mergulhar
       if (!c.echoed && this.tw > c.end - ECHO) {
         c.echoed = true;
@@ -370,6 +411,44 @@ export class Chronos {
       }
     }
     this.updateEco();
+  }
+
+  /** o azul de saída de um clone (a versão do futuro): um portal em tons de cinza, sempre visível */
+  cloneBlue(c) {
+    if (c.portal) return c.portal;
+    const g = new THREE.Group();
+    g.matrixAutoUpdate = false;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 48), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.5, 1.5, 1.5), toneMapped: false, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthWrite: false }));
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(0.87, 48), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.08, 0.08, 0.08), side: THREE.DoubleSide, transparent: true, opacity: 0.85, depthWrite: false }));
+    ring.scale.set(PORTAL_A, PORTAL_B, 1);
+    disc.scale.set(PORTAL_A, PORTAL_B, 1);
+    ring.position.z = 0.03;
+    disc.position.z = 0.02;
+    g.add(disc, ring);
+    const { c: pos, n, u } = c.exit;
+    const right = new V3().crossVectors(u, n).normalize();
+    g.matrix.makeBasis(right, u, n).setPosition(pos);
+    g.matrixWorldNeedsUpdate = true;
+    this.ctx.scene.add(g);
+    c.portal = g;
+    return g;
+  }
+
+  dropClone(c) {
+    c.ghost?.group.parent?.remove(c.ghost.group);
+    if (c.pair) {
+      this.ctx.portals.removeRemote(c.id);
+      c.pair = null;
+      c.shown = null;
+    }
+    if (c.portal) {
+      c.portal.parent?.remove(c.portal);
+      c.portal.traverse((o) => {
+        o.geometry?.dispose();
+        o.material?.dispose();
+      });
+      c.portal = null;
+    }
   }
 
   /** marca-holograma do laranja que está no passado ("−N s") */
@@ -585,6 +664,10 @@ export class Chronos {
     const T = this.tw - delta;
     const s = this.samples[this.indexAt(T)];
     this._undoPast = this.applyVisual(s.w);
+    // o marcador e o holograma da pausa são só para quem está no presente: dentro da vista do azul
+    // o marcador fica colado na câmera virtual e cobre tudo de branco
+    this._hide = [this.eco?.g, this.holo?.group].filter((g) => g?.visible);
+    for (const g of this._hide) g.visible = false;
     // clones: onde estavam então; e você mesmo, onde estava
     this._cloneVis = this.clones.map((c) => c.ghost?.group.visible);
     const t = this.ctx.t();
@@ -603,6 +686,8 @@ export class Chronos {
   }
 
   endPast() {
+    for (const g of this._hide ?? []) g.visible = true;
+    this._hide = null;
     this._undoPast?.();
     this._undoPast = null;
     if (this._pastSelf) this._pastSelf.group.visible = false;
@@ -684,8 +769,8 @@ export class Chronos {
       held.place(pos, held.quat);
     }
     // 4) o seu passado vira um clone
-    this.clones = this.clones.filter((c) => c.end >= Td);
-    this.clones.push({ born: this.samples[i].t, end: tail[tail.length - 1].t, script: tail, ghost: null, cp, exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() }, bad: {} });
+    this.clones = this.clones.filter((c) => c.end >= Td || (this.dropClone(c), false));
+    this.clones.push({ id: `clone${++this.cloneSeq}`, born: this.samples[i].t, end: tail[tail.length - 1].t, script: tail, ghost: null, cp, exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() }, bad: {} });
     this.samples = this.samples.slice(0, i + 1);
     this.tw = this.samples[i].t;
     this.next = this.tw + RATE;
@@ -804,7 +889,7 @@ export class Chronos {
   rollback(cp, why, at = null) {
     const { player, portals } = this.ctx;
     this.ctx.fx.paradox?.(why, at);
-    for (const c of this.clones) if (!cp.clones.includes(c)) c.ghost?.group.parent?.remove(c.ghost.group);
+    for (const c of this.clones) if (!cp.clones.includes(c)) this.dropClone(c);
     this.sweep?.undo?.();
     this.sweep = null;
     this.samples = cp.samples;
