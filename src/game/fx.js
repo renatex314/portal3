@@ -148,6 +148,42 @@ class MotionBlurPass extends Pass {
 }
 
 /**
+ * Onda de choque do tiro: só uma distorção da imagem (como ar quente ou uma
+ * lente), num anel pequeno que abre a partir da boca da arma — sem brilho.
+ */
+const ShockShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+    uT: { value: 1 },
+    uAspect: { value: 1 },
+    uMaxR: { value: 0.14 },
+    uStrength: { value: 0.03 },
+  },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse; uniform vec2 uCenter; uniform float uT, uAspect, uMaxR, uStrength;
+    varying vec2 vUv;
+    void main(){
+      if (uT >= 1.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 d = vUv - uCenter;
+      d.x *= uAspect;
+      float r = length(d);
+      float e = 1.0 - pow(1.0 - uT, 3.0); // abre rápido e desacelera
+      float R = 0.015 + e * uMaxR;
+      float w = mix(0.015, 0.04, e);
+      float x = (r - R) / w;
+      float band = exp(-x * x);
+      float fade = pow(1.0 - uT, 1.4);
+      // a imagem é puxada para dentro na frente da onda e empurrada atrás dela
+      vec2 dir = r > 1e-4 ? d / r : vec2(0.0);
+      vec2 off = dir * (-x * band * uStrength * fade);
+      off.x /= uAspect;
+      gl_FragColor = texture2D(tDiffuse, vUv + off);
+    }`,
+};
+
+/**
  * Troca o `renderer.render(cena, câmera)` final por: cena (com MSAA) → brilho
  * → tom/cor → acabamento. Os portais continuam renderizando direto nas
  * texturas deles (em espaço linear, sem tom), então nada muda para eles.
@@ -162,6 +198,8 @@ export class Post {
     this.composer.addPass(new RenderPass(scene, camera));
     this.blur = new MotionBlurPass(camera);
     this.composer.addPass(this.blur);
+    this.shock = new ShaderPass(ShockShader);
+    this.composer.addPass(this.shock);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 1.6);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
@@ -175,6 +213,16 @@ export class Post {
     this.composer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  /** dispara a onda de choque (distorção); a posição na tela vem de `shockAt` a cada quadro */
+  shockwave() {
+    this.shock.uniforms.uT.value = 0;
+  }
+
+  /** onde fica a boca da arma na tela (coordenadas 0..1), para a onda sair dali */
+  set shockAt(v) {
+    this.shock.uniforms.uCenter.value.copy(v);
+  }
+
   /**
    * `slow` 0..1 (tempo lento) aumenta a aberração e a vinheta; `speed` (m/s) e
    * `ahead` (−1..1, quanto do movimento é para a frente) acentuam o desfoque
@@ -186,6 +234,10 @@ export class Post {
     }
     const u = this.finish.uniforms;
     u.uTime.value = t;
+    const su = this.shock.uniforms;
+    su.uT.value = Math.min(1, su.uT.value + dt * 2.6);
+    su.uAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
+    this.shock.enabled = su.uT.value < 1;
     // salto no tempo: aberração forte que some em ~0,7 s
     this.warp = Math.max(0, (this.warp ?? 0) - dt * 1.5);
     u.uAberr.value = slow * 0.012 + this.warp * this.warp * 0.08;

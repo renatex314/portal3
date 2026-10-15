@@ -358,8 +358,9 @@ export class World {
     const b = this.box(x0, y0, z0, x1, y1, z1, 'magma', { solid: false });
     b.isHazard = true;
     this.hazards.push(b);
-    const light = new THREE.PointLight(0xff6a20, 25, 18, 1.6);
-    light.position.set((x0 + x1) / 2, y1 + 1.5, (z0 + z1) / 2);
+    // `light`/`lightLift`: intensidade e altura da luz (mapas importados usam mais alta e mais fraca)
+    const light = new THREE.PointLight(0xff6a20, opts.light ?? 25, 18, 1.6);
+    light.position.set((x0 + x1) / 2, y1 + (opts.lightLift ?? 1.5), (z0 + z1) / 2);
     this.group.add(light);
     if (opts.era) {
       this.inEra(b, opts.era);
@@ -930,31 +931,35 @@ export class World {
   }
 
   /** pedestal com a arma de portais (ou a melhoria dela) */
-  pedestal(x, y, z, gives, model) {
+  /** `height`: altura da arma acima da base (o pedestal estica até lá); padrão 1,45 m */
+  pedestal(x, y, z, gives, model, { height = 1.45 } = {}) {
     const g = new THREE.Group();
     const metal = materials().metal.mat;
+    const col = Math.max(0.15, height - 0.45);
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 1.0, 32), metal);
-    base.position.y = 0.5;
+    base.scale.y = col;
+    base.position.y = col / 2;
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.03, 8, 40).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.6, 2.6) }));
-    ring.position.y = 1.02;
+    ring.position.y = col + 0.02;
     g.add(base, ring);
     const holder = new THREE.Group();
-    holder.position.y = 1.45;
+    holder.position.y = height;
     if (model) holder.add(model);
     g.add(holder);
     const light = new THREE.PointLight(0x9fd8ff, 4, 5, 1.6);
-    light.position.y = 1.6;
+    light.position.y = height + 0.15;
     g.add(light);
     g.position.set(x, y, z);
     this.group.add(g);
     this.anim.push((t) => {
       holder.rotation.y = t * 0.8;
-      holder.position.y = 1.45 + Math.sin(t * 2) * 0.05;
+      holder.position.y = height + Math.sin(t * 2) * 0.05;
     });
-    const p = { pos: new THREE.Vector3(x, y + 1, z), gives, group: holder, taken: false, light };
+    const p = { pos: new THREE.Vector3(x, y + height - 0.45, z), gives, group: holder, taken: false, light };
     this.pedestals.push(p);
     return p;
   }
+
 
   /** lançador de bola de energia na parede (normal = para onde atira) */
   launcher(x, y, z, normal, opts = {}) {

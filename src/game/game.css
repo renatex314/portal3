@@ -190,3 +190,11 @@ body.zoomed #zoom-ui { opacity: 1; }
 #campaign-credits .cr-names pre { position: absolute; left: 18px; right: 18px; top: 0; }
 #campaign-credits .cr-art { font-size: 11px; line-height: 1.12; white-space: pre; min-height: 23em; }
 #campaign-credits .cr-skip { position: fixed; right: 18px; bottom: 12px; margin: 0; font-size: 11px; opacity: 0.5; }
+
+/* mira: superfície aceita portal (anel aceso em volta do ponto) ou não (ponto vermelho, cantos apagados) */
+#xh::after { content: ''; position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.9); box-shadow: 0 0 6px rgba(150,220,255,0.9), inset 0 0 4px rgba(150,220,255,0.6); opacity: 0; transform: scale(0.6); transition: opacity 0.12s, transform 0.12s; }
+#xh.aim-ok::after { opacity: 1; transform: scale(1); }
+#xh i { transition: background 0.12s, transform 0.12s; }
+#xh.aim-no i { background: #ff5a4a; transform: scale(0.8); }
+#xh.aim-no span { opacity: 0.4; }
+#xh.no-gun::after { display: none; }

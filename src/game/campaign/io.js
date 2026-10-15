@@ -5,7 +5,8 @@
 
 import * as THREE from 'three';
 import { S, toV, parseVec, vecKV, modelBounds, isCube, cubeOpts, yawFromSource } from './convert.js';
-import { RocketTurret, Rocket, bossMachine, animateBoss, coreModel, explosion, elevatorShell } from './boss.js';
+import { PORTAL_B } from '../portals.js';
+import { RocketTurret, Rocket, bossMachine, animateBoss, coreModel, explosion, elevatorShell, pedestalSwitch } from './boss.js';
 
 const D2R = Math.PI / 180;
 const ZERO = new THREE.Vector3();
@@ -39,6 +40,7 @@ export class CampaignRuntime {
     this.nodes = [];
     this.byName = new Map();
     this.brushOf = new Map(built.brushEnts.map((b) => [b.e, b]));
+    this.built = built;
     this.player = { cls: 'player', name: '!player', enabled: true };
     this.ball = { cls: 'prop_energy_ball', name: 'energy_ball', enabled: true, fired: new Map(), e: { outputs: [], kv: new Map() } };
     this.launchers = built.launchers ?? new Map();
@@ -50,6 +52,7 @@ export class CampaignRuntime {
     this.noPortal = [];
     for (const e of bsp.entities) this.add(e);
     for (const n of this.nodes) n.init?.();
+    this.setupFollowers(built);
     // volumes onde o original não deixa abrir portal
     ctx.portals.blockedAt = (c) => this.noPortal.some((n) => n.active && !n.dead && c.x > n.min.x - 0.3 && c.x < n.max.x + 0.3 && c.y > n.min.y - 0.3 && c.y < n.max.y + 0.3 && c.z > n.min.z - 0.3 && c.z < n.max.z + 0.3);
   }
@@ -59,7 +62,11 @@ export class CampaignRuntime {
     let best = null;
     for (const n of this.nodes) {
       if (n.dead || !n.useable) continue;
-      const b = this.brushOf.get(n.e)?.bounds ?? n.bounds;
+      const be = this.brushOf.get(n.e);
+      // limites atuais dos sólidos (a peça pode ter andado junto com o pedestal)
+      const b = be?.solids.length
+        ? be.solids.reduce((acc, sd) => ({ min: acc.min.min(sd.min), max: acc.max.max(sd.max) }), { min: be.solids[0].min.clone(), max: be.solids[0].max.clone() })
+        : (be?.bounds ?? n.bounds);
       if (!b) continue;
       let t0 = 0;
       let t1 = 2.6;
@@ -81,6 +88,62 @@ export class CampaignRuntime {
     if (!best || !best.n.enabled) return false;
     best.n.useable(this.player);
     return true;
+  }
+
+  /**
+   * Peças presas a algo que se move (pistão, plataforma, trilho): pincéis e
+   * caixas de colisão andam com a peça raiz (e carregam o jogador, como as
+   * portas); gatilhos presos andam junto também.
+   */
+  setupFollowers(built) {
+    const nodeOf = new Map(this.nodes.map((n) => [n.e, n]));
+    const offsetOf = (root) => {
+      const r = nodeOf.get(root);
+      return r?.doors?.[0]?.offset ?? r?.offset ?? null;
+    };
+    for (const f of built.followers ?? []) {
+      const prev = new THREE.Vector3();
+      f.solids.forEach((s, k) => {
+        const base = { min: s.min.clone(), max: s.max.clone() };
+        const d = { id: `follow-${k}`, box: s, plain: false, open: 0, target: 0, baseMin: base.min, baseMax: base.max, mesh: s.mesh, delta: new THREE.Vector3(), offset: new THREE.Vector3() };
+        d.drive = () => {
+          const off = offsetOf(f.root);
+          if (!off) return;
+          d.delta.subVectors(off, d.offset);
+          d.offset.copy(off);
+          s.min.copy(base.min).add(off);
+          s.max.copy(base.max).add(off);
+          s.mesh.position.copy(off);
+          this.ctx.world.physics?.moveBox(s);
+        };
+        this.ctx.world.doors.push(d);
+      });
+    }
+    // gatilhos presos (ex.: o que sobe o elevador): o volume anda com a raiz
+    for (const n of this.nodes) {
+      if (!n.min || !n.e.kv.get('parentname') || !built.movingRoot) continue;
+      const root = built.movingRoot(n.e);
+      if (!root) continue;
+      const base = { min: n.min.clone(), max: n.max.clone() };
+      const tick0 = n.tick;
+      n.tick = (dt) => {
+        const off = offsetOf(root);
+        if (off) {
+          n.min.copy(base.min).add(off);
+          n.max.copy(base.max).add(off);
+        }
+        tick0?.(dt);
+      };
+    }
+  }
+
+  /** o jogador pegou a arma de um pedestal: as saídas do mapa (desligar a arma de
+   *  cena, abrir portas, falas…) e a arma de cena para de atirar */
+  pickupGun(e) {
+    const n = this.nodes.find((x) => x.e === e);
+    if (!n) return;
+    n.picked = true;
+    this.fire(n, 'onplayerpickup', this.player);
   }
 
   /** núcleo preso que solta ao ser agarrado (flag do original) */
@@ -580,10 +643,20 @@ const SETUP = {
     const v = anglesToVectors(p || 0, y || 0, r || 0);
     n.normal = v.forward;
     n.up = v.up;
-    n.open = () => this.ctx.portals.placeFixed(n.which, n.center.toArray(), n.normal.toArray(), n.up.toArray());
+    n.open = () => {
+      // o portal do original tem meia altura de 56 unidades (1,4 m); o daqui é menor.
+      // Em parede, mantém a borda de baixo onde era (rente ao chão) para dar para
+      // atravessar andando
+      const c = n.center.clone();
+      if (Math.abs(n.normal.y) < 0.5) c.addScaledVector(n.up, -(56 * S - PORTAL_B));
+      const P = this.ctx.portals.placeFixed(n.which, c.toArray(), n.normal.toArray(), n.up.toArray());
+      if (P) P.owner = n;
+      return P;
+    };
     n.close = () => {
       const P = n.which === 'blue' ? this.ctx.portals.blue : this.ctx.portals.orange;
-      if (P.fixed) {
+      // só apaga se o portal da cor ainda for este (outro prop_portal pode já tê-lo levado)
+      if (P.fixed && (!P.owner || P.owner === n)) {
         P.remove();
         P.fixed = false;
       }
@@ -624,6 +697,24 @@ const SETUP = {
       n.tick = () => {
         if (n.parent) n.visual.position.copy(at).add(n.parent.offset);
       };
+    } else if (model.includes('switch001')) {
+      // botão de pedestal (desenho próprio): coluna, cabeça e botão vermelho que
+      // afunda e fica verde quando apertado; anda junto com o pedestal
+      n.visual = pedestalSwitch();
+      n.visual.position.copy(at);
+      this.ctx.world.group.add(n.visual);
+      n.root = this.built?.movingRoot?.(n.e) ?? null;
+      n.tick = (dt) => {
+        const rn = n.root && this.nodes.find((x) => x.e === n.root);
+        const off = rn?.doors?.[0]?.offset ?? rn?.offset;
+        n.visual.position.copy(at);
+        if (off) n.visual.position.add(off);
+        const u = n.visual.userData;
+        u.k += ((n.pressed ? 1 : 0) - u.k) * Math.min(1, dt * 14);
+        u.cap.position.y = u.capY - 0.03 * u.k;
+        u.capMat.color.setRGB(0.75 - 0.6 * u.k, 0.08 + 0.75 * u.k, 0.05 + 0.15 * u.k);
+        u.capMat.emissive.setRGB(0.35 - 0.3 * u.k, 0.02 + 0.4 * u.k, 0.02 + 0.05 * u.k);
+      };
     } else if (model.includes('glados_ball')) {
       // núcleo ainda preso (vai junto do trilho que o tira da máquina)
       n.visual = coreModel(0);
@@ -634,6 +725,10 @@ const SETUP = {
         if (n.parent) n.visual.position.copy(at).add(n.parent.offset);
       };
     }
+  },
+  func_door_rotating(n) {
+    // botão de pedestal: a porta giratória invisível com "abre com o uso" recebe o E
+    if (flags(n.e) & 256) n.useable = (a) => !n.isOpen && INPUTS.func_door_rotating.call(this, n, 'open', '', { activator: a });
   },
   func_noportal_volume(n) {
     if (!this.setupTrigger(n)) return;
@@ -715,6 +810,10 @@ const INPUTS = {
           n.machine.userData.stress = 4;
         }
       }
+    }
+    if (n.visual?.userData.cap && (input === 'setanimation' || input === 'setdefaultanimation')) {
+      if (/down/i.test(param)) n.pressed = true;
+      else if (/up/i.test(param)) n.pressed = false;
     }
     if (n.visual && input === 'setparent') {
       const t = this.find(param, n, null).find((x) => x.cls === 'func_tracktrain');
@@ -805,13 +904,48 @@ const INPUTS = {
     } else if (input === 'disable') L.done = true;
     else if (input === 'enable') L.done = false;
   },
-  weapon_portalgun(n, input) {
-    // arma "de cena" que dispara portais sozinha (câmaras 01 e 07)
+  weapon_portalgun(n, input, param) {
+    if (n.picked) return; // já está na mão do jogador
+    // arma "de cena" que dispara portais sozinha (câmara 02: num pedestal que gira).
+    // Presa a uma porta giratória, a arma gira junto; solta (ClearParent), fica
+    // onde parou — é a catraca do original: a cada volta do pedestal ela avança
+    const door = () => this.find(n.parentName ?? '', n, null).find((x) => x.cls === 'func_door_rotating');
+    if (input === 'setparent') {
+      n.parentName = param.trim();
+      n.ref = door()?.angle ?? 0;
+      return;
+    }
+    if (input === 'clearparent') {
+      const d = door();
+      if (d) n.baked = (n.baked ?? 0) + (d.angle ?? 0) - (n.ref ?? 0);
+      n.parentName = '';
+      return;
+    }
     if (input !== 'fireportal1' && input !== 'fireportal2') return;
+    if (n.parentName === undefined) {
+      n.parentName = n.e.kv.get('parentname') ?? '';
+      n.ref = 0;
+    }
+    const d = door();
+    const turn = (n.baked ?? 0) + (d ? (d.angle ?? 0) - (n.ref ?? 0) : 0);
     const [p, y] = parseVec(n.e.kv.get('angles'));
-    const dir = anglesToVectors(p || 0, y || 0).forward;
-    const hit = this.ctx.world.raycast(vecKV(n.e, 'origin'), dir, 400);
-    if (hit) this.ctx.portals.placeFixed(input === 'fireportal1' ? 'blue' : 'orange', hit.point.toArray(), hit.normal.toArray(), [0, 1, 0]);
+    const dir = anglesToVectors(p || 0, (y || 0) + turn).forward;
+    const from = vecKV(n.e, 'origin').addScaledVector(dir, 0.3); // sai do cano (a arma fica dentro do pedestal)
+    const hit = this.ctx.world.raycast(from, dir, 400);
+    if (!hit) return;
+    const which = input === 'fireportal1' ? 'blue' : 'orange';
+    const wall = Math.abs(hit.normal.y) < 0.5;
+    const up = wall ? [0, 1, 0] : [0, 0, -1];
+    // como nos portais fixos: o original (maior) acerta a parede na altura do cano e
+    // fica rente ao chão; o daqui desce a diferença para manter a borda de baixo
+    const at = hit.point.clone();
+    if (wall) at.y -= 56 * S - PORTAL_B;
+    const P = this.ctx.portals.placeFixed(which, at.toArray(), hit.normal.toArray(), up);
+    // é um portal comum (não da fase): depois de pegar a arma, os tiros do jogador o movem
+    if (P) {
+      P.fixed = false;
+      P.owner = null;
+    }
   },
   logic_relay(n, input) {
     if (input === 'trigger' && n.enabled) {
@@ -1029,13 +1163,19 @@ for (const c of ['trigger_once', 'trigger_multiple', 'trigger_hurt', 'trigger_te
 INPUTS.prop_physics_override = INPUTS.prop_physics;
 INPUTS.prop_glados_core = INPUTS.prop_physics;
 INPUTS.prop_dynamic_override = INPUTS.prop_dynamic;
-INPUTS.func_door_rotating = function (n, input) {
-  // giro aproximado: aberta = sem colisão; as saídas saem no tempo do giro (distância ÷ velocidade)
+INPUTS.func_door_rotating = function (n, input, param) {
+  // giro aproximado: aberta = sem colisão; as saídas saem no tempo do giro (distância ÷ velocidade).
+  // n.angle: graus girados (0 fechada, `distance` aberta; sentido contrário com a flag 2)
   const b = this.brushOf.get(n.e);
-  const t = Math.abs(num(n.e, 'distance', 90)) / Math.max(1, num(n.e, 'speed', 100));
+  if (input === 'setspeed') {
+    n.speed = parseFloat(param) || n.speed;
+    return;
+  }
+  const t = Math.abs(num(n.e, 'distance', 90)) / Math.max(1, n.speed ?? num(n.e, 'speed', 100));
   const go = (open) => {
     if (n.isOpen === open) return;
     n.isOpen = open;
+    n.angle = open ? num(n.e, 'distance', 90) * (flags(n.e) & 2 ? -1 : 1) : 0;
     b?.solids.forEach((s) => this.ctx.world.setSolidEnabled(s, !open));
     this.fire(n, open ? 'onopen' : 'onclose');
     this.queue = this.queue.filter((ev) => !(ev.caller === n && ev.input === 'FireFully'));
@@ -1044,5 +1184,11 @@ INPUTS.func_door_rotating = function (n, input) {
   if (input === 'open') go(true);
   else if (input === 'close') go(false);
   else if (input === 'toggle') go(!n.isOpen);
-  else if (input === 'firefully') this.fire(n, arguments[2] === 'open' ? 'onfullyopen' : 'onfullyclosed');
+  else if (input === 'firefully') {
+    const opened = arguments[2] === 'open';
+    this.fire(n, opened ? 'onfullyopen' : 'onfullyclosed');
+    // botão: volta sozinho depois de `wait` segundos (−1 = fica)
+    const wait = num(n.e, 'wait', -1);
+    if (opened && wait >= 0) this.schedule(wait, '!self', 'Close', '', null, n);
+  }
 };

@@ -180,7 +180,8 @@ function gunShellMaps() {
  * emissor, três garras articuladas e um painel holográfico ao lado.
  * userData: { core, tip, claws, coil, leds, rings, conduit, vents, heatMat, iris, tipGlow, holo }.
  */
-export function portalGun() {
+/** desenho anterior da arma (mantido como referência; o jogo usa a Mark III abaixo) */
+export function portalGunClassic() {
   const g = new THREE.Group();
   // branco um pouco abaixo de 1: colado na câmera, o casco não deve "estourar" no brilho
   const white = plastic(0xe4e4e0, { ...gunShellMaps(), roughness: 0.38, clearcoat: 0.45, envMapIntensity: 0.35 });
@@ -484,6 +485,594 @@ export function portalGun() {
   tip.position.set(0, 0, -0.38);
   g.add(tip);
   g.userData = { core: coreMat, tip, claws, coil, leds, rings, conduit, vents, heatMat, iris, tipGlow, holo: { canvas: holoCanvas, tex: holoTex, t: 0 } };
+  return g;
+}
+
+const SLOW_COL = new THREE.Color();
+
+// ruído usado nos shaders de energia da arma
+const GUN_NOISE = /* glsl */ `
+  float gh(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
+  float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+    return mix(mix(gh(i), gh(i+vec2(1,0)), f.x), mix(gh(i+vec2(0,1)), gh(i+vec2(1,1)), f.x), f.y); }
+  float gfbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * gn(p); p = p * 2.03 + 7.1; a *= 0.5; } return s; }`;
+
+/** textura de metal pintado de azul-marinho, bem gasto (manchas, arranhões, bordas lascadas) */
+function wornPaint() {
+  const W = 512;
+  const c = canvas(W, W);
+  const x = c.getContext('2d');
+  x.fillStyle = '#25324a';
+  x.fillRect(0, 0, W, W);
+  // manchas grandes (tinta desbotada)
+  for (let i = 0; i < 60; i++) {
+    const r = 20 + Math.random() * 70;
+    const gx = x.createRadialGradient(0, 0, 0, 0, 0, r);
+    const light = Math.random() < 0.5;
+    gx.addColorStop(0, light ? 'rgba(70,86,112,0.22)' : 'rgba(14,20,30,0.28)');
+    gx.addColorStop(1, 'rgba(0,0,0,0)');
+    x.save();
+    x.translate(Math.random() * W, Math.random() * W);
+    x.fillStyle = gx;
+    x.fillRect(-r, -r, r * 2, r * 2);
+    x.restore();
+  }
+  for (let i = 0; i < 9000; i++) {
+    x.fillStyle = Math.random() < 0.5 ? `rgba(10,14,22,${Math.random() * 0.3})` : `rgba(90,104,128,${Math.random() * 0.2})`;
+    x.fillRect(Math.random() * W, Math.random() * W, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  // arranhões e lascas (metal claro aparecendo)
+  x.lineCap = 'round';
+  for (let i = 0; i < 220; i++) {
+    x.strokeStyle = `rgba(165,175,190,${0.12 + Math.random() * 0.4})`;
+    x.lineWidth = Math.random() < 0.85 ? 0.8 : 2.2;
+    const sx = Math.random() * W;
+    const sy = Math.random() * W;
+    const a = Math.random() * Math.PI;
+    const l = 3 + Math.random() * 26;
+    x.beginPath();
+    x.moveTo(sx, sy);
+    x.quadraticCurveTo(sx + Math.cos(a) * l * 0.5 + (Math.random() - 0.5) * 4, sy + Math.sin(a) * l * 0.5, sx + Math.cos(a) * l, sy + Math.sin(a) * l);
+    x.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+/** adesivo: faixa quadriculada preta e branca */
+function checkerDecal(cols = 16, rows = 3) {
+  const c = canvas(cols * 8, rows * 8);
+  const x = c.getContext('2d');
+  for (let i = 0; i < cols; i++)
+    for (let j = 0; j < rows; j++) {
+      x.fillStyle = (i + j) % 2 ? '#111' : '#eee';
+      x.fillRect(i * 8, j * 8, 8, 8);
+    }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** etiqueta vermelha de aviso */
+function warningDecal(lines) {
+  const c = canvas(256, 96);
+  const x = c.getContext('2d');
+  x.fillStyle = '#b3141c';
+  x.fillRect(0, 0, 256, 96);
+  x.strokeStyle = '#f2f2f2';
+  x.lineWidth = 4;
+  x.strokeRect(6, 6, 244, 84);
+  x.fillStyle = '#f5f5f5';
+  x.textAlign = 'center';
+  x.font = 'bold 34px Arial, sans-serif';
+  x.fillText(lines[0], 128, 44);
+  x.font = 'bold 20px Arial, sans-serif';
+  x.fillText(lines[1] ?? '', 128, 76);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** plaqueta da traseira: quadriculado, um selo redondo e o nome do aparelho */
+function nameplateDecal() {
+  const c = canvas(256, 192);
+  const x = c.getContext('2d');
+  x.clearRect(0, 0, 256, 192);
+  for (let i = 0; i < 6; i++) {
+    x.fillStyle = i % 2 ? '#111' : '#eee';
+    x.fillRect(70 + i * 20, 8, 20, 20);
+  }
+  x.strokeStyle = '#e8e8e8';
+  x.lineWidth = 4;
+  x.beginPath();
+  x.arc(48, 62, 16, 0, Math.PI * 2);
+  x.stroke();
+  x.beginPath();
+  x.arc(48, 62, 7, 0, Math.PI * 2);
+  x.stroke();
+  x.fillStyle = '#e8e8e8';
+  x.font = 'bold 20px Arial, sans-serif';
+  x.fillText('APERTURE', 72, 70);
+  x.font = 'bold 17px Arial, sans-serif';
+  x.fillText('HANDHELD QUANTUM', 30, 110);
+  x.fillText('TUNNELING DEVICE MKIII', 14, 134);
+  // losangos brancos embaixo
+  for (const [cx, cy] of [
+    [128, 160],
+    [128, 182],
+  ]) {
+    x.beginPath();
+    x.moveTo(cx, cy - 9);
+    x.lineTo(cx + 9, cy);
+    x.lineTo(cx, cy + 9);
+    x.lineTo(cx - 9, cy);
+    x.closePath();
+    x.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/**
+ * Arma de portais "Mark III" (desenho próprio no estilo do protótipo do link):
+ * bloco traseiro alto e arredondado com sela preta embaixo, duas molduras
+ * pretas, cilindro do meio com janela de vidro e filete aceso, alça reta em
+ * cima, empunhadura lateral, mangueira corrugada pelo lado esquerdo, bloco da
+ * frente com grade, boca redonda e quatro bobinas de cobre em volta dela.
+ * Mesma interface (userData) dos desenhos anteriores, mais `animate`. Eixo: −z.
+ */
+export function portalGun() {
+  const g = new THREE.Group();
+  const paintTex = wornPaint();
+  const paint = new THREE.MeshPhysicalMaterial({ map: paintTex, roughness: 0.66, metalness: 0.4, envMap: ENV, envMapIntensity: 0.5, clearcoat: 0.2, clearcoatRoughness: 0.7 });
+  const dark = metal(0x1b1d21, { roughness: 0.55, metalness: 0.55 });
+  const black = metal(0x0d0e10, { roughness: 0.62, metalness: 0.3 });
+  const steel = metal(0x8a9099, { roughness: 0.32, metalness: 0.9 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x131416, roughness: 0.85 });
+  const coreMat = glow(new THREE.Color(0.5, 1.6, 3.2));
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0xb9d4ee, roughness: 0.08, transparent: true, opacity: 0.32, envMap: ENV, envMapIntensity: 1.6, depthWrite: false, clearcoat: 1, side: THREE.DoubleSide });
+  const flat = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+  const conduit = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(0.5, 1.6, 3.2) }, uTime: { value: 0 }, uPulse: { value: -1 } },
+    vertexShader: flat,
+    fragmentShader: `
+      uniform vec3 uColor; uniform float uTime, uPulse; varying vec2 vUv;
+      void main(){
+        float flow = 0.5 + 0.3 * sin(vUv.x * 46.0 - uTime * 7.0);
+        float pulse = uPulse < 0.0 ? 0.0 : exp(-pow((vUv.x - uPulse) * 9.0, 2.0)) * 3.5;
+        gl_FragColor = vec4(uColor * (flow + pulse), 1.0);
+      }`,
+    toneMapped: false,
+  });
+  const plasmaU = { uColor: { value: new THREE.Color(0.5, 1.6, 3.2) }, uTime: { value: 0 }, uBoost: { value: 0 } };
+  const plasmaFS = `
+    uniform vec3 uColor; uniform float uTime, uBoost; varying vec2 vUv;
+    ${GUN_NOISE}
+    void main(){
+      vec2 p = vec2(vUv.x * 7.0, vUv.y * 4.0 - uTime * 3.2);
+      float f = gfbm(p + gfbm(p * 1.7 + uTime * 0.9));
+      float bands = 0.65 + 0.35 * sin(vUv.y * 34.0 - uTime * 14.0);
+      gl_FragColor = vec4(uColor * (0.3 + 1.6 * f * f + uBoost) * bands, 1.0);
+    }`;
+  const plasma = new THREE.ShaderMaterial({ uniforms: plasmaU, vertexShader: flat, fragmentShader: plasmaFS, toneMapped: false, side: THREE.DoubleSide });
+  // cobre das bobinas: esquenta na cor do portal (emissivo) no tiro e segurando algo
+  const copper = new THREE.MeshStandardMaterial({ color: 0x7a4024, roughness: 0.36, metalness: 0.9, envMap: ENV, envMapIntensity: 0.85, emissive: new THREE.Color(0, 0, 0) });
+  const add = (mesh, x, y, z) => {
+    mesh.position.set(x, y, z);
+    g.add(mesh);
+    return mesh;
+  };
+  const rbox = (w, h, d, r, mat, x, y, z) => add(new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 4, r), mat), x, y, z);
+  const decal = (tex, w, h, x, y, z, ry, transparent = false) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, transparent, polygonOffset: true, polygonOffsetFactor: -2 }));
+    m.rotation.y = ry;
+    return add(m, x, y, z);
+  };
+  const cyl = (r0, r1, len, mat, seg = 28) => new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, len, seg).rotateX(Math.PI / 2), mat);
+
+  // ------------------------------------------------ bloco traseiro (alto, cantos bem redondos)
+  rbox(0.165, 0.2, 0.2, 0.06, paint, 0, 0.012, 0.245);
+  // sela preta embaixo (apoio), em arco de lado a lado
+  const saddle = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.02, 10, 28, Math.PI), black);
+  saddle.rotation.z = Math.PI; // abre para baixo
+  saddle.scale.set(1, 1, 3.4);
+  add(saddle, 0, -0.085, 0.27);
+  // painel da face de trás com quatro botões quadrados
+  rbox(0.07, 0.07, 0.012, 0.006, dark, 0, 0.03, 0.348);
+  for (const [bx, by] of [
+    [-0.017, 0.047],
+    [0.017, 0.047],
+    [-0.017, 0.013],
+    [0.017, 0.013],
+  ]) {
+    const b = new THREE.Mesh(new RoundedBoxGeometry(0.022, 0.022, 0.012, 2, 0.004), black);
+    add(b, bx, by, 0.356);
+  }
+  // botão serrilhado em cima
+  const knob = cyl(0.02, 0.022, 0.02, dark, 20);
+  knob.rotation.x = 0;
+  add(knob, 0.035, 0.122, 0.3);
+  for (let k = 0; k < 12; k++) {
+    const a = (k / 12) * Math.PI * 2;
+    const kn = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.022, 0.006), black);
+    kn.position.set(0.035 + Math.cos(a) * 0.021, 0.122, 0.3 + Math.sin(a) * 0.021);
+    kn.rotation.y = -a;
+    g.add(kn);
+  }
+  // etiquetas
+  decal(warningDecal(['MK III', 'Q-TUNNEL']), 0.045, 0.017, 0.083, 0.085, 0.31, Math.PI / 2);
+  decal(nameplateDecal(), 0.085, 0.064, 0.083, -0.005, 0.24, Math.PI / 2, true);
+  decal(nameplateDecal(), 0.085, 0.064, -0.083, -0.005, 0.24, -Math.PI / 2, true);
+  // aletas de calor nos dois lados da traseira (abrem depois dos tiros)
+  const heatMat = glow(new THREE.Color(0, 0, 0));
+  const vents = [];
+  for (const sx of [-1, 1]) {
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.034, 0.06), heatMat);
+    add(back, sx * 0.081, -0.065, 0.24);
+    for (let k = 0; k < 3; k++) {
+      const pivot = new THREE.Group();
+      pivot.position.set(sx * 0.084, -0.08 + k * 0.011, 0.24);
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.01, 0.06), dark);
+      slat.position.set(sx * 0.002, 0.005, 0);
+      pivot.add(slat);
+      pivot.userData.side = sx;
+      g.add(pivot);
+      vents.push(pivot);
+    }
+  }
+  // ------------------------------------------------ duas molduras pretas grossas
+  for (const z of [0.128, 0.09]) rbox(0.172, 0.17, 0.024, 0.02, black, 0, 0.0, z);
+
+  // ------------------------------------------------ cilindro do meio com janela de vidro em cima
+  const R = 0.066;
+  const openA = 1.7; // abertura da janela (radianos)
+  const winTilt = 0.75; // centro da janela: em cima, puxado para a esquerda (o lado que o jogador vê)
+  const midLen = 0.24;
+  const mid = new THREE.Mesh(new THREE.CylinderGeometry(R, R, midLen, 36, 1, true, Math.PI / 2 + openA / 2 - Math.PI / 2, Math.PI * 2 - openA).rotateX(Math.PI / 2), paint);
+  // CylinderGeometry gira em volta de y; depois de rotateX, o "theta" mede a partir de +z → ajusta para a janela ficar em cima
+  mid.rotation.z = 0;
+  add(mid, 0, 0, -0.04);
+  mid.geometry.rotateZ(Math.PI / 2 + openA / 2 + winTilt);
+  const midCaps = [0.08, -0.16].map((z) => add(new THREE.Mesh(new THREE.TorusGeometry(R, 0.009, 8, 36), dark), 0, 0, z));
+  const winGlass = new THREE.Mesh(new THREE.CylinderGeometry(R - 0.002, R - 0.002, midLen, 24, 1, true, 0, openA).rotateX(Math.PI / 2), glass);
+  winGlass.geometry.rotateZ(Math.PI / 2 - openA / 2 + winTilt);
+  winGlass.renderOrder = 4;
+  add(winGlass, 0, 0, -0.04);
+  // por dentro: fundo escuro, o núcleo de plasma e uma bobina girando
+  // fundo por dentro: brilha fraco na cor do último disparo (o vidro mostra a cor)
+  const innerGlow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.1, 0.25, 0.5), side: THREE.BackSide, toneMapped: false });
+  add(new THREE.Mesh(new THREE.CylinderGeometry(R - 0.006, R - 0.006, midLen, 24, 1, true).rotateX(Math.PI / 2), innerGlow), 0, 0, -0.04);
+  const core = add(cyl(0.028, 0.028, midLen - 0.01, plasma, 20), 0, 0.012, -0.04);
+  const coilPts = [];
+  for (let i = 0; i <= 140; i++) {
+    const a = (i / 140) * Math.PI * 2 * 11;
+    coilPts.push(new THREE.Vector3(Math.cos(a) * 0.034, Math.sin(a) * 0.034, 0.07 - (i / 140) * 0.22));
+  }
+  const coilPivot = new THREE.Group();
+  coilPivot.position.set(0, 0.012, -0.04);
+  coilPivot.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coilPts.map((p) => p.clone().setZ(p.z + 0.04))), 280, 0.0024, 5), copper));
+  g.add(coilPivot);
+  // filete aceso ao longo do topo (no meio da janela)
+  const strip = add(new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.004, midLen - 0.02), conduit), -Math.sin(winTilt) * (R - 0.004), Math.cos(winTilt) * (R - 0.004), -0.04);
+  strip.rotation.z = winTilt;
+  // halo sobre a janela (aparece no tempo lento e pulsa)
+  const winHalo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x000000, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  winHalo.scale.set(0.34, 0.16, 1);
+  add(winHalo, -Math.sin(winTilt) * 0.07, Math.cos(winTilt) * 0.07, -0.04);
+  // anel de relógio holográfico em volta do cilindro (só no tempo lento): marcações e ponteiros
+  const clockCanvas = canvas(256, 256);
+  {
+    const c = clockCanvas.getContext('2d');
+    c.translate(128, 128);
+    c.strokeStyle = '#fff';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(0, 0, 120, 0, Math.PI * 2);
+    c.stroke();
+    for (let k = 0; k < 60; k++) {
+      const a = (k / 60) * Math.PI * 2;
+      const r0 = k % 5 === 0 ? 96 : 108;
+      c.lineWidth = k % 5 === 0 ? 4 : 2;
+      c.beginPath();
+      c.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+      c.lineTo(Math.cos(a) * 116, Math.sin(a) * 116);
+      c.stroke();
+    }
+    c.lineWidth = 6;
+    c.beginPath();
+    c.arc(0, 0, 84, -0.4, 0.9);
+    c.stroke();
+    c.beginPath();
+    c.arc(0, 0, 84, Math.PI - 0.4, Math.PI + 0.9);
+    c.stroke();
+  }
+  const clockMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(clockCanvas), color: new THREE.Color(0.8, 0.6, 2.6), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+  const clocks = [-0.13, 0.05].map((z, i) => {
+    const m = add(new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.22), clockMat), 0, 0, z);
+    m.renderOrder = 6;
+    m.rotation.y = i ? 0.5 : -0.5; // inclinados: aparecem de lado também
+    m.userData.dir = i ? -1 : 1;
+    return m;
+  });
+  // trilho de baixo do cilindro
+  rbox(0.07, 0.03, midLen, 0.01, dark, 0, -0.07, -0.04);
+  // empunhadura lateral (direita), cilíndrica, saindo na horizontal
+  const grip = cyl(0.022, 0.024, 0.11, black, 20);
+  grip.rotation.set(0, Math.PI / 2, 0);
+  add(grip, 0.115, -0.03, 0.0);
+  const gripEnd = new THREE.Mesh(new THREE.SphereGeometry(0.023, 16, 12), black);
+  add(gripEnd, 0.17, -0.03, 0.0);
+  rbox(0.03, 0.05, 0.05, 0.01, dark, 0.064, -0.03, 0.0);
+  // ------------------------------------------------ alça reta em cima
+  const handle = rbox(0.03, 0.014, 0.25, 0.006, black, 0, 0.13, -0.01);
+  for (const z of [0.11, -0.13]) rbox(0.026, 0.06, 0.018, 0.005, black, 0, 0.1, z);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.002, 0.22), conduit), 0, 0.1375, -0.01);
+  // ------------------------------------------------ mangueira corrugada (lado esquerdo)
+  const hoseCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.03, 0.11, 0.2),
+    new THREE.Vector3(-0.04, 0.2, 0.15),
+    new THREE.Vector3(-0.1, 0.19, 0.06),
+    new THREE.Vector3(-0.135, 0.07, 0.0),
+    new THREE.Vector3(-0.125, -0.05, -0.05),
+    new THREE.Vector3(-0.09, -0.085, -0.1),
+    new THREE.Vector3(-0.05, -0.07, -0.13),
+  ]);
+  add(new THREE.Mesh(new THREE.TubeGeometry(hoseCurve, 90, 0.018, 12, false), rubber), 0, 0, 0);
+  for (let i = 0; i <= 80; i++) {
+    const tt = i / 80;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0195, 0.0038, 5, 14), rubber);
+    ring.position.copy(hoseCurve.getPoint(tt));
+    ring.lookAt(ring.position.clone().add(hoseCurve.getTangent(tt)));
+    g.add(ring);
+  }
+  for (const tt of [0, 1]) {
+    const collar = cyl(0.025, 0.025, 0.02, dark, 16);
+    collar.position.copy(hoseCurve.getPoint(tt));
+    collar.lookAt(collar.position.clone().add(hoseCurve.getTangent(tt)));
+    collar.rotateX(Math.PI / 2);
+    g.add(collar);
+  }
+  // ------------------------------------------------ bloco da frente
+  rbox(0.172, 0.19, 0.12, 0.03, paint, 0, 0.0, -0.215);
+  rbox(0.16, 0.175, 0.03, 0.02, black, 0, 0.0, -0.285);
+  // grade de barras na lateral direita
+  rbox(0.012, 0.11, 0.09, 0.004, black, 0.092, 0.0, -0.215);
+  for (let k = 0; k < 6; k++) add(new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.1, 0.004), dark), 0.1, 0.0, -0.25 + k * 0.014);
+  for (const yy of [0.052, -0.052]) add(new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.006, 0.09), black), 0.1, yy, -0.215);
+  // gaiola de barras finas e fios em cima
+  for (const xx of [-0.03, 0.0, 0.03]) add(new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.03, 0.004), black), xx, 0.11, -0.24);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.004, 0.004), black), 0, 0.125, -0.24);
+  for (const [dx, h] of [
+    [-0.025, 0.035],
+    [0.0, 0.05],
+    [0.022, 0.03],
+  ]) {
+    const w = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(dx, 0.096, -0.15),
+      new THREE.Vector3(dx + 0.01, 0.096 + h, -0.19),
+      new THREE.Vector3(dx - 0.006, 0.096 + h * 0.7, -0.24),
+      new THREE.Vector3(dx, 0.096, -0.27),
+    ]);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(w, 20, 0.0022, 5, false), black));
+  }
+  // etiquetas da frente
+  decal(warningDecal(['⚠ WARNING ⚠', 'DO NOT TOUCH COILS']), 0.06, 0.022, 0.087, -0.072, -0.16, Math.PI / 2);
+  decal(checkerDecal(), 0.07, 0.013, 0.087, -0.05, -0.16, Math.PI / 2);
+  decal(checkerDecal(4, 4), 0.03, 0.03, -0.087, -0.04, -0.17, -Math.PI / 2);
+  decal(checkerDecal(), 0.07, 0.013, -0.087, -0.075, -0.2, -Math.PI / 2);
+  // boca redonda preta no centro, com o plasma lá no fundo
+  const muzzle = cyl(0.062, 0.062, 0.05, black, 40);
+  add(muzzle, 0, 0, -0.31);
+  add(new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 12, 40), dark), 0, 0, -0.335);
+  const bore = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.046, 0.06, 32, 1, true).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.9, side: THREE.BackSide }));
+  add(bore, 0, 0, -0.31);
+  const boreGlow = new THREE.Mesh(new THREE.CircleGeometry(0.044, 32), plasma);
+  boreGlow.rotation.y = Math.PI;
+  add(boreGlow, 0, 0, -0.29);
+  // LEDs de carga na lateral esquerda do bloco da frente
+  const leds = [];
+  const halos = []; // brilhos suaves em volta das luzes (o bloom sozinho não basta tão perto da câmera)
+  const halo = (x, y, z, sx, sy, k) => {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x000000, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    sp.scale.set(sx, sy, 1);
+    sp.userData.k = k;
+    halos.push(add(sp, x, y, z));
+  };
+  for (let k = 0; k < 3; k++) {
+    const m = glow(new THREE.Color(0.4, 1.4, 2.4));
+    add(new THREE.Mesh(new THREE.SphereGeometry(0.0065, 10, 8), m), -0.088, 0.06, -0.19 - k * 0.02);
+    leds.push(m);
+    halo(-0.092, 0.06, -0.19 - k * 0.02, 0.035, 0.035, 0.5);
+  }
+  halo(-Math.sin(winTilt) * 0.068, Math.cos(winTilt) * 0.068, -0.04, 0.09, 0.26, 0.22); // filete do vidro
+  halo(0, 0.142, -0.01, 0.05, 0.24, 0.16); // filete da alça
+  halo(0, 0, -0.33, 0.13, 0.13, 0.3); // boca
+
+  // ------------------------------------------------ quatro bobinas de cobre em volta da boca
+  // em cima e embaixo: finas e compridas; dos lados: grossas e chatas. Cada uma num
+  // suporte preto, com enrolamento (textura listrada) e pontas arredondadas
+  const coilRods = [];
+  const rodTips = [];
+  for (const [x, y, w, h, len] of [
+    [0.0, 0.098, 0.03, 0.018, 0.2],
+    [0.0, -0.098, 0.03, 0.018, 0.2],
+    [-0.1, 0.0, 0.026, 0.07, 0.16],
+    [0.1, 0.0, 0.026, 0.07, 0.16],
+  ]) {
+    const rod = new THREE.Group();
+    rod.position.set(x, y, -0.29);
+    const mount = new THREE.Mesh(new RoundedBoxGeometry(w + 0.014, h + 0.014, 0.04, 2, 0.005), black);
+    mount.position.z = 0.01;
+    rod.add(mount);
+    // núcleo escuro (aparece nos vãos) e as espiras: anéis empilhados ao longo do
+    // comprimento, fundidos numa malha só; pontas arredondadas de cobre
+    const coreBox = new THREE.Mesh(new RoundedBoxGeometry(w * 0.82, h * 0.82, len, 2, Math.min(w, h) * 0.3), black);
+    coreBox.position.z = -len / 2 - 0.01;
+    rod.add(coreBox);
+    const turns = [];
+    const pitch = 0.0062;
+    const n = Math.floor((len - 0.012) / pitch);
+    for (let k = 0; k < n; k++) {
+      const t = new RoundedBoxGeometry(w, h, pitch * 0.72, 2, Math.min(w, h) * 0.42);
+      t.translate(0, 0, -0.016 - k * pitch);
+      turns.push(t);
+    }
+    const body = new THREE.Mesh(mergeGeometries(turns), copper);
+    rod.add(body);
+    for (const zEnd of [-0.012, -len - 0.004]) {
+      const capGeo = new RoundedBoxGeometry(w * 1.04, h * 1.04, 0.008, 2, Math.min(w, h) * 0.45);
+      const cap = new THREE.Mesh(capGeo, copper);
+      cap.position.z = zEnd;
+      rod.add(cap);
+    }
+    const tp = new THREE.Object3D();
+    tp.position.z = -len - 0.012;
+    rod.add(tp);
+    rod.userData = { base: rod.position.clone() };
+    g.add(rod);
+    coilRods.push(rod);
+    rodTips.push(tp);
+  }
+  // arcos elétricos entre as pontas vizinhas (redesenhados a cada quadro)
+  const ARC_N = 12;
+  const PAIRS = [
+    [0, 3],
+    [3, 1],
+    [1, 2],
+    [2, 0],
+  ];
+  const arcMat = new THREE.LineBasicMaterial({ color: new THREE.Color(1.2, 2.6, 4), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const arcGeo = new THREE.BufferGeometry();
+  arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PAIRS.length * (ARC_N - 1) * 2 * 3), 3));
+  const arcs = new THREE.LineSegments(arcGeo, arcMat);
+  arcs.frustumCulled = false;
+  arcs.renderOrder = 7;
+  g.add(arcs);
+  // partículas de energia na frente da boca
+  const MOTES = 30;
+  const mg = new THREE.BufferGeometry();
+  mg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MOTES * 3), 3));
+  mg.setAttribute('seed', new THREE.BufferAttribute(Float32Array.from({ length: MOTES }, () => Math.random()), 1));
+  const moteMat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(0.5, 1.6, 3.2) }, uTime: { value: 0 }, uSpread: { value: 0 } },
+    vertexShader: `
+      attribute float seed; uniform float uTime, uSpread; varying float vA;
+      void main(){
+        float sp = 1.5 + 2.5 * fract(seed * 7.7);
+        float a = seed * 6.2831853 * 13.0 + uTime * sp;
+        float r = 0.05 + 0.05 * fract(seed * 3.1) + uSpread * 0.03;
+        float z = -0.36 - 0.12 * fract(seed * 5.3 + uTime * 0.3 * sp);
+        vec4 mv = modelViewMatrix * vec4(cos(a) * r, sin(a) * r, z, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = (1.6 + 1.6 * fract(seed * 9.1)) / max(-mv.z, 0.05);
+        vA = (0.5 + 0.5 * sin(uTime * 9.0 + seed * 40.0)) * (0.3 + uSpread * 0.7);
+      }`,
+    fragmentShader: `
+      uniform vec3 uColor; varying float vA;
+      void main(){ float d = length(gl_PointCoord - 0.5) * 2.0; if (d > 1.0) discard; gl_FragColor = vec4(uColor * 2.2, vA * (1.0 - d)); }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const motes = new THREE.Points(mg, moteMat);
+  motes.frustumCulled = false;
+  motes.renderOrder = 7;
+  g.add(motes);
+  // (a onda de choque do tiro é uma distorção da imagem: ver ShockShader em fx.js)
+  // painel holográfico flutuando ao lado esquerdo (o que o jogador vê)
+  const holoCanvas = canvas(256, 128);
+  const holoTex = new THREE.CanvasTexture(holoCanvas);
+  holoTex.colorSpace = THREE.SRGBColorSpace;
+  const holo = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.21, 0.105),
+    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+  );
+  holo.position.set(-0.27, 0.08, 0.17);
+  holo.rotation.set(-0.42, -0.42, 0, 'YXZ');
+  holo.renderOrder = 5;
+  g.add(holo, limb(new THREE.Vector3(-0.15, 0.06, 0.16), new THREE.Vector3(-0.16, 0.065, 0.165), 0.003, 0.003, dark));
+  // brilho de plasma na boca
+  const tipGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0x88ccff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  tipGlow.scale.setScalar(0.06);
+  add(tipGlow, 0, 0, -0.35);
+  const tip = add(new THREE.Object3D(), 0, 0, -0.4);
+
+  // efeitos (chamado pelo main a cada quadro, com recuo/segurar/calor e a cor)
+  const v = new THREE.Vector3();
+  const tipsLocal = rodTips.map(() => new THREE.Vector3());
+  let arcClock = 0;
+  const animate = (dt, t, s) => {
+    const color = s.base;
+    plasmaU.uTime.value = t;
+    plasmaU.uColor.value.copy(color).multiplyScalar(0.45);
+    plasmaU.uBoost.value = s.recoil * 1.6 + s.open * 0.4;
+    moteMat.uniforms.uTime.value = t;
+    moteMat.uniforms.uColor.value.copy(color).multiplyScalar(0.5);
+    moteMat.uniforms.uSpread.value = Math.min(1.5, s.open + s.recoil * 2);
+    // tempo lento: tudo migra para um violeta-azulado que pulsa como um coração lento
+    const slow = s.slow ?? 0;
+    const beat = Math.pow(0.5 + 0.5 * Math.sin(t * 3.2), 3);
+    SLOW_COL.setRGB(0.8, 0.55, 2.6).multiplyScalar(1 + beat * 0.8);
+    plasmaU.uColor.value.lerp(SLOW_COL.clone().multiplyScalar(0.45), slow);
+    // o vidro mostra a cor do último disparo (e respira devagar)
+    innerGlow.color.copy(color).multiplyScalar(0.24 + 0.05 * Math.sin(t * 2) + s.recoil * 0.3).lerp(SLOW_COL.clone().multiplyScalar(0.3), slow);
+    s.conduitColor?.lerp(SLOW_COL.clone().multiplyScalar(0.55), slow);
+    coreMat.color.lerp(SLOW_COL, slow);
+    for (const m of s.leds ?? []) m.color.lerp(SLOW_COL, slow);
+    winHalo.material.color.copy(SLOW_COL).multiplyScalar(0.35 * slow * (0.6 + 0.4 * beat));
+    clockMat.opacity = slow * (0.45 + 0.25 * beat);
+    clocks.forEach((m) => (m.rotation.z += dt * 0.35 * m.userData.dir));
+    // luzes com mais brilho: costuras e LEDs acima do limiar do bloom, halos na mesma cor
+    s.conduitColor?.multiplyScalar(2.3);
+    for (const m of s.leds ?? []) m.color.multiplyScalar(2.6);
+    const glowCol = SLOW_COL.clone().lerp(color, 1 - slow);
+    for (const h of halos) h.material.color.copy(glowCol).multiplyScalar(h.userData.k * (1 + s.recoil * 1.5 + s.open * 0.5) * (0.85 + 0.15 * Math.sin(t * 5)));
+    const hot = Math.min(1.6, s.recoil * 1.8 + s.open * 0.6 + s.heat * 0.5 + 0.05 + 0.04 * Math.sin(t * 4));
+    copper.emissive.copy(color).multiplyScalar(0.045 * hot).lerp(SLOW_COL.clone().multiplyScalar(0.04 + 0.05 * beat), slow);
+    coilRods.forEach((rod, i) => {
+      const b = rod.userData.base;
+      const j = s.open * 0.0015 * Math.sin(t * 61 + i * 2);
+      rod.position.set(b.x + j, b.y + j * 0.7, b.z + s.recoil * 0.012 * (1 + (i % 2) * 0.4));
+    });
+    const power = Math.min(1, s.recoil * 1.4 + s.open * 0.85);
+    const idle = Math.random() < 0.05 ? 0.4 : 0;
+    arcMat.opacity = Math.max(power, idle) * (0.6 + 0.4 * Math.random());
+    arcMat.color.copy(color).multiplyScalar(1.4).addScalar(0.5);
+    arcClock -= dt;
+    if (arcMat.opacity > 0.01 && arcClock <= 0) {
+      arcClock = 1 / 40;
+      g.updateMatrixWorld(true);
+      rodTips.forEach((tp, i) => g.worldToLocal(tp.getWorldPosition(tipsLocal[i])));
+      const pos = arcGeo.attributes.position.array;
+      let o = 0;
+      for (const [ia, ib] of PAIRS) {
+        const A = tipsLocal[ia];
+        const B = tipsLocal[ib];
+        let prev = null;
+        for (let k = 0; k < ARC_N; k++) {
+          const f = k / (ARC_N - 1);
+          v.lerpVectors(A, B, f);
+          const amp = Math.sin(f * Math.PI) * 0.02 * (0.6 + power);
+          v.x += (Math.random() - 0.5) * amp;
+          v.y += (Math.random() - 0.5) * amp;
+          v.z += (Math.random() - 0.5) * amp * 0.6 - Math.sin(f * Math.PI) * 0.012;
+          if (prev) {
+            pos.set([prev.x, prev.y, prev.z, v.x, v.y, v.z], o);
+            o += 6;
+          }
+          prev = (prev ?? new THREE.Vector3()).copy(v);
+        }
+      }
+      arcGeo.attributes.position.needsUpdate = true;
+    }
+  };
+
+  const claws = [new THREE.Object3D(), new THREE.Object3D(), new THREE.Object3D()];
+  g.userData = { core: coreMat, tip, claws, coil: coilPivot, leds, rings: [], conduit, vents, heatMat, iris: [], tipGlow, animate, holo: { canvas: holoCanvas, tex: holoTex, t: 0 } };
   return g;
 }
 

@@ -275,9 +275,9 @@ scene.add(body.group);
 // ------------------------------------------------------------------ arma de portais (primeira pessoa)
 const gun = portalGun();
 {
-  gun.position.set(0.21, -0.19, -0.44);
+  gun.position.set(0.21, -0.19, -0.5);
   gun.rotation.set(0.05, 0.09, 0);
-  gun.scale.setScalar(0.62);
+  gun.scale.setScalar(0.55); // Mark III: mais comprida e quadrada que a anterior
   gun.traverse((o) => o.layers.set(2));
   camera.add(gun);
   const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
@@ -309,7 +309,7 @@ function animateGun(dt, t) {
   const bx = Math.sin(b) * 0.012 * GUN.walk;
   const by = -Math.abs(Math.cos(b)) * 0.01 * GUN.walk;
   const breathe = Math.sin(t * 1.7) * 0.0025;
-  gun.position.set(0.21 + GUN.sway.x + bx, -0.19 + GUN.sway.y + by + breathe + GUN.land + recoil * 0.015 + GUN.open * 0.01, -0.44 + recoil * 0.06 - GUN.open * 0.02);
+  gun.position.set(0.21 + GUN.sway.x + bx, -0.19 + GUN.sway.y + by + breathe + GUN.land + recoil * 0.015 + GUN.open * 0.01, -0.5 + recoil * 0.06 - GUN.open * 0.02);
   gun.rotation.set(0.05 + recoil * 0.22 + GUN.sway.y * 1.5 - GUN.land * 1.2, 0.09 + GUN.sway.x * 2, -GUN.sway.x * 2.5 + Math.sin(t * 1.1) * 0.008 + bx * 0.8);
   // garras: abrem ao atirar e ao segurar algo (tremendo com a força do campo)
   const jitter = GUN.open * Math.sin(t * 47) * 0.025;
@@ -345,6 +345,8 @@ function animateGun(dt, t) {
   // plasma na ponta
   u.tipGlow.material.color.copy(u.base).multiplyScalar(0.35);
   u.tipGlow.scale.setScalar(0.05 + Math.random() * 0.012 + recoil * 0.14 + GUN.open * 0.03);
+  // efeitos da Mark III (plasma, arcos entre as garras, anel holográfico, onda de choque)
+  u.animate?.(dt, t, { recoil, open: GUN.open, heat: GUN.heat, base: u.base, slow: clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), conduitColor: u.conduit.uniforms.uColor.value, leds: u.leds });
   // painel holográfico (redesenha ~12 vezes por segundo)
   GUN.holoT -= dt;
   if (GUN.holoT <= 0) {
@@ -354,13 +356,114 @@ function animateGun(dt, t) {
   }
 }
 
-// rastro do tiro
-const tracer = new THREE.Line(
-  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-  new THREE.LineBasicMaterial({ color: 0x6fc8ff, transparent: true, opacity: 0 }),
-);
-tracer.frustumCulled = false;
-scene.add(tracer);
+// projétil do tiro (como no Portal 1): uma bola de energia na cor do portal voa até
+// a parede, e o portal só abre quando ela chega. Um por cor, sempre na cena (luz e
+// materiais fixos: ligar/desligar luzes faria o three.js recompilar os shaders)
+const BOLT_SPEED = 150; // m/s
+function makeBolt() {
+  const g = new THREE.Group();
+  const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(), toneMapped: false });
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 12), coreMat);
+  const haloMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(), transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12), haloMat);
+  // rastro: cone com a base no núcleo e a ponta para trás (−z; o grupo olha para o alvo)
+  const trailMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(), transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const trail = new THREE.Mesh(new THREE.ConeGeometry(0.06, 1, 12, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.5), trailMat);
+  // espiral tracejada: duas hélices enroladas no rastro (em −z), que afinam e apagam
+  // na cauda; o objeto gira em volta do eixo do voo e estica com a distância voada
+  const spiral = new THREE.Group();
+  const spiralMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const SPIRAL_L = 2.4;
+  for (const phase of [0, Math.PI]) {
+    const pos = [];
+    const col = [];
+    const N = 96; // pontos por hélice; um traço a cada dois segmentos
+    const at = (i) => {
+      const f = i / N;
+      const a = phase + f * Math.PI * 2 * 7; // 7 voltas no comprimento todo
+      const r = 0.1 * (1 - 0.55 * f);
+      return [Math.cos(a) * r, Math.sin(a) * r, -f * SPIRAL_L, 1 - f];
+    };
+    for (let i = 0; i < N; i += 2) {
+      for (const j of [i, i + 1]) {
+        const [x, y, z, k] = at(j);
+        pos.push(x, y, z);
+        col.push(k, k, k); // brilho cai até a cauda (vezes a cor do material)
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    const line = new THREE.LineSegments(geo, spiralMat);
+    line.frustumCulled = false;
+    spiral.add(line);
+  }
+  g.add(core, halo, trail, spiral);
+  g.visible = false;
+  scene.add(g);
+  const light = new THREE.PointLight(0xffffff, 0, 6, 1.6);
+  scene.add(light);
+  return { g, core, halo, trail, spiral, spiralMat, SPIRAL_L, coreMat, haloMat, trailMat, light, active: false, from: new THREE.Vector3(), to: new THREE.Vector3(), t: 0, dur: 0, done: null };
+}
+const bolts = { blue: makeBolt(), orange: makeBolt() };
+const _shockV = new THREE.Vector3();
+const _shockUv = new THREE.Vector2();
+
+/** dispara o projétil de `from` até `to`; `done` roda quando ele chega */
+function fireBolt(which, from, to, done) {
+  const B = bolts[which];
+  const c = SLOT_COLORS[mp() ? net.slot % 4 : 0][which === 'blue' ? 0 : 1];
+  B.coreMat.color.copy(c).multiplyScalar(4).addScalar(0.6); // núcleo quase branco, acima de 1: o bloom acende
+  B.haloMat.color.copy(c).multiplyScalar(2.2);
+  B.trailMat.color.copy(c).multiplyScalar(2.6);
+  B.spiralMat.color.copy(c).multiplyScalar(3.2).addScalar(0.3);
+  B.light.color.copy(c);
+  B.from.copy(from);
+  B.to.copy(to);
+  B.t = 0;
+  B.dur = Math.max(0.04, from.distanceTo(to) / BOLT_SPEED);
+  B.done = done; // um tiro novo da mesma cor substitui o que ainda está voando
+  B.active = true;
+  B.g.position.copy(from);
+  B.g.lookAt(to);
+  B.trail.scale.set(1, 1, 0.01);
+  B.spiral.scale.set(1, 1, 0.01);
+  B.g.visible = true;
+}
+
+function updateBolts(dt, t) {
+  for (const B of Object.values(bolts)) {
+    if (!B.active) continue;
+    B.t += dt;
+    const k = Math.min(1, B.t / B.dur);
+    B.g.position.lerpVectors(B.from, B.to, k);
+    const flown = B.from.distanceTo(B.g.position);
+    B.trail.scale.z = Math.min(1.6, flown); // o rastro cresce até ~1,6 m
+    B.spiral.scale.z = Math.min(1, flown / B.SPIRAL_L); // a espiral cresce até o comprimento todo
+    B.spiral.rotation.z = -t * 38; // gira em volta do eixo do voo
+    const pulse = 1 + 0.18 * Math.sin(t * 60);
+    B.core.scale.setScalar(pulse);
+    B.halo.scale.setScalar(1.1 - 0.1 * pulse);
+    B.light.position.copy(B.g.position);
+    B.light.intensity = 6;
+    if (k >= 1) {
+      B.active = false;
+      B.g.visible = false;
+      B.light.intensity = 0;
+      const done = B.done;
+      B.done = null;
+      done?.();
+    }
+  }
+}
+function clearBolts() {
+  for (const B of Object.values(bolts)) {
+    B.active = false;
+    B.done = null;
+    B.g.visible = false;
+    B.light.intensity = 0;
+  }
+}
 
 // faíscas quando o portal não gruda
 const sparkGeo = new THREE.BufferGeometry();
@@ -448,6 +551,8 @@ const cycleSpot = (i) => {
 function clearLevel() {
   portals.blockedAt = null;
   viewOverride = null;
+  clearBolts();
+  ZOOM.on = false; // o zoom (rodinha) não passa de um mapa para o outro
   clearTimeout(fadeTimer);
   document.getElementById('campaign-fade')?.style.setProperty('opacity', '0');
   campaign?.dialogue.stopAll();
@@ -759,6 +864,7 @@ function shoot(which) {
   GUN.heat = Math.min(1, GUN.heat + 0.3);
   gun.userData.base.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]).multiplyScalar(3);
   gun.userData.light.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
+  post.shockwave(); // distorção saindo da boca da arma
   sfx.shot(blue);
   const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
   const origin = camera.getWorldPosition(new THREE.Vector3());
@@ -771,24 +877,31 @@ function shoot(which) {
       P.fixed = false;
       P.moon = true;
       sfx.open(blue);
-      tracer.geometry.setFromPoints([gun.userData.tip.getWorldPosition(new THREE.Vector3()), origin.clone().addScaledVector(dir, 300)]);
-      tracer.material.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
-      tracer.material.opacity = 0.9;
+      fireBolt(which, gun.userData.tip.getWorldPosition(new THREE.Vector3()), origin.clone().addScaledVector(dir, 60), null);
       toast('Portal aberto na Lua! Cuidado com o vácuo...');
       physics.wakeAll();
       updateCrosshair();
       return;
     }
   }
-  // a grade de desintegração barra o tiro
+  // o projétil voa até onde o tiro bate (parede ou grade de desintegração); o
+  // portal é decidido e aberto quando ele chega
+  const wall = world.raycast(origin, dir, 400);
+  const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
+  const end = fz ? fz.clone() : wall ? wall.point.clone() : origin.clone().addScaledVector(dir, 60);
+  const tipW = gun.userData.tip.getWorldPosition(new THREE.Vector3());
+  const lvl = levelIdx;
+  fireBolt(which, tipW, end, () => {
+    if (levelIdx === lvl && running && !completed) landShot(which, origin, dir, allowed);
+  });
+}
+
+/** o projétil chegou: abre o portal (ou faísca, se a superfície não aceita) */
+function landShot(which, origin, dir, allowed) {
+  const blue = which === 'blue';
   const wall = world.raycast(origin, dir, 400);
   const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
   const res = !allowed ? { ok: false } : fz ? { ok: false, point: fz, normal: dir.clone().negate() } : portals.tryPlace(which, origin, dir);
-  const tipW = gun.userData.tip.getWorldPosition(new THREE.Vector3());
-  const end = res.point ?? origin.clone().addScaledVector(dir, 40);
-  tracer.geometry.setFromPoints([tipW, end]);
-  tracer.material.color.copy(SLOT_COLORS[mp() ? net.slot % 4 : 0][blue ? 0 : 1]);
-  tracer.material.opacity = 0.9;
   if (res.ok) {
     if (mp())
       net.send({ t: 'portal', which, lvl: levelIdx, c: res.point.toArray(), n: res.normal.toArray(), u: res.up.toArray(), b: res.boxIndex });
@@ -1018,6 +1131,29 @@ function toast(msg) {
   toastT = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+// a mira indica se a superfície em que você mira aceita portal (verificação ~10×/s)
+let aimClock = 0;
+function updateAim(dt) {
+  aimClock -= dt;
+  if (aimClock > 0) return;
+  aimClock = 0.1;
+  const xh = $('xh');
+  if (gunMode === 'none' || held || !data) {
+    xh.classList.remove('aim-ok', 'aim-no');
+    return;
+  }
+  const origin = camera.getWorldPosition(new THREE.Vector3());
+  const dir = camForward();
+  const allowed = !data.portalsAllowed || data.portalsAllowed(player.pos);
+  const wall = world.raycast(origin, dir, 400);
+  const fz = wall ? world.rayFizzler(origin, dir, wall.dist) : null;
+  // a cor que dá para atirar (na campanha, uma delas pode estar presa pela fase)
+  const which = !portals.blue.fixed ? 'blue' : gunMode === 'both' && !portals.orange.fixed ? 'orange' : null;
+  const ok = !!(allowed && wall && !fz && which && portals.tryPlace(which, origin, dir, true).ok);
+  xh.classList.toggle('aim-ok', ok);
+  xh.classList.toggle('aim-no', !ok);
+}
+
 function updateCrosshair() {
   $('xh').classList.toggle('blue', portals.blue.placed);
   $('xh').classList.toggle('orange', portals.orange.placed);
@@ -1037,12 +1173,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') use();
   if (e.code === 'KeyR') loadLevel(levelIdx);
   if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
-  if (e.code === 'KeyZ') ZOOM.on = true;
   if (e.code === 'KeyT' && !e.repeat) timeTravel();
 });
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
-  if (e.code === 'KeyZ') ZOOM.on = false;
   if (e.code === 'Space') input.jump = false;
 });
 document.addEventListener('mousemove', (e) => {
@@ -1068,12 +1202,28 @@ canvas.addEventListener('mousedown', (e) => {
   }
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
+// zoom pela rodinha: para cima liga e aproxima; para baixo afasta e, no mínimo, desliga.
+// A rolagem é somada até um "degrau" (o trackpad manda dezenas de eventos pequenos)
+let wheelSum = 0;
 window.addEventListener(
   'wheel',
   (e) => {
-    if (!ZOOM.on || !running || paused) return;
+    if (!running || paused) return;
     e.preventDefault();
-    ZOOM.level = clamp(ZOOM.level * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1.5, 8);
+    wheelSum += e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    while (Math.abs(wheelSum) >= 60) {
+      const zoomIn = wheelSum < 0;
+      wheelSum -= Math.sign(wheelSum) * 60;
+      if (zoomIn) {
+        if (!ZOOM.on) {
+          ZOOM.on = true;
+          ZOOM.level = Math.max(ZOOM.level, 2);
+        } else ZOOM.level = clamp(ZOOM.level * 1.25, 1.5, 8);
+      } else if (ZOOM.on) {
+        if (ZOOM.level <= 1.6) ZOOM.on = false;
+        else ZOOM.level = clamp(ZOOM.level / 1.25, 1.5, 8);
+      }
+    }
   },
   { passive: false },
 );
@@ -1455,6 +1605,8 @@ function updateRex(dt) {
 
 function update(dt, t) {
   data?.campaign?.runtime?.update(dt);
+  updateBolts(dt, t);
+  updateAim(realDt);
   levelTime += dt;
   world.update(t, dt);
   portals.update(t, dt);
@@ -1696,6 +1848,7 @@ function update(dt, t) {
       pd.group.visible = false;
       pd.light.intensity = 0;
       gunMode = pd.gives;
+      if (pd.entity) data?.campaign?.runtime?.pickupGun(pd.entity); // campanha: as saídas do mapa
       sfx.gun();
       toast(pd.gives === 'blue' ? 'Você pegou a arma de portais (por enquanto, só o portal azul).' : 'Arma completa: agora ela abre os dois portais!');
       updateCrosshair();
@@ -1858,7 +2011,7 @@ function update(dt, t) {
   // ---- arma, rastro, faíscas
   gun.visible = gunMode !== 'none' && ZOOM.k < 1.3;
   animateGun(dt, t);
-  tracer.material.opacity = Math.max(0, tracer.material.opacity - dt * 5);
+
   if (sparkT < 1) {
     sparkT += dt;
     const pos = sparkGeo.attributes.position;
@@ -1950,6 +2103,9 @@ function frame() {
     sfx.silenceLoops();
     sound.setWhoosh(0);
   }
+  // a onda de choque do tiro sai da boca da arma (posição dela na tela)
+  const tipNdc = gun.userData.tip.getWorldPosition(_shockV).project(camera);
+  post.shockAt = _shockUv.set(tipNdc.x * 0.5 + 0.5, tipNdc.y * 0.5 + 0.5);
   post.render(dt, t, clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), scene, camera, spd, ahead);
   requestAnimationFrame(frame);
 }

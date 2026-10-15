@@ -83,6 +83,7 @@ function addBrush(w, bsp, bi, offset, opts = {}) {
     if (side.bevel) continue;
     const p = bsp.planes[side.plane];
     const n = new THREE.Vector3(p.n[0], p.n[2], -p.n[1]);
+    if (opts.rot) n.applyMatrix3(opts.rot).normalize(); // pincel de molde girado (a distância ao centro não muda)
     planes.push({ n, d: p.d * S + n.dot(offset), tex: bsp.texinfo[side.texinfo], kind: faceKind(bsp.texinfo[side.texinfo]) });
   }
   const pts = brushPoints(planes);
@@ -96,7 +97,8 @@ function addBrush(w, bsp, bi, offset, opts = {}) {
   if (max.x - min.x < 1e-3 || max.y - min.y < 1e-3 || max.z - min.z < 1e-3) return null;
 
   if (isGoo) {
-    w.hazard(min.x, min.y, min.z, max.x, max.y, max.z);
+    // luz mais alta e mais fraca: nos mapas do original há pedestais e plataformas logo acima da gosma
+    w.hazard(min.x, min.y, min.z, max.x, max.y, max.z, { light: 9, lightLift: 3.5 });
     return null;
   }
   const clipOnly = !(c & (CONTENTS.SOLID | CONTENTS.WINDOW | CONTENTS.GRATE | CONTENTS.MOVEABLE));
@@ -139,9 +141,75 @@ export const cubeOpts = (e) =>
 export function modelBounds(bsp, mi, e) {
   const o = parseVec(e.kv.get('origin'));
   const { mins, maxs } = bsp.models[mi];
+  if (e._rot) {
+    // entidade de molde levada para outro lugar e girada: gira os 8 cantos
+    const at = vecKV(e, 'origin');
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (let k = 0; k < 8; k++) {
+      const c = toV(k & 1 ? maxs[0] : mins[0], k & 2 ? maxs[1] : mins[1], k & 4 ? maxs[2] : mins[2]).applyMatrix3(e._rot).add(at);
+      min.min(c);
+      max.max(c);
+    }
+    return { min, max };
+  }
   const a = toV(mins[0] + (o[0] || 0), mins[1] + (o[1] || 0), mins[2] + (o[2] || 0));
   const b = toV(maxs[0] + (o[0] || 0), maxs[1] + (o[1] || 0), maxs[2] + (o[2] || 0));
   return { min: a.clone().min(b), max: a.clone().max(b) };
+}
+
+/** vetores frente/cima (espaço daqui) de ângulos Source em graus */
+function frameOf(pitch, yaw, roll = 0) {
+  const R = Math.PI / 180;
+  const [sp, cp, sy, cy, sr, cr] = [Math.sin(pitch * R), Math.cos(pitch * R), Math.sin(yaw * R), Math.cos(yaw * R), Math.sin(roll * R), Math.cos(roll * R)];
+  const f = new THREE.Vector3(cp * cy, -sp, -(cp * sy));
+  const u = new THREE.Vector3(cr * sp * cy + sr * sy, cr * cp, -(cr * sp * sy - sr * cy));
+  return { f, u };
+}
+
+/**
+ * Moldes (point_template) criados por um env_entity_maker — no original, as
+ * entidades aparecem no lugar e no ângulo do "maker" (ex.: o receptor de esfera
+ * de energia da câmara 06, guardado num depósito e criado no teto). Aqui elas
+ * já ficam lá desde o começo: posição, ângulos e pincéis giram junto. Os cubos
+ * ficam de fora (o dispensador os cria na hora). Só para moldes com um maker só.
+ */
+export function relocateTemplates(bsp) {
+  if (bsp._relocated) return;
+  bsp._relocated = true;
+  const ents = bsp.entities;
+  const named = (n) => ents.filter((e) => (e.kv.get('targetname') ?? '').toLowerCase() === (n ?? '').toLowerCase());
+  const makersOf = new Map();
+  for (const m of ents) {
+    if (m.classname !== 'env_entity_maker') continue;
+    const tpl = named(m.kv.get('entitytemplate')).find((x) => x.classname === 'point_template');
+    if (!tpl) continue;
+    if (!makersOf.has(tpl)) makersOf.set(tpl, []);
+    makersOf.get(tpl).push(m);
+  }
+  const fmt = (v) => `${(v.x / S).toFixed(3)} ${(-v.z / S).toFixed(3)} ${(v.y / S).toFixed(3)}`;
+  for (const [tpl, makers] of makersOf) {
+    if (makers.length !== 1) continue;
+    const members = [];
+    for (const [k, v] of tpl.kv) if (/^template\d+$/.test(k)) members.push(...named(v));
+    if (!members.length || members.every((e) => isCube(e) || e.classname === 'prop_glados_core')) continue;
+    const maker = makers[0];
+    const T = vecKV(tpl, 'origin');
+    const M = vecKV(maker, 'origin');
+    const [mp, my, mr] = parseVec(maker.kv.get('angles'));
+    const { f, u } = frameOf(mp || 0, my || 0, mr || 0);
+    const rot = new THREE.Matrix3().set(f.x, u.x, f.y * u.z - f.z * u.y, f.y, u.y, f.z * u.x - f.x * u.z, f.z, u.z, f.x * u.y - f.y * u.x);
+    for (const e of members) {
+      if (isCube(e) || e.classname === 'prop_glados_core') continue;
+      const p = vecKV(e, 'origin').sub(T).applyMatrix3(rot).add(M);
+      e.kv.set('origin', fmt(p));
+      const [ep, ey, er] = parseVec(e.kv.get('angles'));
+      const fr = frameOf(ep || 0, ey || 0, er || 0);
+      e._forward = fr.f.applyMatrix3(rot).normalize();
+      e._up = fr.u.applyMatrix3(rot).normalize();
+      if ((e.kv.get('model') ?? '')[0] === '*') e._rot = rot;
+    }
+  }
 }
 
 /** cascos (meia largura x, meia largura y, base z, topo z — em unidades Source)
@@ -156,6 +224,7 @@ const MODEL_HULLS = {
 const NOT_GEOMETRY = /^(trigger_|func_areaportal|func_portal_|func_noportal_volume|func_occluder|func_viscluster|func_clip_vphysics|func_ladderendpoint|env_|water_lod|func_precipitation|func_smokevolume|func_vehicleclip|func_dustmotes|func_dustcloud)/;
 
 export function buildMap(w, bsp) {
+  relocateTemplates(bsp);
   const ents = bsp.entities;
   const byName = new Map();
   for (const e of ents) {
@@ -172,6 +241,24 @@ export function buildMap(w, bsp) {
   let count = 0;
   for (const bi of bsp.modelBrushes(0)) if (addBrush(w, bsp, bi, zero)) count++;
 
+  // cadeia de pais: a peça que se move (porta, plataforma, trilho) de que esta depende
+  const MOVING = /^func_(door|movelinear|tracktrain|rotating|door_rotating|platrot|train|physbox|water_analog)/;
+  const movingRoot = (e) => {
+    const seen = new Set();
+    let cur = e;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const pn = (cur.kv.get('parentname') ?? '').toLowerCase();
+      if (!pn) return null;
+      const par = (byName.get(pn) ?? [])[0];
+      if (!par) return null;
+      if (MOVING.test(par.classname)) return par;
+      cur = par;
+    }
+    return null;
+  };
+  const followers = []; // { solids, root }: andam junto com a peça raiz
+
   // entidades de pincel: na posição inicial (as que se mexem ganham corpo cinemático)
   const brushEnts = [];
   for (const e of ents) {
@@ -179,23 +266,28 @@ export function buildMap(w, bsp) {
     if (!model || model[0] !== '*' || NOT_GEOMETRY.test(e.classname)) continue;
     const mi = parseInt(model.slice(1), 10);
     if (!bsp.models[mi]) continue;
-    const moving = /^func_(door|movelinear|tracktrain|rotating|door_rotating|platrot|train|physbox)/.test(e.classname);
+    // a porta giratória do botão de pedestal não gira aqui: anda junto com o pedestal
+    const root = MOVING.test(e.classname) && e.classname !== 'func_door_rotating' ? null : movingRoot(e);
+    const moving = MOVING.test(e.classname) || !!root;
     const hidden = e.kv.get('startdisabled') === '1' || e.kv.get('rendermode') === '10';
     const visualOnly = e.classname === 'func_illusionary' || e.kv.get('solidity') === '1';
     let fallbackKind = /^func_(tracktrain|movelinear)$/.test(e.classname) ? 'metal' : null;
     if (e.classname === 'func_door') {
       const [pitch] = parseVec(e.kv.get('movedir'));
-      fallbackKind = pitch > 45 && (parseFloat(e.kv.get('speed')) || 100) <= 60 ? 'button' : 'door';
+      const { mins, maxs } = bsp.models[mi];
+      const flatWide = Math.min(maxs[0] - mins[0], maxs[1] - mins[1]) >= 24 && maxs[2] - mins[2] <= 24; // placa de botão
+      fallbackKind = pitch > 45 && (parseFloat(e.kv.get('speed')) || 100) <= 60 ? (flatWide ? 'button' : 'metal') : 'door';
     }
     const solids = [];
     for (const bi of bsp.modelBrushes(mi)) {
-      const s = addBrush(w, bsp, bi, vecKV(e, 'origin'), { kinematic: moving, visualOnly, fallbackKind });
+      const s = addBrush(w, bsp, bi, vecKV(e, 'origin'), { kinematic: moving, visualOnly, fallbackKind, rot: e._rot });
       if (s) solids.push(s);
     }
     if (hidden) for (const s of solids) w.setSolidEnabled(s, false);
     // func_door "não sólida para o jogador" (flags 4/8): só visual
     if (e.classname === 'func_door' && parseInt(e.kv.get('spawnflags') || '0', 10) & 12) for (const s of solids) s.collider?.setEnabled(false);
     brushEnts.push({ e, solids, bounds: modelBounds(bsp, mi, e) });
+    if (root && solids.length) followers.push({ solids, root });
     count += solids.length;
   }
 
@@ -205,7 +297,7 @@ export function buildMap(w, bsp) {
     if (e.classname !== 'light' && e.classname !== 'light_spot') continue;
     const [r, g, b, bright] = parseVec(e.kv.get('_light'));
     if (!(bright > 0)) continue;
-    lights.push({ p: vecKV(e, 'origin'), color: new THREE.Color(r / 255, g / 255, b / 255), bright });
+    lights.push({ p: vecKV(e, 'origin'), color: new THREE.Color(r / 255, g / 255, b / 255), bright, spot: e.classname === 'light_spot' });
   }
   lights.sort((a, b) => b.bright - a.bright);
   const picked = [];
@@ -218,9 +310,14 @@ export function buildMap(w, bsp) {
   // (média da distância até as paredes em 6 direções)
   const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].map((d) => new THREE.Vector3(...d));
   for (const L of picked) {
-    const room = DIRS.reduce((a, d) => a + (w.raycast(L.p, d, 20)?.dist ?? 20), 0) / DIRS.length;
+    const dists = DIRS.map((d) => w.raycast(L.p, d, 20)?.dist ?? 20);
+    const room = dists.reduce((a, x) => a + x, 0) / DIRS.length;
     const k = THREE.MathUtils.clamp(room / 7, 0.3, 1);
-    w.light(L.p.x, L.p.y, L.p.z, Math.min(90, Math.max(15, L.bright / 6)) * k, L.color, 30, false);
+    // colada numa superfície (spot em cima de um botão, por exemplo) estouraria o material
+    const near = THREE.MathUtils.clamp((Math.min(...dists) / 2) ** 2, 0.12, 1);
+    // spot: no original só ilumina um cone; aqui (luz pontual) entra com metade da força
+    const spot = L.spot ? 0.5 : 1;
+    w.light(L.p.x, L.p.y, L.p.z, Math.min(90, Math.max(15, L.bright / 6)) * k * near * spot, L.color, 30, false);
   }
 
   // início
@@ -231,9 +328,11 @@ export function buildMap(w, bsp) {
   // plataformas que no original são só modelo (com colisão própria) e não têm
   // pincel embaixo: viram um bloco de metal do tamanho do casco do modelo
   for (const e of ents) {
-    if (!/^prop_dynamic/.test(e.classname) || e.kv.get('parentname') || e.kv.get('solid') === '0') continue;
+    if (!/^prop_dynamic/.test(e.classname) || e.kv.get('solid') === '0') continue;
     const hull = MODEL_HULLS[(e.kv.get('model') ?? '').toLowerCase()];
     if (!hull) continue;
+    const root = e.kv.get('parentname') ? movingRoot(e) : null;
+    if (e.kv.get('parentname') && !root) continue;
     const o = parseVec(e.kv.get('origin'));
     const yaw = Math.round((parseVec(e.kv.get('angles'))[1] || 0) / 90) & 1;
     const [hx, hy] = yaw ? [hull[1], hull[0]] : [hull[0], hull[1]];
@@ -243,8 +342,9 @@ export function buildMap(w, bsp) {
     const max = a.clone().max(b);
     // não duplica se já houver sólido ali (a plataforma tem pincel próprio)
     const c = min.clone().add(max).multiplyScalar(0.5);
-    if (w.pointInSolid(c)) continue;
-    w.importedBox(min, max, ['metal', 'metal', 'metal', 'metal', 'metal', 'metal']);
+    if (!root && w.pointInSolid(c)) continue;
+    const box = w.importedBox(min, max, ['metal', 'metal', 'metal', 'metal', 'metal', 'metal'], { kinematic: !!root });
+    if (root) followers.push({ solids: [box], root });
   }
 
   // dispensadores de cubo: no original o modelo é só visual (a boca fica na origem,
@@ -270,8 +370,14 @@ export function buildMap(w, bsp) {
       gun = gives(e);
       continue;
     }
-    const floor = w.raycast(p.clone().add(new THREE.Vector3(0, 0.5, 0)), new THREE.Vector3(0, -1, 0), 6);
-    w.pedestal(p.x, floor ? floor.point.y : p.y - 1, p.z, gives(e), portalGun());
+    // a arma fica onde estava no original; a base do pedestal vai do chão de verdade
+    // até ela (ignorando o suporte pequeno do original, que vira só um apoio)
+    const big = (b) => b.max.x - b.min.x > 0.9 || b.max.z - b.min.z > 0.9;
+    const floor = w.raycast(p.clone(), new THREE.Vector3(0, -1, 0), 6, big);
+    const floorY = floor ? floor.point.y : p.y - 1.45;
+    const height = THREE.MathUtils.clamp(p.y - floorY, 0.6, 4);
+    const pd = w.pedestal(p.x, p.y - height, p.z, gives(e), portalGun(), { height });
+    pd.entity = e; // pegar dispara as saídas OnPlayerPickup do mapa
   }
 
   // amostras (cubos): na campanha original são props de física com o modelo da caixa.
@@ -328,11 +434,18 @@ export function buildMap(w, bsp) {
       if (q.distanceTo(c) < 4 && (!best || q.distanceTo(c) < best.d)) best = { q, d: q.distanceTo(c), e: cp };
     }
     const [pt, yw] = best ? parseVec(best.e.kv.get('angles')) : [0, 0];
-    const n = forwardOf(pt || 0, yw || 0);
-    catchers.set(e, w.catcher(c.x, c.y, c.z, n.toArray(), null));
+    const n = best?.e._forward ?? forwardOf(pt || 0, yw || 0);
+    // o receptor fica na boca do modelo (não no meio do volume do gatilho, que pode
+    // estar dentro da parede); se ainda estiver dentro de um sólido, sai pela frente
+    const at = best ? best.q.clone() : c.clone();
+    for (let k = 0; k < 40 && w.pointInSolid(at.clone().addScaledVector(n, 0.25)); k++) at.addScaledVector(n, 0.05);
+    catchers.set(e, w.catcher(at.x, at.y, at.z, n.toArray(), null));
+    for (const b of brushEnts)
+      if (b.e.classname === 'func_tracktrain' && b.bounds.min.clone().add(b.bounds.max).multiplyScalar(0.5).distanceTo(at) < 3)
+        for (const sd of b.solids) w.setSolidEnabled(sd, false);
   }
 
   // abaixo de tudo o que existe no mapa não há chão: quem cai ali morre logo
   const floor = Math.min(...w.solids.map((b) => b.min.y));
-  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, stats: { solids: count, lights: picked.length } };
+  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, followers, movingRoot, stats: { solids: count, lights: picked.length } };
 }

@@ -197,3 +197,25 @@ export function explosion(scene, pos, list) {
   scene.add(m);
   list.push({ m, t: 0 });
 }
+
+/** botão de pedestal (desenho próprio): base, coluna, cabeça inclinada e botão vermelho */
+export function pedestalSwitch() {
+  const g = new THREE.Group();
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d32, metalness: 0.7, roughness: 0.4 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xe2e2de, metalness: 0.1, roughness: 0.35 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.08, 28), dark);
+  base.position.y = 0.04;
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 1.0, 20), white);
+  post.position.y = 0.58;
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.12, 0.12, 28), dark);
+  head.position.y = 1.14;
+  const capMat = new THREE.MeshStandardMaterial({ color: 0xc0140d, emissive: 0x5a0805, roughness: 0.35 });
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.05, 28), capMat);
+  const capY = 1.22;
+  cap.position.y = capY;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.012, 8, 32).rotateX(Math.PI / 2), white);
+  ring.position.y = 1.2;
+  g.add(base, post, head, cap, ring);
+  g.userData = { cap, capMat, capY, k: 0 };
+  return g;
+}

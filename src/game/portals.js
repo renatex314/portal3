@@ -416,6 +416,7 @@ export class PortalSystem {
     for (const p of this.list) {
       p.remove();
       p.fixed = false;
+      p.owner = null; // prop_portal da campanha que pôs este portal fixo
     }
   }
 
@@ -434,10 +435,31 @@ export class PortalSystem {
   placeFixed(which, center, normal, up) {
     const P = which === 'blue' ? this.blue : this.orange;
     const c = new THREE.Vector3(...center);
-    const n = new THREE.Vector3(...normal);
-    const hit = this.world.raycast(c.clone().addScaledVector(n, 0.3), n.clone().negate(), 1);
+    let n = new THREE.Vector3(...normal);
+    let u = new THREE.Vector3(...up);
+    // a parede logo atrás do centro; se o ponto dado estiver enterrado nela (mapas
+    // importados), começa cada vez mais à frente até sair do sólido
+    let hit = null;
+    for (const ofs of [0.3, 0.6, 1.0, 1.6]) {
+      hit = this.world.raycast(c.clone().addScaledVector(n, ofs), n.clone().negate(), ofs + 0.7);
+      if (hit) break;
+    }
+    if (!hit) {
+      // nada atrás na direção dada (há mapas do original com o ângulo trocado): o
+      // portal assenta na superfície em que o ponto encosta, em qualquer direção
+      for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]].map((v) => new THREE.Vector3(...v))) {
+        const h = this.world.raycast(c.clone().addScaledVector(d, 0.3), d.clone().negate(), 0.45);
+        if (h && h.normal.dot(d) > 0.99) {
+          hit = h;
+          n = d;
+          if (Math.abs(n.y) < 0.5) u = new THREE.Vector3(0, 1, 0);
+          else if (Math.abs(u.dot(n)) > 0.5) u = new THREE.Vector3(0, 0, -1);
+          break;
+        }
+      }
+    }
     if (!hit) return null;
-    P.setFrame(hit.point.addScaledVector(n, 0.002), n, new THREE.Vector3(...up), hit.box);
+    P.setFrame(hit.point.addScaledVector(n, 0.002), n, u, hit.box);
     P.fixed = true;
     return P;
   }
@@ -452,12 +474,25 @@ export class PortalSystem {
   }
 
   // ------------------------------------------------------------ colocar portal
-  tryPlace(which, origin, dir) {
+  /** `dry`: só verifica se o portal caberia (para a mira), sem abri-lo */
+  tryPlace(which, origin, dir, dry = false) {
     const P = which === 'blue' ? this.blue : this.orange;
     if (P.fixed) return { ok: false };
     const hit = this.world.raycast(origin, dir, 400);
     if (!hit) return { ok: false };
-    if (hit.box.surfaceFit) return this.tryPlaceSurface(P, hit, dir);
+    if (hit.box.surfaceFit) {
+      if (!dry) return this.tryPlaceSurface(P, hit, dir);
+      // verificação da mira: só os sólidos perto do ponto (mapas importados têm milhares)
+      const all = this.world.solids;
+      const c = hit.point;
+      const R = 3;
+      this.world.solids = all.filter((b) => !(b.max.x < c.x - R || b.min.x > c.x + R || b.max.y < c.y - R || b.min.y > c.y + R || b.max.z < c.z - R || b.min.z > c.z + R));
+      try {
+        return this.tryPlaceSurface(P, hit, dir, true);
+      } finally {
+        this.world.solids = all;
+      }
+    }
     if (!hit.box.portalable) return { ok: false, point: hit.point, normal: hit.normal };
     const n = hit.normal.clone();
     let up;
@@ -548,6 +583,7 @@ export class PortalSystem {
         }
     }
     if (!final) return { ok: false, point: hit.point, normal: n };
+    if (dry) return { ok: true, point: final, normal: n, up };
     P.setFrame(final.addScaledVector(n, 0.002), n, up, box);
     return { ok: true, point: final, normal: n, up, boxIndex: this.world.solids.indexOf(box) };
   }
@@ -557,7 +593,7 @@ export class PortalSystem {
    * portal cabe se cada ponto da borda tiver, logo atrás, uma face que aceita
    * portal no mesmo plano — e nada sólido na frente.
    */
-  tryPlaceSurface(P, hit, dir) {
+  tryPlaceSurface(P, hit, dir, dry = false) {
     const fail = { ok: false, point: hit.point, normal: hit.normal };
     const n = hit.normal.clone();
     if (!hit.box.portalAt(n)) return fail;
@@ -619,6 +655,7 @@ export class PortalSystem {
         }
       }
     if (!final) return fail;
+    if (dry) return { ok: true, point: final, normal: n, up };
     P.setFrame(final.addScaledVector(n, 0.002), n, up, hit.box);
     return { ok: true, point: final, normal: n, up, boxIndex: this.world.solids.indexOf(hit.box) };
   }
