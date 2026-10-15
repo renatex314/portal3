@@ -105,6 +105,8 @@ export class RocketTurret {
     this.enabled = enabled;
     this.lock = 0;
     this.cool = 1.5;
+    this.lockTime = 1.6; // tempo de mira antes do tiro
+    this.coolTime = 3.5; // intervalo entre tiros
     this.group = new THREE.Group();
     this.group.position.copy(pos);
     const dark = new THREE.MeshStandardMaterial({ color: 0x2a2c30, metalness: 0.8, roughness: 0.4 });
@@ -152,11 +154,11 @@ export class RocketTurret {
     }
     this.laser.visible = true;
     this.laser.geometry.setFromPoints([from, eye]);
-    this.laser.material.opacity = 0.4 + 0.5 * Math.min(1, this.lock / 1.6);
+    this.laser.material.opacity = 0.4 + 0.5 * Math.min(1, this.lock / this.lockTime);
     this.lock += dt;
-    if (this.lock > 1.6 && this.cool <= 0) {
+    if (this.lock > this.lockTime && this.cool <= 0) {
       this.lock = 0;
-      this.cool = 3.5;
+      this.cool = this.coolTime;
       return { pos: from, dir: to };
     }
     return null;

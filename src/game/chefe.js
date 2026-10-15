@@ -381,8 +381,8 @@ function buildBoss(w, S, lights) {
     const s = k % 2 ? 1 : -1;
     const a = (k / 14) * Math.PI * 2;
     const start = project(ell(new THREE.Vector3(Math.sin(a) * 0.9, 0.3 + R() * 0.7, -0.3 - R() * 0.5).normalize()));
-    const target = new THREE.Vector3(s * (28 + R() * 11), 6 + R() * 36, -70 + R() * 70);
-    if (k % 4 === 0) target.set((R() - 0.5) * 60, 47.5, -70 + R() * 55);
+    const target = new THREE.Vector3(s * (15 + R() * 8), 5 + R() * 28, -72 + R() * 58);
+    if (k % 4 === 0) target.set((R() - 0.5) * 38, 37.5, -70 + R() * 50);
     const mid1 = start.clone().lerp(target, 0.35).add(new THREE.Vector3((R() - 0.5) * 12, (R() - 0.2) * 10, (R() - 0.5) * 12));
     const mid2 = start.clone().lerp(target, 0.7).add(new THREE.Vector3((R() - 0.5) * 12, (R() - 0.5) * 10, (R() - 0.5) * 12));
     roots.push([start, mid1, mid2, target]);
@@ -501,9 +501,10 @@ function buildBoss(w, S, lights) {
 
 // ------------------------------------------------------------------ a luta
 const TURRETS = [
-  [-9, 0, -28],
-  [9, 0, -28],
+  [-8, 0, -38],
+  [8, 0, -38],
 ];
+const ROCKET_SPEED = 21; // rápido: dá para ver o laser travar, mas o foguete chega logo
 const MOUTH = new THREE.Vector3(0, 20.2, -50);
 // onde um foguete "acerta" o chefe: o crânio e o pescoço
 const HURT = [
@@ -514,9 +515,12 @@ const HURT = [
 /** a luta: torretas de foguete, foguetes, núcleos que caem e a fornalha (lógica própria da série Chefes) */
 function createFight(ctx, S) {
   const { world, portals, player } = ctx;
-  const turrets = TURRETS.map((p) => {
+  const turrets = TURRETS.map((p, i) => {
     const T = new RocketTurret(world.group, new THREE.Vector3(...p), false);
     T.group.scale.setScalar(1.7); // maiores, para se enxergarem do outro lado do salão
+    T.lockTime = 0.9;
+    T.coolTime = 2.3;
+    T.cool = 0.8 + i * 1.0; // as duas atiram, uma defasada da outra
     return T;
   });
   let tipped = false;
@@ -528,7 +532,6 @@ function createFight(ctx, S) {
   const ab = new THREE.Vector3();
   const prev = new THREE.Vector3();
   const step = new THREE.Vector3();
-  let cur = 0; // só uma torreta por vez: um laser e um foguete para ler
   let core = null;
   let burned = 0;
 
@@ -539,6 +542,7 @@ function createFight(ctx, S) {
     ctx.sfx.death?.();
     // o núcleo cai da boca para o chão, em frente ao pescoço
     core = ctx.spawnCube(MOUTH.x, MOUTH.y, MOUTH.z, { mesh: coreModel(S.stage - 1) });
+    core.body.setLinvel({ x: (Math.random() - 0.5) * 3, y: 1, z: 4.5 }, true); // cuspido para a frente: cai a meio caminho da fornalha
     ctx.say([
       S.stage === 1
         ? ['Helena', 'Acertou! Caiu um núcleo da boca dele. Pegue com E, leve até a fornalha no meio do salão e solte lá dentro.']
@@ -554,7 +558,7 @@ function createFight(ctx, S) {
       S.look.copy(eye);
       const idle = !!core || S.calm;
       turrets.forEach((T, i) => {
-        T.enabled = !idle && i === cur;
+        T.enabled = !idle;
         const shot = T.update(dt, eye, world);
         if (T.lock === 0) tipped = false;
         if (T.enabled && T.lock > 0.3 && !tipped && tip < 2) {
@@ -567,9 +571,10 @@ function createFight(ctx, S) {
           ]);
         }
         if (shot) {
-          rockets.push(new Rocket(world.group, shot.pos, shot.dir));
+          const rk = new Rocket(world.group, shot.pos, shot.dir);
+          rk.speed = ROCKET_SPEED;
+          rockets.push(rk);
           ctx.sfx.turretShot?.(shot.pos.distanceTo(eye));
-          cur = (cur + 1) % turrets.length;
         }
       });
       for (let i = rockets.length - 1; i >= 0; i--) {
@@ -657,56 +662,77 @@ export const CHEFES = [
     who: 'Helena',
     lesson: 'Fique na frente do portal azul e saia do caminho quando o foguete vier: ele sai no laranja, direto no crânio. Queime os três núcleos que caem.',
     build(w) {
-      // salão: paredes laterais e da frente de concreto claro (aceitam portal), fundo e teto de metal
-      w.box(-41, 0, -81, -40, 48, 17, 'white');
-      w.box(40, 0, -81, 41, 48, 17, 'white');
-      w.box(-41, 0, 16, 41, 48, 17, 'white');
-      w.box(-41, 48, -81, 41, 49, 17, 'metal');
-      // chão com o buraco da fornalha no meio do salão
-      w.box(-40, -2, -80, 40, 0, -14, 'white');
-      w.box(-40, -2, -8, 40, 0, 16, 'white');
-      w.box(-40, -2, -14, -3, 0, -8, 'white');
-      w.box(3, -2, -14, 40, 0, -8, 'white');
-      w.box(-3, -2, -14, 3, -1, -8, 'rock');
-      w.incinerator(-2.95, -1, -13.95, 2.95, 0.9, -8.05);
+      // salão (bem menor que antes): paredes laterais e da frente de concreto claro (aceitam portal), fundo e teto de metal
+      w.box(-25, 0, -73, -24, 38, -9, 'white');
+      w.box(24, 0, -73, 25, 38, -9, 'white');
+      w.box(-25, 0, -10, 25, 38, -9, 'white');
+      w.box(-25, 38, -79, 25, 39, -9, 'metal');
+      // chão com o buraco da fornalha entre o jogador e o chefe
+      w.box(-24, -2, -72, 24, 0, -31, 'white');
+      w.box(-24, -2, -25, 24, 0, -10, 'white');
+      w.box(-24, -2, -31, -3, 0, -25, 'white');
+      w.box(3, -2, -31, 24, 0, -25, 'white');
+      w.box(-3, -2, -31, 3, -1, -25, 'rock');
+      w.incinerator(-2.95, -1, -30.95, 2.95, 0.9, -25.05);
       for (const [x0, z0, x1, z1] of [
-        [-3.4, -14.4, 3.4, -14],
-        [-3.4, -8, 3.4, -7.6],
-        [-3.4, -14, -3, -8],
-        [3, -14, 3.4, -8],
+        [-3.4, -31.4, 3.4, -31],
+        [-3.4, -25, 3.4, -24.6],
+        [-3.4, -31, -3, -25],
+        [3, -31, 3.4, -25],
       ])
         w.box(x0, 0, z0, x1, 0.05, z1, 'stripe', { solid: false });
-      w.light(0, 4, -11, 60, 0xff8030, 18, false);
+      w.light(0, 4, -28, 60, 0xff8030, 18, false);
       // porta de trás, atrás do chefe: só abre quando o último núcleo for queimado
-      northWallWithExit(w, -40, 40, 48, -80, 'exit');
+      northWallWithExit(w, -24, 24, 38, -72, 'exit');
       // luzes (fixas: o número de luzes não muda durante a fase)
       for (const [x, y, z] of [
-        [-22, 36, -2],
-        [22, 36, -2],
-        [-22, 36, -34],
-        [22, 36, -34],
+        [-14, 30, -20],
+        [14, 30, -20],
+        [-14, 30, -46],
+        [14, 30, -46],
       ])
-        w.light(x, y, z, 330, 0xdfe8ff, 95, false);
+        w.light(x, y, z, 260, 0xdfe8ff, 70, false);
       const warm = w.light(-9, 15, -43, 150, 0xff4030, 46, false);
       const cold = w.light(9, 15, -43, 150, 0x4a7aff, 46, false);
       // estado compartilhado entre a animação do chefe e a luta
-      const S = { stage: 0, calm: false, flash: 0, gape: 0, look: new THREE.Vector3(0, 1.6, 10) };
+      const S = { stage: 0, calm: false, flash: 0, gape: 0, look: new THREE.Vector3(0, 1.6, -14) };
       buildBoss(w, S, { warm, cold });
-      sign(w, -39.97, 3.2, 6, Math.PI / 2, 'B01', 'SISTEMA NERVOSO', 'foguete · portal · núcleo · fornalha');
+      // os olhos cospem bolas de energia que varrem o salão e quicam: não dá para ficar parado
+      const eyes = [-1, 1].map((sx, i) => {
+        const L = w.launcher(2.4 * sx, 25.7, -50.2, [0, -0.3, 1], { delay: 2 + i * 2.5, life: 8, speed: 7 });
+        L.group.visible = false;
+        return L;
+      });
+      let spitting = true;
+      w.anim.push((t) => {
+        eyes.forEach((L, i) => {
+          const yaw = Math.sin(t * 1.3 + i * 2.4) * 0.9;
+          const pitch = -0.3 - 0.25 * Math.sin(t * 1.9 + i);
+          L.dir.set(Math.sin(yaw), pitch, Math.cos(yaw)).normalize();
+        });
+        if (S.calm && spitting) {
+          spitting = false;
+          for (const L of eyes) {
+            L.done = true;
+            if (L.pellet) L.pellet.life = Math.min(L.pellet.life, 0.25);
+          }
+        }
+      });
+      sign(w, -24.97, 3.2, -18, Math.PI / 2, 'B01', 'SISTEMA NERVOSO', 'foguete · portal · núcleo · fornalha');
       return {
-        spawn: [0, 0, 10, 0],
+        spawn: [0, 0, -14, 0],
         gun: 'blue',
         // o laranja já está na parede, na altura do crânio: tudo que entra no azul sai apontado para ele
-        portals: [{ which: 'orange', c: [-39.9, 27, -55], n: [1, 0, 0], u: [0, 1, 0] }],
+        portals: [{ which: 'orange', c: [-23.9, 27, -55], n: [1, 0, 0], u: [0, 1, 0] }],
         fight: (ctx) => createFight(ctx, S),
         intro: [
-          ['Helena', 'Esse crânio gigante manda na câmara. A torreta de foguetes mira em você: o laser trava e o foguete sai reto.'],
-          ['Helena', 'O portal laranja já está na parede, de frente para o crânio. Ponha o azul numa parede branca atrás de você, espere o foguete e saia do caminho: ele passa pelo portal e acerta o crânio.'],
+          ['Helena', 'Esse crânio gigante manda na câmara. As torretas de foguete miram em você: o laser trava e o foguete sai reto e rápido. Os olhos dele também cospem bolas de energia: não encoste.'],
+          ['Helena', 'O portal laranja já está na parede, de frente para o crânio. Ponha o azul na parede branca atrás de você, espere o laser travar e saia do caminho: o foguete passa pelo portal e acerta o crânio.'],
           ['Helena', 'Cada acerto derruba um núcleo da boca dele. Leve até a fornalha no meio do salão (E pega e solta). Com três queimados, a porta de trás abre.'],
         ],
         hints: [
           { after: 70, lines: [['Helena', 'De costas para uma parede branca, atire o portal azul nela. Quando o laser travar em você, ande para o lado: o foguete segue em linha reta até o portal.']] },
-          { after: 150, lines: [['Helena', 'Quando o núcleo cair, a torreta para. Pegue ele com E (olhando de perto) e jogue dentro do buraco brilhante do chão.']] },
+          { after: 150, lines: [['Helena', 'Quando o núcleo cair, as torretas param. Pegue ele com E (olhando de perto) e jogue dentro do buraco brilhante do chão.']] },
         ],
       };
     },
