@@ -1,9 +1,10 @@
 // Série Chefes — B01 "Sistema Nervoso": um crânio gigante, com as veias e os
-// nervos à mostra, protege a saída. Ele cospe bolas de energia das têmporas, dos
-// olhos e da boca. Para acalmá-lo, leve a energia dele mesmo até os três
-// gânglios (nos ombros e na garganta): a cada acerto os nervos recuam, os
-// olhos esfriam e, no fim, só sobra um feixe de vasos arrumado, preso por
-// fitas de osso — o "sistema tranquilo". Aí a porta de trás se abre.
+// nervos à mostra, protege a saída. A luta segue a do Portal 1: uma torreta
+// atira foguetes em você; saia da frente e deixe o foguete entrar no portal
+// azul — o laranja, já na parede, aponta para o crânio. Cada foguete que
+// acerta derruba um núcleo, que você leva (E) até a fornalha no meio do salão.
+// Com os três queimados ele se acalma: os nervos recuam, sobra só o feixe
+// arrumado — o "sistema tranquilo" — e a porta de trás se abre.
 //
 // Coordenadas em metros; o chão é y = 0; o crânio olha para +z e a saída fica
 // atrás dele, em −z.
@@ -12,6 +13,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { northWallWithExit } from './levels.js';
 import { canvas, heightToNormal } from './textures.js';
+import { RocketTurret, Rocket, explosion, coreModel } from './campaign/boss.js';
 
 const SK = new THREE.Vector3(0, 26, -55); // centro do crânio
 const CRANIUM = { c: new THREE.Vector3(0, 1.2, -0.8), r: new THREE.Vector3(6.05, 5.65, 6.65) }; // elipsoide (local)
@@ -179,7 +181,7 @@ function tube(points, radius, seed, { radial = 5, taper = (u) => 1 - 0.7 * u, pe
 const mergeInto = (list) => (list.length ? mergeGeometries(list) : null);
 
 // ------------------------------------------------------------------ construção do chefe
-function buildBoss(w, hud) {
+function buildBoss(w, S, lights) {
   const R = rng(20260115);
   const U = {
     uTime: { value: 0 },
@@ -447,44 +449,29 @@ function buildBoss(w, hud) {
   addMesh(calmBlue, new THREE.Color(0x2a60ff), 0, 'calmBlue', U.uGrow, NEVER);
   addMesh(calmRed, new THREE.Color(0xff2630), 0, 'calmRed', U.uGrow, NEVER);
 
-  // ---------------------------------------------------------------- nós de energia (os três gânglios) e luzes
-  for (const C of hud.catchers) {
-    C.group.scale.setScalar(2.3);
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xff3a2a, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-    const h = new THREE.Mesh(new THREE.SphereGeometry(2.7, 24, 16), haloMat);
-    h.position.copy(C.group.position);
-    boss.add(h);
-    C.halo = h;
-  }
-  const lights = hud.lights;
-
   // ---------------------------------------------------------------- animação
   const eyeCalm = new THREE.Color(0.5, 1.7, 2.3);
   const eyeAngry = new THREE.Color(3, 0.15, 0.1);
   let chaos = 1;
   let retract = 0;
   let grow = 0;
-  let known = 0;
-  let flash = 0;
-  let gape = 0;
   let settled = false;
+  const calmCol = new THREE.Color(0.3, 1.2, 1.7);
+  const angryCol = new THREE.Color(2.6, 0.5, 0.3);
+  const _look = new THREE.Vector3();
   w.anim.push((t, dt) => {
-    const n = w.catchers.filter((c) => c.active).length;
-    if (n > known) {
-      known = n;
-      flash = 1;
-      gape = 1;
-    }
-    const k = Math.min(1, dt * 1.4);
-    chaos += (1 - n / 3 - chaos) * k;
+    // cada foguete que acerta tira um terço da raiva; com o último núcleo queimado vem a calma
+    const n = S.stage;
+    chaos += (1 - n / 3 - chaos) * Math.min(1, dt * 1.4);
     retract += (n / 3 - retract) * Math.min(1, dt * 0.7);
     if (n >= 3) {
-      grow += (1.05 - grow) * Math.min(1, dt * 0.45);
       retract = Math.min(1, retract + dt * 0.3);
       if (!settled && retract > 0.97) settled = true;
     }
-    flash = Math.max(0, flash - dt * 1.6);
-    gape = Math.max(0, gape - dt * 0.9);
+    if (S.calm) grow += (1.05 - grow) * Math.min(1, dt * 0.45);
+    S.flash = Math.max(0, S.flash - dt * 1.6);
+    S.gape = Math.max(0, S.gape - dt * 0.9);
+    const flash = S.flash;
     U.uTime.value = t;
     U.uChaos.value = chaos;
     U.uRetract.value = settled ? 1 : retract * 0.99;
@@ -494,25 +481,162 @@ function buildBoss(w, hud) {
     // olhos: vermelhos e tremendo → ciano e firmes
     const flick = chaos > 0.05 ? 0.75 + 0.25 * Math.abs(Math.sin(t * (9 + 10 * chaos))) : 1;
     eyeMat.color.lerpColors(eyeCalm, eyeAngry, chaos).multiplyScalar(flick + flash * 0.8);
-    portMat.color.lerpColors(new THREE.Color(0.3, 1.2, 1.7), new THREE.Color(2.6, 0.5, 0.3), chaos);
+    portMat.color.lerpColors(calmCol, angryCol, chaos);
     for (const [i, e] of eyes.entries()) e.scale.setScalar(1 + 0.12 * Math.sin(t * 3 + i) * chaos);
-    // crânio: balança e treme com a raiva; recua a cada acerto
-    skull.rotation.y = Math.sin(t * 0.45) * 0.06 * (0.3 + chaos);
+    // crânio: acompanha o jogador, balança e treme com a raiva; recua a cada acerto
+    _look.copy(S.look).sub(SK);
+    const yaw = THREE.MathUtils.clamp(Math.atan2(_look.x, _look.z), -0.7, 0.7);
+    skull.rotation.y += (yaw * (0.4 + 0.6 * chaos) + Math.sin(t * 0.45) * 0.05 * chaos - skull.rotation.y) * Math.min(1, dt * 2.5);
     skull.rotation.x = Math.sin(t * 0.37) * 0.025 + flash * 0.05;
     skull.position.set(SK.x + (Math.sin(t * 31) * 0.05 + Math.sin(t * 17) * 0.04) * (chaos * chaos + flash), SK.y + Math.sin(t * 23) * 0.04 * chaos, SK.z - flash * 0.4);
     // mandíbula: bate os dentes; escancara quando leva um acerto; fecha quando calmo
-    jaw.rotation.x = (0.06 + 0.14 * Math.abs(Math.sin(t * 11)) * chaos) * (chaos > 0.05 ? 1 : 0.2) + gape * 0.42;
-    // gânglios: vermelhos até receberem a energia; depois, ciano
-    for (const C of hud.catchers) {
-      C.halo.material.color.setRGB(C.active ? 0.2 : 1, C.active ? 0.9 : 0.2, C.active ? 1 : 0.15);
-      C.halo.scale.setScalar(1 + 0.08 * Math.sin(t * 4 + C.pos.x) + (C.active ? 0.25 : 0));
-    }
+    jaw.rotation.x = (0.06 + 0.14 * Math.abs(Math.sin(t * 11)) * chaos) * (chaos > 0.05 ? 1 : 0.2) + S.gape * 0.42;
     // luzes: ardem em vermelho/azul e esfriam para branco-azulado
     lights.warm.color.setRGB(1, 0.25 + 0.5 * (1 - chaos), 0.2 + 0.7 * (1 - chaos));
     lights.warm.intensity = 150 * (0.8 + 0.2 * Math.sin(t * 7) * chaos + 0.3 * (1 - chaos));
     lights.cold.intensity = 150 * (0.9 + 0.1 * Math.sin(t * 5 + 1) * chaos);
   });
   return { skull, jaw };
+}
+
+// ------------------------------------------------------------------ a luta
+const TURRETS = [
+  [-9, 0, -28],
+  [9, 0, -28],
+];
+const MOUTH = new THREE.Vector3(0, 20.2, -50);
+// onde um foguete "acerta" o chefe: o crânio e o pescoço
+const HURT = [
+  { a: SK, b: SK, r: 7.4 },
+  { a: new THREE.Vector3(0, 3, -59), b: new THREE.Vector3(0, 19, -56.5), r: 3.4 },
+];
+
+/** a luta: torretas de foguete, foguetes, núcleos que caem e a fornalha (lógica própria da série Chefes) */
+function createFight(ctx, S) {
+  const { world, portals, player } = ctx;
+  const turrets = TURRETS.map((p) => {
+    const T = new RocketTurret(world.group, new THREE.Vector3(...p), false);
+    T.group.scale.setScalar(1.7); // maiores, para se enxergarem do outro lado do salão
+    return T;
+  });
+  let tipped = false;
+  let tip = 0; // dicas na primeira vez que o laser trava em você
+  const rockets = [];
+  const booms = [];
+  const eye = new THREE.Vector3();
+  const seg = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const prev = new THREE.Vector3();
+  const step = new THREE.Vector3();
+  let cur = 0; // só uma torreta por vez: um laser e um foguete para ler
+  let core = null;
+  let burned = 0;
+
+  const bossHit = () => {
+    S.stage++;
+    S.flash = 1;
+    S.gape = 1;
+    ctx.sfx.death?.();
+    // o núcleo cai da boca para o chão, em frente ao pescoço
+    core = ctx.spawnCube(MOUTH.x, MOUTH.y, MOUTH.z, { mesh: coreModel(S.stage - 1) });
+    ctx.say([
+      S.stage === 1
+        ? ['Helena', 'Acertou! Caiu um núcleo da boca dele. Pegue com E, leve até a fornalha no meio do salão e solte lá dentro.']
+        : ['Helena', S.stage === 2 ? 'Mais um núcleo. Mesma coisa: fornalha.' : 'O último! Fornalha nele também.'],
+    ]);
+  };
+
+  return {
+    S,
+    rockets,
+    update(dt) {
+      ctx.player.eye(eye);
+      S.look.copy(eye);
+      const idle = !!core || S.calm;
+      turrets.forEach((T, i) => {
+        T.enabled = !idle && i === cur;
+        const shot = T.update(dt, eye, world);
+        if (T.lock === 0) tipped = false;
+        if (T.enabled && T.lock > 0.3 && !tipped && tip < 2) {
+          tipped = true;
+          tip++;
+          ctx.say([
+            portals.blue.placed
+              ? ['Helena', 'O laser travou em você! Saia do caminho: o foguete vai reto até o portal azul.']
+              : ['Helena', 'O laser travou! Ponha o portal azul numa parede branca atrás de você e saia da frente do foguete.'],
+          ]);
+        }
+        if (shot) {
+          rockets.push(new Rocket(world.group, shot.pos, shot.dir));
+          ctx.sfx.turretShot?.(shot.pos.distanceTo(eye));
+          cur = (cur + 1) % turrets.length;
+        }
+      });
+      for (let i = rockets.length - 1; i >= 0; i--) {
+        const r = rockets[i];
+        prev.copy(r.pos);
+        r.pos.addScaledVector(r.dir, r.speed * dt);
+        r.life -= dt;
+        const P = portals.crossing(prev, r.pos);
+        if (P?.partner) {
+          const M = portals.transform(P, P.partner);
+          r.pos.applyMatrix4(M);
+          r.dir.transformDirection(M);
+          prev.copy(r.pos).addScaledVector(r.dir, -0.05);
+          r.homing = true;
+        }
+        // depois do portal o foguete corrige a rota sozinho rumo ao crânio (o ângulo de entrada no azul
+        // não precisa ser perfeito): só se ele já estiver apontado mais ou menos para lá
+        if (r.homing) {
+          seg.copy(SK).sub(r.pos).normalize();
+          if (seg.dot(r.dir) > 0.8) r.dir.lerp(seg, Math.min(1, dt * 1.6)).normalize();
+        }
+        let boom = r.life <= 0;
+        for (const h of HURT) {
+          ab.copy(h.b).sub(h.a);
+          const len2 = ab.lengthSq();
+          const k = len2 > 0 ? THREE.MathUtils.clamp(seg.copy(r.pos).sub(h.a).dot(ab) / len2, 0, 1) : 0;
+          if (r.pos.distanceTo(seg.copy(h.a).addScaledVector(ab, k)) < h.r) {
+            if (!core && S.stage < 3 && !S.calm) bossHit();
+            boom = true;
+          }
+        }
+        if (!boom && r.pos.distanceTo(ctx.player.pos) < 0.8) {
+          ctx.hurt(45);
+          boom = true;
+        }
+        step.copy(r.pos).sub(prev);
+        if (!boom && step.lengthSq() > 0 && world.raycast(prev, step.clone().normalize(), step.length())) boom = true;
+        if (boom) {
+          explosion(world.group, r.pos, booms);
+          ctx.sfx.pop?.();
+          r.dispose();
+          rockets.splice(i, 1);
+        } else r.sync();
+      }
+      for (let i = booms.length - 1; i >= 0; i--) {
+        const b = booms[i];
+        b.t += dt;
+        b.m.scale.setScalar(1 + b.t * 9);
+        b.m.material.opacity = Math.max(0, 1 - b.t * 2.5);
+        if (b.t > 0.4) {
+          world.group.remove(b.m);
+          booms.splice(i, 1);
+        }
+      }
+      // núcleo na fornalha
+      if (core?.gone) {
+        core = null;
+        burned++;
+        if (burned >= 3) {
+          S.calm = true;
+          world.signals.set('exit', true);
+          for (const T of turrets) T.enabled = false;
+          ctx.say([['Helena', 'Ele se acalmou. Os nervos se recolheram e a porta atrás dele abriu: pode ir.']]);
+        } else ctx.say([['Helena', 'Queimou! A torreta vai voltar a atirar: mesma tática.']]);
+      }
+    },
+  };
 }
 
 // ------------------------------------------------------------------ fase
@@ -531,80 +655,58 @@ export const CHEFES = [
   B(0, {
     name: 'Sistema Nervoso',
     who: 'Helena',
-    lesson: 'Use a própria energia do crânio para acalmá-lo: leve as bolas dele até os três gânglios, nos ombros e na garganta.',
+    lesson: 'Fique na frente do portal azul e saia do caminho quando o foguete vier: ele sai no laranja, direto no crânio. Queime os três núcleos que caem.',
     build(w) {
-      // salão: chão, paredes laterais e do fundo de concreto claro (aceitam portal), teto de metal
-      w.box(-40, -2, -80, 40, 0, 16, 'white');
+      // salão: paredes laterais e da frente de concreto claro (aceitam portal), fundo e teto de metal
       w.box(-41, 0, -81, -40, 48, 17, 'white');
       w.box(40, 0, -81, 41, 48, 17, 'white');
       w.box(-41, 0, 16, 41, 48, 17, 'white');
       w.box(-41, 48, -81, 41, 49, 17, 'metal');
-      // porta de trás, atrás do chefe: só abre quando os três gânglios estão ligados
+      // chão com o buraco da fornalha no meio do salão
+      w.box(-40, -2, -80, 40, 0, -14, 'white');
+      w.box(-40, -2, -8, 40, 0, 16, 'white');
+      w.box(-40, -2, -14, -3, 0, -8, 'white');
+      w.box(3, -2, -14, 40, 0, -8, 'white');
+      w.box(-3, -2, -14, 3, -1, -8, 'rock');
+      w.incinerator(-2.95, -1, -13.95, 2.95, 0.9, -8.05);
+      for (const [x0, z0, x1, z1] of [
+        [-3.4, -14.4, 3.4, -14],
+        [-3.4, -8, 3.4, -7.6],
+        [-3.4, -14, -3, -8],
+        [3, -14, 3.4, -8],
+      ])
+        w.box(x0, 0, z0, x1, 0.05, z1, 'stripe', { solid: false });
+      w.light(0, 4, -11, 60, 0xff8030, 18, false);
+      // porta de trás, atrás do chefe: só abre quando o último núcleo for queimado
       northWallWithExit(w, -40, 40, 48, -80, 'exit');
-      // gânglios: ombros e garganta (raio de captura grande: a mira não precisa ser perfeita)
-      const catchers = [
-        w.catcher(-10, 8.4, -55, [-1, 0, 0], 'exit', { radius: 2.3 }),
-        w.catcher(10, 8.4, -55, [1, 0, 0], 'exit', { radius: 2.3 }),
-        w.catcher(0, 14, -52.5, [0, 0, 1], 'exit', { radius: 2.3 }),
-      ];
-      // bolas: têmporas (cruzam o salão até as paredes), boca (reta para o jogador) e olhos (chuva torta)
-      const hide = (L) => {
-        L.group.visible = false; // o soquete padrão não aparece: a saída é o próprio crânio
-        return L;
-      };
-      const temporas = [
-        hide(w.launcher(-6.4, 26.4, -55.5, [-1, 0, 0], { delay: 2, life: 15, speed: 6 })),
-        hide(w.launcher(6.4, 26.4, -55.5, [1, 0, 0], { delay: 5, life: 15, speed: 6 })),
-      ];
-      const mouth = hide(w.launcher(0, 20.7, -49.9, [0, 0, 1], { delay: 3.5, life: 19, speed: 5 }));
-      const eyes = [hide(w.launcher(-2.4, 25.7, -50.2, [0, -0.3, 1], { delay: 6, life: 9, speed: 4.2 })), hide(w.launcher(2.4, 25.7, -50.2, [0, -0.3, 1], { delay: 8, life: 9, speed: 4.2 }))];
-      const all = [...temporas, mouth, ...eyes];
-      const base = new Map(all.map((L) => [L, L.pos.clone()]));
       // luzes (fixas: o número de luzes não muda durante a fase)
-      const hall = [
+      for (const [x, y, z] of [
         [-22, 36, -2],
         [22, 36, -2],
         [-22, 36, -34],
         [22, 36, -34],
-      ];
-      for (const [x, y, z] of hall) w.light(x, y, z, 330, 0xdfe8ff, 95, false);
+      ])
+        w.light(x, y, z, 330, 0xdfe8ff, 95, false);
       const warm = w.light(-9, 15, -43, 150, 0xff4030, 46, false);
       const cold = w.light(9, 15, -43, 150, 0x4a7aff, 46, false);
-      buildBoss(w, { catchers, lights: { warm, cold } });
-      // movimento das bolas: sobe e desce nas têmporas e na boca; varre no olho — tudo se acalma com o chefe
-      let calmed = false;
-      w.anim.push((t) => {
-        const n = catchers.filter((c) => c.active).length;
-        const chaos = 1 - n / 3;
-        temporas.forEach((L, i) => (L.pos.y = base.get(L).y + Math.sin(t * 0.9 + i * 2.1) * 3.4 * (0.35 + 0.65 * chaos)));
-        mouth.pos.y = base.get(mouth).y + Math.sin(t * 0.7) * 1.4 * (0.3 + 0.7 * chaos);
-        eyes.forEach((L, i) => {
-          const yaw = Math.sin(t * 0.8 + i * 2.4) * 0.8;
-          const pitch = -0.3 - 0.2 * Math.sin(t * 1.3 + i);
-          L.dir.set(Math.sin(yaw), pitch, Math.cos(yaw)).normalize();
-        });
-        // um lançador que acertou um gânglio volta a atirar (a energia é dele, não acaba)
-        if (n < 3) for (const L of all) L.done = false;
-        if (n >= 3 && !calmed) {
-          calmed = true;
-          for (const L of all) {
-            L.done = true;
-            if (L.pellet) L.pellet.life = Math.min(L.pellet.life, 0.25);
-          }
-        }
-      });
-      sign(w, -39.97, 3.2, 6, Math.PI / 2, 'B01', 'SISTEMA NERVOSO', 'três gânglios · bolas de energia · portais');
+      // estado compartilhado entre a animação do chefe e a luta
+      const S = { stage: 0, calm: false, flash: 0, gape: 0, look: new THREE.Vector3(0, 1.6, 10) };
+      buildBoss(w, S, { warm, cold });
+      sign(w, -39.97, 3.2, 6, Math.PI / 2, 'B01', 'SISTEMA NERVOSO', 'foguete · portal · núcleo · fornalha');
       return {
         spawn: [0, 0, 10, 0],
-        gun: 'both',
+        gun: 'blue',
+        // o laranja já está na parede, na altura do crânio: tudo que entra no azul sai apontado para ele
+        portals: [{ which: 'orange', c: [-39.9, 27, -55], n: [1, 0, 0], u: [0, 1, 0] }],
+        fight: (ctx) => createFight(ctx, S),
         intro: [
-          ['Helena', 'Esse crânio gigante é o sistema nervoso da câmara: cada nervo dele cospe energia e ele não para de tremer.'],
-          ['Helena', 'As bolas das têmporas cruzam o salão em linha reta. Ponha um portal na parede onde uma bola bate e o outro de frente para um gânglio, nos ombros ou na garganta.'],
-          ['Helena', 'A cada acerto ele se acalma um pouco. Quando os três estiverem ligados, a porta atrás dele se abre.'],
+          ['Helena', 'Esse crânio gigante manda na câmara. A torreta de foguetes mira em você: o laser trava e o foguete sai reto.'],
+          ['Helena', 'O portal laranja já está na parede, de frente para o crânio. Ponha o azul numa parede branca atrás de você, espere o foguete e saia do caminho: ele passa pelo portal e acerta o crânio.'],
+          ['Helena', 'Cada acerto derruba um núcleo da boca dele. Leve até a fornalha no meio do salão (E pega e solta). Com três queimados, a porta de trás abre.'],
         ],
         hints: [
-          { after: 80, lines: [['Helena', 'A bola das têmporas bate na parede na altura do crânio, lá em cima. Portal azul ali; o laranja na parede do outro lado, na altura do ombro.']] },
-          { after: 160, lines: [['Helena', 'O gânglio da garganta fica mais alto que os ombros: laranja na altura dele, de qualquer um dos lados.']] },
+          { after: 70, lines: [['Helena', 'De costas para uma parede branca, atire o portal azul nela. Quando o laser travar em você, ande para o lado: o foguete segue em linha reta até o portal.']] },
+          { after: 150, lines: [['Helena', 'Quando o núcleo cair, a torreta para. Pegue ele com E (olhando de perto) e jogue dentro do buraco brilhante do chão.']] },
         ],
       };
     },

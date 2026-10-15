@@ -193,11 +193,11 @@ Lua pela claraboia abre o portal lá; o vácuo puxa tudo, e a Lua tem gravidade 
 
 Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
-**Série Chefes** — um inimigo gigante por fase, resolvido com bolas de energia e portais.
+**Série Chefes** — um inimigo gigante por fase, resolvido com foguetes devolvidos pelos portais e núcleos queimados na fornalha.
 
 | Chefe | Personagem | O que tem |
 |-------|------------|-----------|
-| B01 Sistema Nervoso | Helena | um crânio de 13 m com as veias e os nervos à mostra (raízes que se debatem até as paredes e o teto, mandíbula que bate os dentes). Ele cospe bolas de energia das têmporas (cruzam o salão), da boca (retas para você) e dos olhos (chuva torta). Leve a energia dele até os três gânglios (ombros e garganta) com os portais: a cada acerto os nervos recuam e os olhos esfriam, e no fim sobra só o feixe arrumado — o "sistema tranquilo" — e a porta de trás se abre. Resolvido de ponta a ponta pelo robô de teste |
+| B01 Sistema Nervoso | Helena | luta no estilo do Portal 1 contra um crânio de 13 m com as veias e os nervos à mostra: uma torreta de foguetes trava o laser em você e atira; saia da frente e deixe o foguete entrar no portal azul (numa parede branca atrás de você) — o laranja já está na parede, apontando para o crânio. Cada acerto derruba um núcleo pela boca, que você leva (`E`) até a fornalha no meio do salão. Com três queimados os nervos recuam, sobra só o feixe arrumado (o "sistema tranquilo") e a porta de trás abre. Resolvido de ponta a ponta pelo robô de teste |
 
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo

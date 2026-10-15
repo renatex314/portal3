@@ -511,6 +511,7 @@ const firedHints = new Set();
 const grav = new THREE.Vector3();
 let gravityFn = DEFAULT_GRAVITY;
 let turrets = [];
+let fight = null; // luta contra um chefe (série Chefes): criada pela própria fase
 let crystals = [];
 let health = 100;
 let hurtT = 9;
@@ -572,6 +573,7 @@ function clearLevel() {
   for (const c of [...dyn.children]) dyn.remove(c);
   cubes = [];
   turrets = [];
+  fight = null;
   crystals = [];
   gemsMine = 0;
   gemOwners.clear();
@@ -596,7 +598,7 @@ const CORE_VOICES = ['Portal.Glados_core.Curiosity_', 'Portal.Glados_core.Aggres
 /** cubo (amostra) — ou, na campanha original, um núcleo da luta final */
 function makeCube(x, y, z, opts = {}) {
   const core = opts.core !== undefined;
-  const m = core ? campaign.coreModel(opts.core) : sampleCube(opts);
+  const m = opts.mesh ?? (core ? campaign.coreModel(opts.core) : sampleCube(opts));
   dyn.add(m);
   const c = new Cube(physics, portals, m, x, y, z, opts);
   c.ioName = opts.ioName;
@@ -738,6 +740,21 @@ function loadLevel(i, silent = false) {
   levelIdx = i;
   level = LEVELS[i];
   data = level.build(world);
+  fight =
+    data.fight?.({
+      world,
+      portals,
+      player: { pos: player.pos, eye: (out) => out.copy(camera.position) },
+      spawnCube: makeCube,
+      hurt(amount) {
+        health -= amount;
+        hurtT = 0;
+        hurtFlash = 1;
+        if (health <= 0) die();
+      },
+      say: (lines) => playLines(lines),
+      sfx,
+    }) ?? null;
   gravityFn = data.gravityAt ?? DEFAULT_GRAVITY;
   const [x, y, z, yaw] = data.spawn;
   player.spawn(x + spawnOffset(), y, z, yaw);
@@ -1376,7 +1393,7 @@ function renderMenu() {
     ['Desafios hardcore', 'salas enormes, plataformas diagonais, pistões — use o tempo lento', (L) => L.series === 'hard'],
     ['Série Momento', 'arremessos encadeados: abra os portais nos painéis diagonais em pleno voo', (L) => L.series === 'momentum'],
     ['Série Fronteira', 'mapas enormes com tudo junto: lasers, funis, placas de lançamento, viagem no tempo, antigravidade, buracos negros e a Lua', (L) => L.series === 'frontier'],
-    ['Série Chefes', 'um inimigo gigante por fase: use a energia dele contra ele e acalme-o para abrir a saída', (L) => L.series === 'boss'],
+    ['Série Chefes', 'um inimigo gigante por fase: devolva os foguetes dele pelos portais, queime os núcleos que caem e abra a saída', (L) => L.series === 'boss'],
     ['Campanha original', 'precisa da sua cópia do Portal (Valve): escolha o pacote gerado com "npm run pacote" ou a pasta do jogo — tudo é lido só no seu navegador', (L) => L.series === 'campaign'],
     ['Exploração', '', (L) => L.free],
   ];
@@ -1799,6 +1816,7 @@ function update(dt, t) {
   for (const c of world.catchers) and(c.opens, c.active);
   for (const I of world.incinerators) and(I.opens, I.active);
   for (const C of world.laserCatchers) and(C.opens, C.active);
+  for (const [id, v] of world.signals) and(id, v); // sinais ligados pela própria fase (lutas contra chefes)
   // funil que vira de sentido com um sinal
   for (const F of world.funnels) {
     if (F.id) F.reversed = F.startReversed !== !!sig.get(F.id);
@@ -1874,6 +1892,8 @@ function update(dt, t) {
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
   });
+
+  fight?.update(dt, t);
 
   // amostra em cima de um botão acende a janela do núcleo
   for (const c of cubes) {
@@ -2160,4 +2180,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  get campaign() { return campaign; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

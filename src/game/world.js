@@ -324,6 +324,7 @@ export class World {
     // mecânicas da série Fronteira
     this.lasers = [];
     this.laserCatchers = [];
+    this.signals = new Map(); // sinais ligados pela lógica da fase (id → ligado)
     this.plates = [];
     this.funnels = [];
     this.gravZones = [];
