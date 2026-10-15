@@ -67,6 +67,10 @@ export function validate(doc, env) {
       else if (!sinks.has(it.opens)) warn(`${T.label} liga o sinal “${it.opens}”, mas nenhuma porta/plataforma/funil usa esse sinal.`, [it.id]);
     }
   }
+  // laser: receptor sem emissor, ou emissor sem nada para acertar
+  const lasers = items.filter((i) => i.type === 'laser');
+  for (const it of items.filter((i) => i.type === 'laserCatcher')) if (!lasers.length) warn('Receptor de laser sem nenhum emissor de laser no nível.', [it.id]);
+  if (lasers.length && !items.some((i) => i.type === 'laserCatcher')) out.push({ level: 'aviso', text: 'Há emissor de laser, mas nenhum receptor: o feixe não liga nada.', ids: lasers.map((i) => i.id) });
   // sinal "ligado por vários": a porta só abre com TODOS ativos
   for (const [name, list] of sources) if (list.length > 1 && sinks.has(name)) out.push({ level: 'aviso', text: `O sinal “${name}” tem ${list.length} ligadores: a porta só abre com todos ativos ao mesmo tempo.`, ids: list.map((i) => i.id) });
 

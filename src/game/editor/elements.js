@@ -39,6 +39,14 @@ const num = (k, label, d, o = {}) => ({ k, label, t: 'num', d, ...o });
 const sig = (k, label, d = '') => ({ k, label, t: 'sig', d });
 const dir = (d) => ({ k: 'dir', label: 'Direção', t: 'select', o: DIRS, d });
 const v3 = (k, label, d) => ({ k, label, t: 'v3', d });
+/** tipo do cubo: comum, refletor de laser (o feixe sai pela face marcada) ou especial (coração) */
+export const CUBE_KINDS = [
+  ['normal', 'Comum'],
+  ['laser', 'Redirecionamento de laser'],
+  ['special', 'Especial (coração)'],
+];
+const cubeKind = { k: 'kind', label: 'Tipo de cubo', t: 'select', o: CUBE_KINDS, d: 'normal' };
+const cubeOpts = (it) => ({ yaw: (it.yaw ?? 0) * D2R, laser: it.kind === 'laser', special: it.kind === 'special' });
 
 /** caixa alinhada aos eixos a partir de centro/tamanho */
 export const minmax = (it) => {
@@ -385,15 +393,17 @@ export const ELEMENTS = {
     },
   },
   cube: {
-    label: 'Cubo (amostra)',
+    label: 'Cubo',
     group: 'Objetos',
     place: 'floor',
     color: 0xd9d9d9,
     shape: 'point',
+    rot: 'yaw',
     hit: [0.7, 0.7, 0.7],
     lift: 0.35,
+    params: [cubeKind],
     build(w, it, c) {
-      c.data.cubes.push([it.p[0], it.p[1], it.p[2], {}]);
+      c.data.cubes.push([it.p[0], it.p[1], it.p[2], cubeOpts(it)]);
     },
   },
   dispenser: {
@@ -402,11 +412,13 @@ export const ELEMENTS = {
     place: 'ceiling',
     color: 0xcfe8ff,
     shape: 'point',
+    rot: 'yaw',
     hit: [1.4, 2.4, 1.4],
     lift: -1.1,
+    params: [cubeKind],
     build(w, it, c) {
       const [x, y, z] = w.dispenser(it.p[0], it.p[1], it.p[2]);
-      c.data.cubes.push([x, y, z, {}]);
+      c.data.cubes.push([x, y, z, cubeOpts(it)]);
     },
   },
   turret: {
