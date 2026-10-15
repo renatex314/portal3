@@ -164,6 +164,7 @@ export class Chronos {
       grounded: !!player.grounded,
       mv: !!player.grounded && player.vel.clone().setY(0).lengthSq() > 0.4,
       pt: this.portalState(),
+      h: this.props().indexOf(this.ctx.held?.() ?? null),
       w: this.snapshot(),
     });
     while (this.samples.length > 2 && t - this.samples[0].t > KEEP) this.samples.shift();
@@ -384,6 +385,7 @@ export class Chronos {
       const c = this.clones[i];
       const pose = this.clonePose(c);
       if (!pose) {
+        this.carryProps(c, true);
         // ainda não nasceu ou já mergulhou no azul (o loop fechou); ele continua na história: um novo salto
         // para antes do fim dele o traz de volta
         if (c.ghost) c.ghost.group.visible = false;
@@ -398,6 +400,7 @@ export class Chronos {
       if (this.tw < c.end - ECHO - 0.02) c.echoed = c.closed = false;
       c.ghost ??= this.ctx.makeGhost();
       c.ghost.set(this.feetOf(pose.p, pose.up), pose.yaw, pose.up, pose.mv, t, dt, 0.55);
+      this.carryProps(c);
       this.cloneBlue(c).visible = true;
       this.syncClonePortals(c, this.tw, true);
       // últimos instantes: o azul "eco" abre para o clone mergulhar
@@ -411,6 +414,44 @@ export class Chronos {
       }
     }
     this.updateEco();
+  }
+
+  /**
+   * O clone segura o que você segurava: o objeto segue a posição gravada enquanto o clone o tem na mão
+   * e, ao soltar (ou ao mergulhar no azul), sai com a velocidade gravada.
+   * Se quem segura é você, o objeto é seu.
+   */
+  carryProps(c, stop = false) {
+    const props = this.props();
+    const s = c.script;
+    let want = null;
+    if (!stop && !this.sweep) {
+      const f = (this.tw - s[0].t) / RATE;
+      const i = Math.max(0, Math.min(s.length - 1, Math.floor(f)));
+      const a = s[i];
+      const b = s[Math.min(s.length - 1, i + 1)];
+      const prop = a.h >= 0 ? props[a.h] : null;
+      const pa = prop && a.w.props[a.h];
+      if (prop && pa && !pa.gone && prop !== this.ctx.held?.() && !prop.gone) {
+        const pb = b.h === a.h ? b.w.props[a.h] : null;
+        const k = pb && pa.p.distanceTo(pb.p) < 2.5 ? Math.max(0, Math.min(1, f - i)) : 0;
+        want = { prop, p: pa.p.clone().lerp(pb?.p ?? pa.p, k), q: pa.q.clone().slerp(pb?.q ?? pa.q, k), v: pa.v };
+      }
+    }
+    const had = c.carry;
+    if (had && (!want || want.prop !== had.prop)) {
+      // soltou: segue com a velocidade de então
+      if (!had.prop.gone && had.prop !== this.ctx.held?.()) {
+        const v = had.v;
+        had.prop.place(had.p, had.q, v && !this.frozenProps ? { x: v[0], y: v[1], z: v[2] } : null);
+      }
+      c.carry = null;
+    }
+    if (want) {
+      want.prop.place(want.p, want.q, null);
+      want.prop.sync();
+      c.carry = want;
+    }
   }
 
   /** o azul de saída de um clone (a versão do futuro): um portal em tons de cinza, sempre visível */
@@ -435,6 +476,7 @@ export class Chronos {
   }
 
   dropClone(c) {
+    c.carry = null;
     c.ghost?.group.parent?.remove(c.ghost.group);
     if (c.pair) {
       this.ctx.portals.removeRemote(c.id);
@@ -856,7 +898,7 @@ export class Chronos {
       why ??= test('solid', solid, 0.1, 'algo bloqueou o caminho do seu passado');
       let cube = false;
       for (const p of this.props()) {
-        if (p.gone || p.held) continue;
+        if (p.gone || p.held || p === c.carry?.prop) continue;
         if (overlap(min, max, p.pos.clone().addScaledVector(new V3(1, 1, 1), -0.3), p.pos.clone().addScaledVector(new V3(1, 1, 1), 0.3), 0.08)) cube = true;
       }
       why ??= test('cube', cube, 0.1, 'um objeto ficou no caminho do seu passado');

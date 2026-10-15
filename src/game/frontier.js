@@ -183,7 +183,8 @@ export class Frontier {
       }
       segs.push([o, hit.point.clone(), d]);
       const P = this.portals.list.find((Q) => {
-        if (!this.portals.isLinked(Q) || Q.delta > 0 || Q.partner.delta > 0 || Q.box !== hit.box) return false;
+        // o azul temporal não leva a lugar nenhum (é o salto), mas o feixe que entra no laranja do passado sai no azul do presente
+        if (!this.portals.isLinked(Q) || Q.partner.delta > 0 || Q.box !== hit.box) return false;
         const l = Q.local(hit.point);
         return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && Math.abs(l.z) < 0.05;
       });
