@@ -1048,11 +1048,12 @@ export class World {
     return I;
   }
 
-  button(x, y, z, opens) {
+  /** botão de piso; `hold` > 0: depois de solto o sinal continua ligado por `hold` s (contagem em tempo do mundo) */
+  button(x, y, z, opens, { hold = 0 } = {}) {
     const { group: g, plate, lights, spin } = floorButton();
     g.position.set(x, y, z);
     this.group.add(g);
-    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, spin, group: g };
+    const btn = { pos: new THREE.Vector3(x, y, z), opens, pressed: false, plate, lights, spin, group: g, hold, count: 0 };
     this.buttons.push(btn);
     return btn;
   }

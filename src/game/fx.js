@@ -18,7 +18,7 @@ import { canvas } from './textures.js';
  */
 const FINISH_FS = /* glsl */ `
   precision highp float;
-  uniform sampler2D tDiffuse; uniform float uTime, uAberr, uVignette, uGrain; varying vec2 vUv;
+  uniform sampler2D tDiffuse; uniform float uTime, uAberr, uVignette, uGrain, uFreeze, uGlitch; varying vec2 vUv;
   #include <tonemapping_pars_fragment>
   #include <colorspace_pars_fragment>
   vec3 grade(vec2 uv){
@@ -32,10 +32,24 @@ const FINISH_FS = /* glsl */ `
     return c.rgb;
   }
   void main(){
-    vec2 d = vUv - 0.5;
+    vec2 uv = vUv;
+    // paradoxo: faixas horizontais da imagem deslizam de lado
+    if (uGlitch > 0.001) {
+      float band = floor(uv.y * 26.0 + floor(uTime * 24.0));
+      float rnd = fract(sin(band * 91.7 + floor(uTime * 24.0) * 7.3) * 437.5);
+      uv.x += (rnd - 0.5) * 0.10 * uGlitch * step(0.62, rnd);
+    }
+    vec2 d = uv - 0.5;
     float r2 = dot(d, d);
-    vec2 off = d * r2 * uAberr * 8.0;
-    vec3 c = uAberr > 1e-5 ? vec3(grade(vUv + off).r, grade(vUv).g, grade(vUv - off).b) : grade(vUv);
+    vec2 off = d * r2 * uAberr * 8.0 + vec2(uGlitch * 0.012, 0.0);
+    vec3 c = (uAberr > 1e-5 || uGlitch > 0.001) ? vec3(grade(uv + off).r, grade(uv).g, grade(uv - off).b) : grade(uv);
+    // tempo parado: o mundo perde a cor e fica azul-gelo, com a borda congelada
+    if (uFreeze > 0.001) {
+      float l = dot(c, vec3(0.3, 0.59, 0.11));
+      c = mix(c, vec3(l) * vec3(0.80, 0.95, 1.15), uFreeze * 0.78);
+      c += vec3(0.0, 0.05, 0.12) * uFreeze * smoothstep(0.15, 1.0, r2 * 2.2);
+      c *= 1.0 + 0.06 * uFreeze * sin(gl_FragCoord.y * 1.8);
+    }
     c *= 1.0 - uVignette * smoothstep(0.1, 1.0, r2 * 2.0);
     float n = fract(sin(dot(gl_FragCoord.xy + fract(uTime * 7.31) * 113.0, vec2(12.9898, 78.233))) * 43758.5453);
     c += (n - 0.5) * uGrain;
@@ -51,6 +65,8 @@ class FinishPass extends Pass {
       uAberr: { value: 0 },
       uVignette: { value: 0.32 },
       uGrain: { value: 0.035 },
+      uFreeze: { value: 0 },
+      uGlitch: { value: 0 },
       toneMappingExposure: { value: 1 },
     };
     this.material = new THREE.RawShaderMaterial({
@@ -328,7 +344,9 @@ export class Post {
     const fast = THREE.MathUtils.smoothstep(speed, 8, 32);
     this.blur.strength = (0.6 + slow * 1.4) * (1 + fast * 2.2);
     this.blur.maxLen = 0.045 + fast * 0.075;
-    this.blur.radial = fast * 0.05 * ahead;
+    this.tunnel = Math.max(0, (this.tunnel ?? 0) - dt * 1.3); // salto no tempo: túnel radial
+    this.blur.radial = fast * 0.05 * ahead + this.tunnel * this.tunnel * 0.16;
+    this.blur.strength += this.tunnel * 3;
     this.composer.render(dt);
   }
 }

@@ -812,6 +812,76 @@ export class Sfx {
     this._noise(t, 0.4, 'bandpass', 200, 3500, 0.2, 1.2, m);
   }
 
+  // ---- relógio do tempo (série Experimento)
+  /** o tempo do mundo para: varredura que cai, baque e um tique grave */
+  freeze() {
+    if (!this.ok) return;
+    const m = this.sound.master;
+    if (this.sample('sweepL', { vol: 0.55, rate: 0.9, rateTo: 0.25, dur: 0.9, dest: m })) {
+      this.sample('boom', { vol: 0.4, rate: 0.6, delay: 0.05, dest: m });
+      this.sample('btnDown', { vol: 0.5, rate: 0.5, delay: 0.1, dest: m });
+      return;
+    }
+    const t = this.t;
+    this._osc('sine', 700, 38, t, 1.0, 0.3, 0.01, m);
+    this._osc('triangle', 1300, 90, t, 0.6, 0.12, 0.005, m);
+    this._noise(t, 0.55, 'bandpass', 4200, 280, 0.2, 2, m);
+    this._osc('square', 95, 60, t + 0.06, 0.09, 0.16, 0.002, m);
+  }
+
+  unfreeze() {
+    if (!this.ok) return;
+    const m = this.sound.master;
+    if (this.sample('sweepL', { vol: 0.5, rate: 0.35, rateTo: 1.6, dur: 0.55, dest: m })) {
+      this.sample('btnDown', { vol: 0.4, rate: 1.1, delay: 0.3, dest: m });
+      return;
+    }
+    const t = this.t;
+    this._osc('sine', 60, 900, t, 0.5, 0.22, 0.01, m);
+    this._noise(t, 0.45, 'bandpass', 300, 5000, 0.2, 1.4, m);
+    this._osc('square', 800, 800, t + 0.32, 0.05, 0.1, 0.002, m);
+  }
+
+  /** um passo da roda do mouse no holograma do passado: tique que fica mais agudo quanto mais perto do presente */
+  scrub(delta) {
+    if (!this.ok) return;
+    const f = 1800 - delta * 40;
+    if (this.sample('btnDown', { vol: 0.28, rate: 1.1 + (30 - delta) * 0.03, dest: this.sound.master })) return;
+    this._osc('square', f, f * 0.8, this.t, 0.04, 0.07, 0.002, this.sound.master);
+  }
+
+  /** salto no tempo: o mundo rebobina (varredura ao contrário) e termina num baque surdo */
+  timeJump() {
+    if (!this.ok) return;
+    this.timeShift(true);
+    const t = this.t;
+    const m = this.sound.master;
+    this._osc('sine', 90, 900, t, 0.7, 0.2, 0.01, m);
+    this._noise(t, 0.8, 'highpass', 900, 6000, 0.22, 1, m);
+    this._osc('sine', 48, 28, t + 0.7, 0.9, 0.45, 0.005, m);
+  }
+
+  /** paradoxo: ruído picotado, dois tons desafinados e um estalo grave */
+  paradox() {
+    if (!this.ok) return;
+    const t = this.t;
+    const m = this.sound.master;
+    for (let i = 0; i < 6; i++) this._noise(t + i * 0.07, 0.05, 'highpass', 2500 + Math.random() * 4000, 1200, 0.28, 2, m);
+    this._osc('sawtooth', 220, 61, t, 0.55, 0.16, 0.005, m);
+    this._osc('square', 233, 55, t, 0.55, 0.12, 0.005, m);
+    this._osc('sine', 70, 30, t + 0.1, 0.7, 0.4, 0.004, m);
+    this.sample('boom', { vol: 0.5, rate: 0.7, delay: 0.1, dest: m });
+  }
+
+  /** o azul "eco" abre / o clone mergulha */
+  echo(open = true) {
+    if (!this.ok) return;
+    const t = this.t;
+    const m = this.sound.master;
+    this._fm(open ? 400 : 1600, open ? 1500 : 300, t, 0.5, { ratio: 2, index: 5, peak: 0.1, dest: m });
+    this._noise(t, 0.35, 'bandpass', open ? 800 : 4000, open ? 4000 : 500, 0.12, 2, m);
+  }
+
   heartbeat() {
     if (!this.ok) return;
     if (this.sample('heart', { vol: 0.75, rate: 0.65, dest: this.sound.master })) {

@@ -41,7 +41,7 @@ const NOISE = /* glsl */ `
 const displayFS = /* glsl */ `
   uniform sampler2D map;
   uniform vec3 uCenter, uRight, uUp, uNormal, uColor;
-  uniform float uA, uB, uLinked, uOpen, uTime;
+  uniform float uA, uB, uLinked, uOpen, uTime, uPast;
   uniform vec2 uRes;
   varying vec3 vW;
   ${NOISE}
@@ -57,6 +57,11 @@ const displayFS = /* glsl */ `
     float r = length(e);
     if (r > 1.0) discard;
     vec3 view = texture2D(map, gl_FragCoord.xy / uRes).rgb;
+    // portal temporal: a vista do passado sai ciano, com linhas de varredura correndo
+    float lum = dot(view, vec3(0.3, 0.59, 0.11));
+    vec3 past = mix(vec3(lum), view, 0.35) * vec3(0.62, 0.95, 1.3) + vec3(0.0, 0.05, 0.1);
+    past *= 0.88 + 0.12 * sin(gl_FragCoord.y * 1.3 - uTime * 7.0);
+    view = mix(view, past, uPast);
     // sem par: plasma girando na cor do portal, mais claro perto da borda
     float ang = uTime * 0.7 + r * 3.2;
     vec2 sp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * e * 2.4;
@@ -178,6 +183,7 @@ class Portal {
     this.matrix = new THREE.Matrix4();
     this.inverse = new THREE.Matrix4();
     this.box = null;
+    this.delta = 0; // segundos no passado (laranja temporal): 0 = portal normal
 
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const opts = { type: THREE.HalfFloatType, colorSpace: THREE.LinearSRGBColorSpace };
@@ -194,6 +200,7 @@ class Portal {
       uA: { value: PORTAL_A },
       uB: { value: PORTAL_B },
       uLinked: { value: 0 },
+      uPast: { value: 0 },
       uOpen: { value: 0 },
       uTime: { value: 0 },
       uRes: { value: new THREE.Vector2(size.x, size.y) },
@@ -295,12 +302,14 @@ class Portal {
     this.light.position.copy(center).addScaledVector(normal, 0.6);
     this.placed = true;
     this.moon = false; // (main marca de novo quando o tiro foi na Lua)
+    this.delta = 0;
     this.open = 0;
     this.age = 0;
   }
 
   remove() {
     this.placed = false;
+    this.delta = 0;
     this.group.visible = false;
     this.light.intensity = 0;
     this.box = null;
@@ -675,7 +684,7 @@ export class PortalSystem {
   mouths(center, wall = false, reach = 0) {
     const out = [];
     for (const P of this.list) {
-      if (!this.isLinked(P) || !P.box) continue;
+      if (!this.isLinked(P) || !P.box || P.delta > 0 || (P.partner.delta > 0 && !wall)) continue; // portal temporal: só o jogador passa
       const l = P.local(center);
       if (l.z < -2.5 || l.z > 1.2 + reach) continue;
       const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.72 : 0.25;
@@ -721,9 +730,11 @@ export class PortalSystem {
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */
-  crossing(a, b) {
+  crossing(a, b, player = false) {
     for (const P of this.list) {
       if (!this.isLinked(P)) continue;
+      if (P.delta > 0) continue; // o laranja do passado não existe no presente
+      if (P.partner.delta > 0 && !player) continue; // o azul temporal só o jogador atravessa
       const sa = _v.subVectors(a, P.center).dot(P.normal);
       const sb = _v.subVectors(b, P.center).dot(P.normal);
       if (sa > 0 && sb <= 0) {
@@ -737,7 +748,7 @@ export class PortalSystem {
   /** o ponto terminou atrás do plano de um portal sem cruzá-lo (entrou rápido demais): devolve o portal */
   stuckIn(point, min, max, margin = 0.45) {
     for (const P of this.list) {
-      if (!this.isLinked(P) || !P.box || !aabbOverlap(min, max, P.box.min, P.box.max)) continue;
+      if (!this.isLinked(P) || P.delta > 0 || !P.box || !aabbOverlap(min, max, P.box.min, P.box.max)) continue;
       const l = P.local(point);
       if (l.z < -0.02 && l.z > -1.6 && Math.abs(l.x) < PORTAL_A + margin && Math.abs(l.y) < PORTAL_B + margin) return P;
     }
@@ -747,7 +758,7 @@ export class PortalSystem {
   /** ponto (a câmera) logo atrás da boca de um portal ligado: devolve o portal */
   behind(point) {
     for (const P of this.list) {
-      if (!this.isLinked(P)) continue;
+      if (!this.isLinked(P) || P.delta > 0) continue;
       const l = P.local(point);
       if (l.z < 0 && l.z > -1.5 && Math.abs(l.x) < PORTAL_A && Math.abs(l.y) < PORTAL_B) return P;
     }
@@ -860,6 +871,12 @@ export class PortalSystem {
       // a luz do portal pulsa junto com a aura
       P.light.intensity = P.placed ? 9 + 1.5 * Math.sin(t * 2.6) + 14 * P.rimMat.uniforms.uFlash.value : 0;
       P.uniforms.uLinked.value = this.isLinked(P) ? 1 : 0;
+      P.uniforms.uPast.value += ((P.partner.delta > 0 ? 1 : 0) - P.uniforms.uPast.value) * Math.min(1, dt * 8);
+      if (P.delta > 0) {
+        // o laranja do passado só existe lá: no presente fica a marca-holograma (feita pelo relógio)
+        P.group.visible = false;
+        P.light.intensity = 0;
+      }
     }
   }
 
@@ -936,7 +953,7 @@ export class PortalSystem {
     // só renderiza a vista dos portais que estão na tela (economiza com vários jogadores)
     _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_pm);
-    const todo = this.list.filter((P) => this.isLinked(P) && _frustum.intersectsSphere(_sphere.set(P.center, PORTAL_B * 1.2)));
+    const todo = this.list.filter((P) => this.isLinked(P) && P.delta === 0 && _frustum.intersectsSphere(_sphere.set(P.center, PORTAL_B * 1.2)));
     if (!todo.length) return;
     const prevTarget = r.getRenderTarget();
     const prevClip = r.clippingPlanes;
@@ -952,11 +969,16 @@ export class PortalSystem {
       // corta tudo que estiver atrás do portal de saída
       this.clip.setFromNormalAndCoplanarPoint(Q.normal, Q.center);
       r.clippingPlanes = [this.clip];
+      const wasVisible = Q.group.visible;
       Q.group.visible = false;
+      // portal temporal: a vista de dentro é o mundo como estava Δ segundos antes
+      const past = Q.delta > 0 ? this.pastView : null;
+      past?.begin(Q.delta);
       r.setRenderTarget(P.rt[1 - P.read]);
       r.clear();
       r.render(this.scene, v);
-      Q.group.visible = true;
+      past?.end();
+      Q.group.visible = wasVisible;
     }
     r.clippingPlanes = prevClip;
     r.setRenderTarget(prevTarget);

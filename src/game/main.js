@@ -21,6 +21,7 @@ import { SLOT_COLORS, SLOT_CSS } from './portals.js';
 import { initEnvironment, portalGun, sampleCube, drawGunHolo } from './models.js';
 import { Post, dust, ContactShadows, Dissolver } from './fx.js';
 import { Frontier } from './frontier.js';
+import { Chronos } from './relogio.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = THREE.MathUtils.clamp;
@@ -273,6 +274,137 @@ function peerFeet() {
 }
 scene.add(dyn);
 
+// ------------------------------------------------------------------ clones do passado (relógio do tempo)
+/** um raptor translúcido azul: o "você do passado" */
+function makeCloneGhost() {
+  const w = makeDino('raptor', { helmet: 0x8fe3ff, vest: 0x38d8ff });
+  const mats = [];
+  w.group.traverse((o) => {
+    if (!o.material) return;
+    o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
+    for (const m of [o.material].flat()) {
+      m.transparent = true;
+      m.depthWrite = false;
+      m.emissive?.setRGB(0.08, 0.35, 0.55);
+      mats.push(m);
+    }
+  });
+  scene.add(w.group);
+  return {
+    group: w.group,
+    set(feet, yaw, up, moving, t, dt, alpha) {
+      w.group.visible = true;
+      w.group.position.copy(feet);
+      w.group.rotation.set(0, yaw + Math.PI, up < 0 ? Math.PI : 0);
+      w.P.pose = moving ? 'walk' : 'idle';
+      poseDino(w, t, dt);
+      for (const m of mats) m.opacity = alpha;
+    },
+  };
+}
+
+// ------------------------------------------------------------------ efeitos do relógio do tempo
+const KEYS_TEXT = document.getElementById('keys')?.textContent ?? '';
+const fxState = { jump: 0, paradox: 0, freeze: 0 };
+const timeRings = [];
+const timeWorldT = { v: 0 };
+/** anel de energia: expande e some (ou, `hold`, fica como um portal-eco que pisca) */
+function timeRing(pos, normal, color, life = 0.8, size = 1.6, ellipse = false) {
+  const m = new THREE.Mesh(
+    new THREE.RingGeometry(0.86, 1, 56),
+    new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide }),
+  );
+  m.position.copy(pos);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  scene.add(m);
+  timeRings.push({ m, t: 0, life, size, ellipse });
+}
+
+const chronosFx = {
+  pause(on) {
+    on ? sfx.freeze() : sfx.unfreeze();
+    post.shockwave();
+    post.warp = Math.max(post.warp ?? 0, on ? 0.45 : 0.3);
+    timeRing(camera.position.clone().addScaledVector(camForward(), 1.6), camForward().negate(), new THREE.Color(on ? 0.6 : 1.2, on ? 1.6 : 1.0, on ? 2.6 : 0.5), 0.7, 3.5);
+    if (on && (chronosFx._said = (chronosFx._said ?? 0) + 1) <= 2) toast('Tempo parado. Roda do mouse: quantos segundos voltar. Laranja = passado, azul = presente.');
+  },
+  scrub(d) {
+    sfx.scrub(d);
+  },
+  jump(delta) {
+    sfx.timeJump();
+    post.warp = 1.1;
+    post.tunnel = 1;
+    post.blur.reset();
+    fxState.jump = 0.8;
+    timeRing(camera.position.clone().addScaledVector(camForward(), 1.2), camForward().negate(), new THREE.Color(0.8, 2.0, 3.0), 0.9, 5);
+    toast(`Você voltou ${delta.toFixed(1).replace('.', ',')} s no tempo.`);
+  },
+  paradox(why, at) {
+    sfx.paradox();
+    post.warp = 1.3;
+    fxState.paradox = 1.1;
+    const el = $('paradox');
+    $('paradox-why').textContent = why;
+    el.hidden = false;
+    clearTimeout(chronosFx._t);
+    chronosFx._t = setTimeout(() => (el.hidden = true), 2600);
+    if (at) {
+      timeRing(at, new THREE.Vector3(0, 1, 0), new THREE.Color(3, 0.3, 0.8), 0.9, 4);
+      timeRing(at, new THREE.Vector3(1, 0, 0), new THREE.Color(0.4, 2, 3), 0.9, 3);
+    }
+    burst(at ?? player.pos, new THREE.Vector3(0, 1, 0));
+  },
+  echo(exit, open, pos) {
+    sfx.echo(open);
+    if (open) timeRing(exit.c.clone().addScaledVector(exit.n, 0.04), exit.n, new THREE.Color(0.4, 1.6, 3), 0.8, 1, true);
+    else if (pos) {
+      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), new THREE.Vector3(0, 1, 0), new THREE.Color(0.5, 1.8, 3), 0.7, 2.6);
+      timeRing(pos.clone().add(new THREE.Vector3(0, 0.9, 0)), exit.n, new THREE.Color(0.5, 1.8, 3), 0.7, 2.2);
+    }
+  },
+  toast: (m) => toast(m),
+};
+
+function updateTimeFx(dt) {
+  for (let i = timeRings.length - 1; i >= 0; i--) {
+    const r = timeRings[i];
+    r.t += dt;
+    const k = r.t / r.life;
+    if (k >= 1) {
+      scene.remove(r.m);
+      r.m.geometry.dispose();
+      r.m.material.dispose();
+      timeRings.splice(i, 1);
+      continue;
+    }
+    if (r.ellipse) r.m.scale.set(0.68 * (0.9 + 0.1 * Math.sin(k * 30)), 1.08 * (0.9 + 0.1 * Math.sin(k * 30)), 1);
+    else r.m.scale.setScalar(0.3 + k * r.size);
+    r.m.material.opacity = r.ellipse ? Math.min(1, k * 4) * (1 - k * k) : (1 - k) * (1 - k);
+  }
+  fxState.jump = Math.max(0, fxState.jump - dt);
+  fxState.paradox = Math.max(0, fxState.paradox - dt);
+  const u = post.finish.uniforms;
+  const target = relogio?.paused ? 1 : 0;
+  u.uFreeze.value += (target - u.uFreeze.value) * Math.min(1, dt * 6);
+  u.uGlitch.value = relogio ? Math.min(1, fxState.paradox * 1.5) : 0;
+  if (relogio) {
+    const mode = fxState.paradox > 0 ? 'paradox' : fxState.jump > 0 ? 'jump' : relogio.paused ? 'pause' : 'play';
+    if (document.body.dataset.relogio !== mode) document.body.dataset.relogio = mode;
+  }
+}
+
+function updateClockHud() {
+  const h = relogio.hud();
+  const showBlocked = h.paused && h.blocked && portals.orange.placed && portals.orange.delta > 0;
+  $('clock').classList.toggle('blocked', showBlocked);
+  setText('clock-state', h.paused ? 'tempo parado' : relogio.sweep ? 'saltando no tempo' : 'tempo normal');
+  setText('clock-d', h.paused ? `−${h.delta.toFixed(1).replace('.', ',')} s` : fmt(h.tw));
+  $('clock-fill').style.width = h.paused ? `${Math.min(100, (h.delta / Math.max(h.max, 0.5)) * 100)}%` : '0%';
+  setText('clock-hint', h.paused ? 'roda do mouse: voltar mais/menos · laranja = passado · azul = presente · 2: continuar' : '2 — parar o tempo');
+  setText('clock-extra', [h.clones ? `${h.clones} clone${h.clones > 1 ? 's' : ''} do passado` : '', h.paradoxes ? `${h.paradoxes} paradoxo${h.paradoxes > 1 ? 's' : ''}` : '', showBlocked ? '⚠ destino ocupado' : ''].filter(Boolean).join(' · '));
+}
+
 // ------------------------------------------------------------------ corpo do jogador (visível só pelos portais)
 // você é um raptor de capacete e colete (dá para se ver pelos portais)
 const body = makeDino('raptor', { helmet: 0xffffff, vest: 0xe8762a });
@@ -511,6 +643,7 @@ const firedHints = new Set();
 const grav = new THREE.Vector3();
 let gravityFn = DEFAULT_GRAVITY;
 let turrets = [];
+let relogio = null; // relógio do tempo (série Experimento): 1 volta, 2 para, 3 anda
 let fight = null; // luta contra um chefe (série Chefes): criada pela própria fase
 let crystals = [];
 let health = 100;
@@ -540,6 +673,7 @@ progress.classic = Math.max(progress.classic || 1, new URLSearchParams(location.
 progress.hard = Math.max(progress.hard || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.momentum = Math.max(progress.momentum || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.frontier = Math.max(progress.frontier || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
+progress.experiment = Math.max(progress.experiment || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.boss = Math.max(progress.boss || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.campaign = Math.max(progress.campaign || 1, new URLSearchParams(location.search).has('todas') ? 99 : 1);
 progress.best = progress.best || {};
@@ -550,7 +684,7 @@ const saveProgress = () => {
 };
 
 const levelLabel = (L) =>
-  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
+  L.free ? 'Mapa livre' : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.series === 'experiment' ? `Experimento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -573,6 +707,10 @@ function clearLevel() {
   for (const c of [...dyn.children]) dyn.remove(c);
   cubes = [];
   turrets = [];
+  relogio?.clear();
+  relogio = null;
+  portals.pastView = null;
+  document.body.dataset.relogio = '';
   fight = null;
   crystals = [];
   gemsMine = 0;
@@ -806,6 +944,28 @@ function loadLevel(i, silent = false) {
   for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, physics, portals, tx, ty, tz, tyaw));
   gunMode = data.gun ?? 'both';
   for (const f of data.portals ?? []) portals.placeFixed(f.which, f.c, f.n, f.u);
+  relogio = data.relogio
+    ? new Chronos({
+        world,
+        energy,
+        player,
+        portals,
+        scene,
+        cubes: () => cubes,
+        turrets: () => turrets,
+        held: () => held,
+        makeGhost: makeCloneGhost,
+        t: () => clock.elapsedTime,
+        dtReal: () => realDt,
+        fx: chronosFx,
+      })
+    : null;
+  portals.pastView = relogio ? { begin: (d) => relogio.beginPast(d), end: () => relogio.endPast() } : null;
+  document.body.dataset.relogio = 'play';
+  $('clock').hidden = !relogio;
+  $('keys').textContent = relogio
+    ? 'Esquerdo/Q: portal azul · Direito: portal laranja (parado: no passado) · 2: parar/continuar o tempo · Rodinha parado: voltar mais/menos · Meio: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Esc: pausa'
+    : KEYS_TEXT;
   cycle = data.cycle ? { ...data.cycle, i: 0, t: data.cycle.every } : null;
   if (cycle) portals.placeFixed(cycle.which, ...cycleSpot(0));
   inFizzler = false;
@@ -911,7 +1071,8 @@ function shoot(which) {
   }
   // o projétil voa até onde o tiro bate (parede ou grade de desintegração); o
   // portal é decidido e aberto quando ele chega
-  const wall = world.raycast(origin, dir, 400);
+  // laranja na pausa: o tiro vê as paredes (portas) do passado escolhido
+  const wall = !blue && relogio?.paused ? relogio.inPast(relogio.delta, () => world.raycast(origin, dir, 400)) : world.raycast(origin, dir, 400);
   const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
   const end = fz ? fz.clone() : wall ? wall.point.clone() : origin.clone().addScaledVector(dir, 60);
   const tipW = gun.userData.tip.getWorldPosition(new THREE.Vector3());
@@ -926,7 +1087,17 @@ function landShot(which, origin, dir, allowed) {
   const blue = which === 'blue';
   const wall = world.raycast(origin, dir, 400);
   const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
-  const res = !allowed ? { ok: false } : fz ? { ok: false, point: fz, normal: dir.clone().negate() } : portals.tryPlace(which, origin, dir);
+  const temporal = !blue && relogio?.paused && relogio.maxDelta() >= 0.5;
+  if (!blue && relogio?.paused && !temporal) toast('Ainda não há passado para mirar: espere o tempo andar um pouco.');
+  const res = !allowed
+    ? { ok: false }
+    : fz
+      ? { ok: false, point: fz, normal: dir.clone().negate() }
+      : temporal
+        ? relogio.placeOrange(origin, dir, relogio.delta)
+        : portals.tryPlace(which, origin, dir);
+  if (res.ok && temporal) toast(`Portal aberto ${relogio.delta.toFixed(1).replace('.', ',')} s no passado: entre no azul para voltar.`);
+  if (res.why) toast(res.why);
   if (res.ok) {
     if (mp())
       net.send({ t: 'portal', which, lvl: levelIdx, c: res.point.toArray(), n: res.normal.toArray(), u: res.up.toArray(), b: res.boxIndex });
@@ -1100,6 +1271,7 @@ function updateGems() {
 let deaths = 0;
 function die() {
   deaths++;
+  relogio?.clear();
   health = 100;
   sfx.death();
   deadFlash = 1;
@@ -1199,6 +1371,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') loadLevel(levelIdx);
   if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
   if (e.code === 'KeyT' && !e.repeat) timeTravel();
+  if (e.code === 'Digit2' && !e.repeat && relogio) relogio.pause();
 });
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
@@ -1235,6 +1408,15 @@ window.addEventListener(
   (e) => {
     if (!running || paused) return;
     e.preventDefault();
+    if (relogio?.paused) {
+      // na pausa a roda escolhe quantos segundos voltar (para cima: mais longe no passado)
+      wheelSum += e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+      while (Math.abs(wheelSum) >= 40) {
+        relogio.scrub(wheelSum < 0 ? 1 : -1);
+        wheelSum -= Math.sign(wheelSum) * 40;
+      }
+      return;
+    }
     wheelSum += e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
     while (Math.abs(wheelSum) >= 60) {
       const zoomIn = wheelSum < 0;
@@ -1394,6 +1576,7 @@ function renderMenu() {
     ['Série Momento', 'arremessos encadeados: abra os portais nos painéis diagonais em pleno voo', (L) => L.series === 'momentum'],
     ['Série Fronteira', 'mapas enormes com tudo junto: lasers, funis, placas de lançamento, viagem no tempo, antigravidade, buracos negros e a Lua', (L) => L.series === 'frontier'],
     ['Série Chefes', 'um inimigo gigante por fase: devolva os foguetes dele pelos portais, queime os núcleos que caem e abra a saída', (L) => L.series === 'boss'],
+    ['Série Experimento', 'o relógio do tempo: 1 volta, 2 para, 3 anda — e o seu passado vira um clone que ajuda você', (L) => L.series === 'experiment'],
     ['Campanha original', 'precisa da sua cópia do Portal (Valve): escolha o pacote gerado com "npm run pacote" ou a pasta do jogo — tudo é lido só no seu navegador', (L) => L.series === 'campaign'],
     ['Exploração', '', (L) => L.free],
   ];
@@ -1635,7 +1818,10 @@ function update(dt, t) {
   updateBolts(dt, t);
   updateAim(realDt);
   levelTime += dt;
-  world.update(t, dt);
+  // relógio do tempo: 0 enquanto o mundo está parado ou voltando
+  const wdt = relogio ? relogio.frame(dt) : dt;
+  const tv = relogio ? relogio.vt : t; // tempo visual do mundo (para quando ele para)
+  world.update(tv, wdt);
   portals.update(t, dt);
   // portal da fase que muda de lugar sozinho
   if (cycle) {
@@ -1671,6 +1857,11 @@ function update(dt, t) {
     }
     // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
     player.update(dt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
+      // azul temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
+      if (relogio && P.partner.delta > 0) {
+        relogio.jump(P);
+        return;
+      }
       sfx.whoosh();
       if (P.partner.moon && !moonVisited) {
         moonVisited = true;
@@ -1800,10 +1991,11 @@ function update(dt, t) {
 
   // ---- botões, receptores e portas (sinais)
   const feet = player.pos.clone().addScaledVector(new THREE.Vector3(0, -1, 0), 0.9 * player.upSign);
-  const peers = peerFeet();
+  const peers = [...peerFeet(), ...(relogio?.feet() ?? [])];
   for (const b of world.buttons) {
     const near = (p, dy0, dy1) => Math.hypot(p.x - b.pos.x, p.z - b.pos.z) < 0.85 && p.y - b.pos.y > dy0 && p.y - b.pos.y < dy1;
     const pressed = props.some((c) => !c.held && !c.gone && !c.remote?.held && near(c.pos, 0, 1.0)) || near(feet, -0.1, 0.5) || peers.some((f) => near(f, -0.1, 0.5));
+    if (b.hold) b.count = pressed ? b.hold : Math.max(0, b.count - wdt); // sinal que continua ligado depois de solto
     if (pressed !== b.pressed) {
       b.pressed = pressed; // a placa e as luzes se animam em world.update
       sfx.click(pressed);
@@ -1812,7 +2004,7 @@ function update(dt, t) {
   // uma porta abre quando TODOS os botões/receptores/fornalhas ligados a ela estão ativos
   const sig = new Map();
   const and = (id, v) => id && sig.set(id, (sig.get(id) ?? true) && v);
-  for (const b of world.buttons) and(b.opens, b.pressed);
+  for (const b of world.buttons) and(b.opens, b.pressed || b.count > 0);
   for (const c of world.catchers) and(c.opens, c.active);
   for (const I of world.incinerators) and(I.opens, I.active);
   for (const C of world.laserCatchers) and(C.opens, C.active);
@@ -1830,7 +2022,7 @@ function update(dt, t) {
         continue;
       }
       if (Math.abs(d.open - d.target) < 1e-4) {
-        d.wait -= dt;
+        d.wait -= wdt;
         if (d.wait <= 0) {
           d.target = 1 - d.target;
           d.wait = d.waits ? d.waits[d.target] : d.loop;
@@ -1885,7 +2077,7 @@ function update(dt, t) {
   // ---- bolas de energia
   tmpMin.copy(player.pos).sub(player.half);
   tmpMax.copy(player.pos).add(player.half);
-  energy.update(dt, t, world, portals, { min: tmpMin.clone(), max: tmpMax.clone() }, {
+  energy.update(wdt, tv, world, portals, { min: tmpMin.clone(), max: tmpMax.clone() }, {
     launch: () => sfx.launch(),
     bounce: (p) => sfx.bounce(p.distanceTo(player.pos)),
     caught: () => sfx.caught(),
@@ -1909,7 +2101,7 @@ function update(dt, t) {
     let shotsTaken = 0;
     let anySees = false;
     for (const t of turrets) {
-      const shots = t.update(dt, world, portals, gravityAt, eye, cubes);
+      const shots = t.update(wdt, world, portals, gravityAt, eye, cubes);
       if (t.spottedNow) anySees = true;
       // bipes de alvo encontrado / perdido e o desligar
       if (t.spottedNow && !t.wasSpotted) sfx.turretSpot();
@@ -2027,9 +2219,9 @@ function update(dt, t) {
   // ---- personagens
   for (const w of npcList) {
     w.P.lookAt = camera.position;
-    poseWorker(w, t, dt);
+    poseWorker(w, tv, wdt);
   }
-  updateDinos(t, dt);
+  updateDinos(tv, wdt);
   updateRex(dt);
   const moving = input.f || input.b || input.l || input.r;
   body.P.pose = moving && player.grounded ? 'walk' : 'idle';
@@ -2070,6 +2262,7 @@ function update(dt, t) {
   deadFlash = Math.max(0, deadFlash - dt * 1.5);
   $('flash').style.opacity = deadFlash;
   setText('timer', fmt(levelTime));
+  if (relogio) updateClockHud();
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
   $('use-hint').hidden = !(look && !held) && !held;
@@ -2130,8 +2323,9 @@ function frame() {
     camera.lookAt(0, 3, -14);
   }
   dissolver.update(dt);
+  updateTimeFx(dt);
   shadows.update(level ? [...cubes, ...turrets] : [], world, gravityAt);
-  motes.userData.update(t, camera, window.innerHeight * renderer.getPixelRatio());
+  motes.userData.update(relogio ? relogio.vt : t, camera, window.innerHeight * renderer.getPixelRatio()); // a poeira também para com o tempo
   const spd = running && level ? player.vel.length() : 0;
   const ahead = spd > 0.1 ? player.vel.dot(camForward()) / spd : 0;
   // sons contínuos: ambiente do laboratório, campo da arma e vento da velocidade
@@ -2180,4 +2374,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  get campaign() { return campaign; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

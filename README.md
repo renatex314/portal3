@@ -199,6 +199,18 @@ Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 |-------|------------|-----------|
 | B01 Sistema Nervoso | Helena | luta no estilo do Portal 1 contra um crânio de 13 m com as veias e os nervos à mostra: uma torreta de foguetes trava o laser em você e atira; saia da frente e deixe o foguete entrar no portal azul (numa parede branca atrás de você) — o laranja já está na parede, apontando para o crânio. Cada acerto derruba um núcleo pela boca, que você leva (`E`) até a fornalha no meio do salão. A câmara é uma sala industrial escura no clima da do Portal 1 (painéis brancos de portal em paredes de metal, pilares com luz de alerta, passarelas, tubulações, treliças, bancos de máquinas piscando, ventiladores, cabos grossos do teto ao crânio; as torretas sobem de alçapões no chão). Com três queimados os nervos recuam, sobra só o feixe arrumado (o "sistema tranquilo") e a porta de trás abre. Resolvido de ponta a ponta pelo robô de teste |
 
+**Série Experimento** — o relógio do tempo do jogo em Flash *Time Experiment* (RodKis, 2014), com portais e clones do passado como no mod *Thinking with Time Machine*. A tecla `2` **para o tempo do mundo** (portas, plataformas, bolas de energia, cubos, torretas, botões com contagem: tudo congela, menos você; os cubos ficam parados onde estão, até no ar). Parado, o **holograma do passado** mostra só o que era diferente (portas e cubos em outro lugar, bolas de energia e o seu eu de antes); a **roda do mouse** escolhe quantos segundos voltar (de meio em meio segundo) e o tiro **laranja** cai nas paredes daquele instante, inclusive atrás de uma porta que já se fechou. O **azul** cai no presente. Entrar no azul leva você ao laranja Δ segundos antes (**loop fechado**: uma só linha do tempo): o mundo volta ao instante de destino e o seu eu que saltou vira um **clone** que repete o que você fez e pisa em botões, até mergulhar no azul "eco" e sumir. O jogo checa **paradoxos**: se o seu passado não puder se repetir (uma bola de energia atinge o clone, uma porta ou um cubo fica no caminho dele, o chão em que ele pisava sumiu, o destino está ocupado, ou o Δ é maior que o tempo desde a sua última chegada), o loop colapsa com um efeito de falha e você volta ao instante do salto, com os portais como estavam. Efeitos: onda de choque, mundo azul-gelo e poeira parada na pausa; holograma ciano com a marca "−N s" no laranja; no salto, flash, aberração, túnel radial e o mundo "rebobinando" ao seu redor; clone com mergulho em anéis de energia.
+
+| Teste | Personagem | O que tem |
+|-------|------------|-----------|
+| E01 Tempo Parado | Helena | ponte de 44 m que só fica de pé 7 s depois de você sair da placa: só dá para atravessar parando o tempo no meio |
+| E02 Dois de Mim | Helena | a porta só abre com alguém no botão do canto; o passado fica no botão enquanto você corre para a porta |
+| E03 A Ilha | Kelly | carrinho vai e volta sobre a rocha fundida até o botão da ilha; a porta de saída é do outro lado |
+| E04 Três em Um | Seu Tião | três botões ao mesmo tempo: dois saltos, um dentro do outro (dois clones e você) |
+| E05 Paradoxo | Dona Cida | duas portas em sequência, cada uma com o botão longe, bola de energia varrendo a segunda sala e um cubo solto: o passado de um salto precisa de caminho livre para o outro |
+
+Todas foram resolvidas de ponta a ponta pelo robô de teste, que também provou cada tipo de paradoxo (cubo sobre o clone, bola de energia no caminho dele, destino ocupado e salto para antes da chegada).
+
 Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
 botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
 segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
@@ -340,7 +352,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), experimento.js e relogio.js (série Experimento: o relógio do tempo, clones e paradoxos), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

@@ -39,6 +39,17 @@
       <div id="heat" hidden><span>temperatura do ar</span><b id="heat-v">38 °C</b></div>
       <div id="use-hint" hidden>E — pegar a amostra</div>
       <div id="gems" hidden><span>cristais</span><b id="gems-v">0/12</b></div>
+      <div id="clock" hidden>
+        <div class="face"><i class="h1"></i><i class="h2"></i><u></u></div>
+        <div class="txt">
+          <span id="clock-state">tempo normal</span>
+          <b id="clock-d">0:00</b>
+          <div class="bar"><i id="clock-fill"></i></div>
+          <small id="clock-hint">2 — parar o tempo</small>
+          <em id="clock-extra"></em>
+        </div>
+      </div>
+      <div id="paradox" hidden><b>PARADOXO</b><span id="paradox-why"></span></div>
       <div id="era" hidden><span>época</span><b id="era-v">PASSADO</b><small>T — viajar no tempo</small></div>
       <div id="health" hidden><span>vida</span><div class="bar"><i id="health-bar"></i></div></div>
       <div id="tube-hud" hidden>
@@ -105,6 +116,7 @@
     </section>
 
     <!-- pausa -->
+    <div id="rewind"></div>
     <section id="pause" class="overlay" hidden>
       <div class="box">
         <h2>Pausado</h2>

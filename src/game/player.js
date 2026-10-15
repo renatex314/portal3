@@ -166,7 +166,7 @@ export class Player {
     this.cooldown -= dt;
     let P = null;
     if (this.cooldown <= 0) {
-      P = portals.crossing(prevCenter, this.pos);
+      P = portals.crossing(prevCenter, this.pos, true);
       if (!P) {
         const mn = this.pos.clone().sub(this.half);
         const mx = this.pos.clone().add(this.half);
@@ -197,7 +197,7 @@ export class Player {
     let best = null;
     let bestD = Infinity;
     for (const P of portals.list) {
-      if (!portals.isLinked(P) || P.normal.dot(down) > -0.7) continue;
+      if (!portals.isLinked(P) || P.delta > 0 || P.partner.delta > 0 || P.normal.dot(down) > -0.7) continue;
       const rel = this.pos.clone().sub(P.center);
       const h = rel.dot(P.normal);
       if (h < 0.3 || h > 60) continue;
@@ -232,7 +232,7 @@ export class Player {
     if (speed < 8) return;
     let best = null;
     for (const P of portals.list) {
-      if (!portals.isLinked(P)) continue;
+      if (!portals.isLinked(P) || P.delta > 0 || P.partner.delta > 0) continue;
       const vn = -this.vel.dot(P.normal); // velocidade de encontro à face
       if (vn < speed * 0.35) continue;
       const h = _a.subVectors(this.pos, P.center).dot(P.normal);

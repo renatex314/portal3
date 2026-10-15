@@ -12,6 +12,7 @@ import { MOMENTUM } from './momentum.js';
 import { MOMENTUM2 } from './momentum2.js';
 import { FRONTIER } from './fronteira.js';
 import { CHEFES } from './chefe.js';
+import { EXPERIMENTO } from './experimento.js';
 
 const G = 9.8;
 const DIRS = {
@@ -386,6 +387,8 @@ LEVELS.push(...MOMENTUM2);
 LEVELS.push(...FRONTIER);
 // série Chefes: um inimigo gigante por fase, resolvido com bolas de energia
 LEVELS.push(...CHEFES);
+// série Experimento: o relógio do tempo (voltar, parar, normal) e clones do passado
+LEVELS.push(...EXPERIMENTO);
 // (a campanha original entra depois desta lista, pelo main.js — ver src/game/campaign)
 // mapa livre de exploração (com torretas), também jogável em grupo
 LEVELS.push(BIG_MAP);

@@ -183,7 +183,7 @@ export class EnergySystem {
         const intoPortal =
           hit &&
           portals.list.some((Q) => {
-            if (!portals.isLinked(Q) || Q.box !== hit.box) return false;
+            if (!portals.isLinked(Q) || Q.delta > 0 || Q.partner.delta > 0 || Q.box !== hit.box) return false;
             const l = Q.local(hit.point);
             return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1;
           });
