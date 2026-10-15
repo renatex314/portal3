@@ -190,15 +190,13 @@ function applyRoomFlags(flags) {
 
 function fillMapSelect() {
   const sel = $('room-map');
-  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
+  sel.innerHTML = LEVELS.map((L, i) => `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
   sel.value = String(levelIdx);
 }
 $('room-map').addEventListener('change', (e) => {
   if (mp()) net.send({ t: 'setLevel', level: Number(e.target.value) });
-  else {
-    loadLevel(Number(e.target.value));
-    lock();
-  }
+  // startLevel (e não loadLevel direto): a campanha original precisa ler o mapa antes
+  else startLevel(Number(e.target.value));
 });
 
 net.on('level', (m) => {
@@ -551,6 +549,7 @@ let campaign = null;
 
 // câmera de cena (point_viewcontrol): enquanto ligada, a tela mostra esse ponto de vista
 let viewOverride = null;
+const NO_INPUT = {};
 
 // ganchos que o sistema de entidades da campanha original usa
 const campaignCtx = {
@@ -617,6 +616,11 @@ function campaignSubtitle(who, text, secs) {
 const spawnOffset = () => (mp() ? [0, 1.3, -1.3, 2.6][net.slot % 4] : 0);
 
 function loadLevel(i, silent = false) {
+  // campanha original ainda não lida da cópia do jogador: lê antes (senão o mapa sai vazio)
+  if (LEVELS[i].preload && !LEVELS[i].bsp()) {
+    startLevel(i);
+    return;
+  }
   clearLevel();
   levelIdx = i;
   level = LEVELS[i];
@@ -1044,7 +1048,7 @@ window.addEventListener('keyup', (e) => {
 document.addEventListener('mousemove', (e) => {
   // com zoom, a mira fica mais fina (proporcional ao campo de visão)
   const s = camera.fov / 75;
-  if (document.pointerLockElement === canvas && running && !paused) {
+  if (document.pointerLockElement === canvas && running && !paused && !viewOverride) {
     player.look(e.movementX * s, e.movementY * s);
     GUN.look.x += e.movementX;
     GUN.look.y += e.movementY;
@@ -1486,7 +1490,8 @@ function update(dt, t) {
       if (wish.lengthSq() > 1e-4) flow.addScaledVector(wish.normalize(), 4.5);
       player.vel.lerp(flow, 1 - Math.exp(-dt * 5));
     }
-    player.update(dt, input, world, portals, gravityAt, (P) => {
+    // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
+    player.update(dt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
       sfx.whoosh();
       if (P.partner.moon && !moonVisited) {
         moonVisited = true;
@@ -1781,7 +1786,7 @@ function update(dt, t) {
       die();
       break;
     }
-  if (player.pos.y < -400 || world.incinerators.some((f) => inside(player.pos, f.min, f.max))) die();
+  if (player.pos.y < (data.killY ?? -400) || world.incinerators.some((f) => inside(player.pos, f.min, f.max))) die();
   for (const tr of world.triggers) {
     if (tr.done || !inside(player.pos, tr.min, tr.max) || (tr.era && tr.era !== world.era)) continue;
     if (tr.exit) {

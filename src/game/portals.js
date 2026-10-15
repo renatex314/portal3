@@ -61,10 +61,13 @@ const displayFS = /* glsl */ `
     float ang = uTime * 0.7 + r * 3.2;
     vec2 sp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * e * 2.4;
     float sw = fbm(sp + vec2(uTime * 0.25, -uTime * 0.18));
-    vec3 swirl = uColor * (0.12 + 1.5 * sw * sw) * (0.45 + 0.75 * r) + uColor * smoothstep(0.55, 1.0, r) * 0.5;
+    vec3 swirl = (uColor * uColor) * (0.25 + 2.4 * sw * sw) * (0.5 + 0.8 * r) + uColor * smoothstep(0.55, 1.0, r) * 0.7;
     vec3 col = mix(swirl, view, uLinked);
-    // a borda tinge a vista por dentro (a faixa brilhante vem do anel)
-    col = mix(col, uColor * 1.4, smoothstep(0.78, 1.0, r) * 0.35);
+    // a borda tinge a vista por dentro (a faixa brilhante vem do anel) e brilha
+    // como energia: um degradê que sobe até a borda, ondulando com o ruído
+    float edgeN = fbm(vec2(atan(e.y, e.x) * 2.0, uTime * 0.9));
+    col = mix(col, uColor * 1.6, smoothstep(0.72, 1.0, r) * 0.45);
+    col += uColor * exp(-(1.0 - r) * 9.0) * (0.9 + 0.8 * edgeN);
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -88,13 +91,45 @@ const rimFS = /* glsl */ `
     float band = smoothstep(-0.26 - 0.10 * fast, -0.03, d) * (1.0 - smoothstep(0.0, 0.03 + 0.06 * fast, d));
     float hot = exp(-abs(d + 0.03) * 30.0);
     float halo = step(0.0, d) * exp(-d * 8.0) * (0.25 + 0.45 * fast);
-    vec3 col = uColor * (0.42 + 0.75 * fast + 0.5 * hot) + uColor * uColor * hot * 0.45;
+    vec3 col = uColor * (0.42 + 0.75 * fast + 0.5 * hot) + uColor * uColor * hot * 0.45 + vec3(hot * hot * 0.35);
     float a = clamp(band * (0.8 + 0.2 * fast) + hot * 0.6 + halo, 0.0, 1.0);
     a *= 1.0 - smoothstep(${(RIM - 0.08).toFixed(2)}, ${RIM.toFixed(2)}, r);
-    col *= 1.0 + uFlash * 2.5;
+    col *= 1.6 * (1.0 + uFlash * 2.5); // acima de 1: o bloom faz a borda irradiar
     if (a < 0.005) discard;
     gl_FragColor = vec4(col, a);
     #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }`;
+
+// aura de energia em volta do portal: brilho que se espalha pela parede, com
+// filetes que correm para fora e uma pulsação lenta (soma de luz, sem tampar nada)
+const GLOW = 2.3;
+const glowFS = /* glsl */ `
+  uniform vec3 uColor; uniform float uTime, uOpen, uFlash;
+  varying vec2 vUv;
+  ${NOISE}
+  void main(){
+    vec2 p = (vUv - 0.5) * 2.0 * ${GLOW.toFixed(2)};
+    float open = max(uOpen, 0.001);
+    float r = length(p) / open;
+    float d = r - 1.0; // 0 na borda, >0 fora
+    if (d < -0.06) discard;
+    float ang = atan(p.y, p.x);
+    vec2 c = vec2(cos(ang), sin(ang));
+    float flow = fbm(c * 3.0 + vec2(uTime * 0.55, -uTime * 0.4) - d * 2.2);
+    float wisp = fbm(c * 7.5 + vec2(-uTime * 1.2, uTime * 0.85) - d * 5.0 + uTime * 0.7);
+    float pulse = 0.82 + 0.18 * sin(uTime * 2.6 + flow * 2.0);
+    float dd = max(d, 0.0);
+    float glow = exp(-dd * 2.4) * (0.4 + 0.6 * flow) * pulse;
+    float streak = smoothstep(0.52, 0.85, wisp) * exp(-dd * 4.5);
+    float a = (glow * 0.6 + streak * 0.9) * smoothstep(-0.06, 0.03, d);
+    a *= 1.0 - smoothstep(${(GLOW - 0.3).toFixed(2)}, ${GLOW.toFixed(2)}, length(p));
+    a *= min(1.0, uOpen * 1.5);
+    // cor saturada (o canal dominante da cor do portal manda): numa parede clara
+    // a aura tinge em vez de só clarear; acima de 1 para o bloom pegar
+    vec3 deep = uColor * uColor;
+    vec3 col = deep * (2.2 + 2.4 * streak + uFlash * 3.0) + uColor * streak * 0.6;
+    gl_FragColor = vec4(col, min(1.0, a));
     #include <colorspace_fragment>
   }`;
 
@@ -189,6 +224,22 @@ class Portal {
     rim.renderOrder = 2;
     this.group.add(rim);
     this.rimMat = rim.material;
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(PORTAL_A * 2 * GLOW, PORTAL_B * 2 * GLOW),
+      new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: this.color }, uTime: this.uniforms.uTime, uOpen: this.uniforms.uOpen, uFlash: this.rimMat.uniforms.uFlash },
+        vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+        fragmentShader: glowFS,
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    glow.position.z = 0.01;
+    glow.renderOrder = 1;
+    this.group.add(glow);
     const N = 90;
     const sg = new THREE.BufferGeometry();
     sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
@@ -762,7 +813,8 @@ export class PortalSystem {
       const o = P.open;
       P.uniforms.uOpen.value = o >= 1 ? 1 : 1 + 2.2 * Math.pow(o - 1, 3) + 1.2 * Math.pow(o - 1, 2);
       P.rimMat.uniforms.uFlash.value = Math.max(0, 1 - P.age / 0.5) ** 2;
-      P.light.intensity = P.placed ? 6 + 14 * P.rimMat.uniforms.uFlash.value : 0;
+      // a luz do portal pulsa junto com a aura
+      P.light.intensity = P.placed ? 9 + 1.5 * Math.sin(t * 2.6) + 14 * P.rimMat.uniforms.uFlash.value : 0;
       P.uniforms.uLinked.value = this.isLinked(P) ? 1 : 0;
     }
   }

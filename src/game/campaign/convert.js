@@ -332,5 +332,7 @@ export function buildMap(w, bsp) {
     catchers.set(e, w.catcher(c.x, c.y, c.z, n.toArray(), null));
   }
 
-  return { spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, stats: { solids: count, lights: picked.length } };
+  // abaixo de tudo o que existe no mapa não há chão: quem cai ali morre logo
+  const floor = Math.min(...w.solids.map((b) => b.min.y));
+  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, stats: { solids: count, lights: picked.length } };
 }

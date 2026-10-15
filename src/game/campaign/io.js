@@ -698,7 +698,14 @@ const INPUTS = {
     else if (input === 'disable') n.turret.enabled = false;
     else if (input === 'toggle') n.turret.enabled = !n.turret.enabled;
   },
-  prop_dynamic(n, input, param) {
+  prop_dynamic(n, input, param, ev) {
+    // fim da animação: no tempo da sequência no .mdl da cópia do jogador (ou ~3 s)
+    if (input === 'setanimation' && n.e.outputs.some((o) => o.output === 'onanimationdone')) {
+      const model = (n.e.kv.get('model') ?? '').toLowerCase().replace(/\\/g, '/');
+      const dur = this.bsp.animDurations?.get(model)?.get(param.trim().toLowerCase()) ?? 3;
+      this.queue = this.queue.filter((q) => !(q.caller === n && q.input === 'FireAnimDone'));
+      this.schedule(dur, '!self', 'FireAnimDone', '', ev?.activator ?? null, n);
+    } else if (input === 'fireanimdone') this.fire(n, 'onanimationdone');
     if (n.machine) {
       if (input === 'setdefaultanimation' || input === 'setanimation') {
         const m = /insanity_0?(\d)/.exec(param);
@@ -735,8 +742,14 @@ const INPUTS = {
   point_viewcontrol(n, input) {
     if (input === 'enable') {
       const [p, y] = parseVec(n.e.kv.get('angles'));
-      this.ctx.view?.({ pos: vecKV(n.e, 'origin'), yaw: yawFromSource(y || 0), pitch: (-(p || 0) * Math.PI) / 180 });
-    } else if (input === 'disable') this.ctx.view?.(null);
+      // flag 4: o jogador fica parado enquanto a câmera de cena está ligada
+      this.ctx.view?.({ pos: vecKV(n.e, 'origin'), yaw: yawFromSource(y || 0), pitch: (-(p || 0) * Math.PI) / 180, freeze: !!(flags(n.e) & 4) });
+      n.viewing = true;
+      n.onKill = () => n.viewing && this.ctx.view?.(null);
+    } else if (input === 'disable') {
+      n.viewing = false;
+      this.ctx.view?.(null);
+    }
   },
   env_fade(n, input) {
     if (input !== 'fade' && input !== 'fadereverse') return;

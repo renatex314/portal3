@@ -9,6 +9,7 @@ import { buildMap } from './convert.js';
 import { Dialogue } from './dialogue.js';
 import { ensureSource, readFile } from './source.js';
 import { MAPS } from './maps.js';
+import { animatedModels, sequenceDurations } from './mdl.js';
 
 // falas e sons (um só para a campanha toda); a legenda é ligada pelo main.js
 export const dialogue = new Dialogue({ subtitle: (...a) => dialogue.onSubtitle?.(...a) });
@@ -39,12 +40,20 @@ export const CAMPAIGN = MAPS.map(([map, code], n) => ({
   music: map.startsWith('escape') ? 'labTense' : 'lab',
   lesson: 'Campanha original, lida da sua instalação',
   preload: async () => {
-    await fetchMap(map);
+    const bsp = await fetchMap(map);
     await dialogue.init();
+    // duração das animações que a lógica do mapa espera terminar (OnAnimationDone)
+    if (!bsp.animDurations) {
+      bsp.animDurations = new Map();
+      for (const model of animatedModels(bsp.entities)) {
+        const bytes = dialogue.pak?.has(model) ? await dialogue.pak.read(model) : null;
+        if (bytes) bsp.animDurations.set(model, sequenceDurations(bytes));
+      }
+    }
   },
   bsp: () => cache.get(map),
   build(w) {
     const m = buildMap(w, cache.get(map));
-    return { spawn: m.spawn, gun: m.gun, cubes: m.cubes, turrets: m.turrets, campaign: m };
+    return { spawn: m.spawn, gun: m.gun, cubes: m.cubes, turrets: m.turrets, killY: m.killY, campaign: m };
   },
 }));

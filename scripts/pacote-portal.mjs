@@ -19,6 +19,7 @@ import { parseBSP } from '../src/game/campaign/bsp.js';
 import { parseKV, kvGet } from '../src/game/campaign/kv.js';
 import { parseScenesImage, findScene, loadSoundScripts, cleanWave } from '../src/game/campaign/scenes.js';
 import { MAPS } from '../src/game/campaign/maps.js';
+import { animatedModels } from '../src/game/campaign/mdl.js';
 
 const DEFAULT_DIR = '/Volumes/SSD/crossover/bottles/Steam/drive_c/Program Files (x86)/Steam/steamapps/common/Portal';
 const ROOT = path.resolve(process.argv[2] || process.env.PORTAL_DIR || DEFAULT_DIR);
@@ -194,6 +195,7 @@ const add = (name, data) => items.push({ name, data });
 
 // mapas: o que eles tocam (cenas e sons soltos) e a versão enxuta do arquivo
 const sceneFiles = new Set();
+const models = new Set(); // .mdl com animações que a lógica do mapa espera terminar
 const soundNames = new Set(['portal.rocket_fire', 'portal.rocket_explode']);
 for (const [map] of MAPS) {
   const f = findFile(`portal/maps/${map}.bsp`);
@@ -208,6 +210,7 @@ for (const [map] of MAPS) {
     if (e.classname === 'logic_choreographed_scene' && e.kv.get('scenefile')) sceneFiles.add(e.kv.get('scenefile'));
     if (e.classname === 'ambient_generic' && e.kv.get('message')) soundNames.add(e.kv.get('message').toLowerCase());
   }
+  for (const m of animatedModels(bsp.entities)) models.add(m);
   add(`portal/maps/${map}.bsp`, small);
   console.log(`  ${map.padEnd(14)} ${(src.length / 1e6).toFixed(1).padStart(5)} MB → ${(small.length / 1e6).toFixed(1).padStart(4)} MB`);
 }
@@ -242,6 +245,8 @@ for (const w of [...waves].sort()) {
   if (bytes) add(`pak/${w}`, bytes);
   else missing++; // sons do Half-Life 2 (hl2/*.vpk): o jogo segue sem eles
 }
+
+for (const m of models) if (pak.has(m)) add(`pak/${m}`, pak.read(m));
 
 // créditos do final: o roteiro, a música e a letra (no arquivo de idioma)
 add('pak/scripts/credits.txt', pak.read('scripts/credits.txt'));
