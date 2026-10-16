@@ -1061,6 +1061,10 @@ export class PortalSystem {
     }
     const prevTarget = r.getRenderTarget();
     const prevClip = r.clippingPlanes;
+    // os laranjas de estática ficam no plano do laranja: nas vistas pelos portais eles
+    // cobririam tudo (o azul ficava preto com o laser indo para o passado)
+    const staticVis = this.statics.map((S) => S.group.visible);
+    for (const S of this.statics) S.group.visible = false;
     for (const P of todo) {
       const Q = this.other(P);
       const M = this.transform(P, Q);
@@ -1096,6 +1100,7 @@ export class PortalSystem {
     }
     r.clippingPlanes = prevClip;
     r.setRenderTarget(prevTarget);
+    this.statics.forEach((S, i) => (S.group.visible = staticVis[i]));
     for (const P of todo) {
       P.read = 1 - P.read;
       P.uniforms.map.value = P.rt[P.read].texture;
