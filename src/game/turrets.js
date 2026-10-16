@@ -8,10 +8,12 @@
 import * as THREE from 'three';
 import { Prop } from './props.js';
 import { turretModel } from './models.js';
+import { PORTAL_A, PORTAL_B } from './portals.js';
 
 const RANGE = 26;
 const FOV = THREE.MathUtils.degToRad(55);
 const UP = new THREE.Vector3(0, 1, 0);
+const _a = new THREE.Vector3();
 
 export class Turret extends Prop {
   /** opts.scale: tamanho (1 = o padrão); opts.tippy: pés estreitos e corpo leve, que
@@ -175,7 +177,7 @@ export class Turret extends Prop {
   }
 
   get eye() {
-    return new THREE.Vector3(0, 0.35, 0.2).applyQuaternion(this.quat).add(this.pos);
+    return new THREE.Vector3(0, 0.35, 0.2).multiplyScalar(this.mesh.scale.x).applyQuaternion(this.quat).add(this.pos);
   }
 
   forward() {
@@ -205,7 +207,39 @@ export class Turret extends Prop {
    * mira e tiros; `target` = olho do jogador local. A física já foi feita pelo
    * motor. Devolve os tiros disparados neste quadro.
    */
-  update(dt, world, portals, gravityAt, target, cubes) {
+  /**
+   * Enxerga `real` pelo portal P (do lado da torreta), que sai em Q (do lado do alvo)?
+   * Devolve { aim, x }: o alvo "visto" atrás de P (para onde ela mira e atira) e o ponto da
+   * boca; ou null. O caminho dos dois lados tem de estar livre.
+   */
+  seeThrough(eye, fwd, real, P, Q) {
+    const portals = this.portals;
+    if (!P?.placed || !Q?.placed || !portals.isLinked(P)) return null;
+    const aim = real.clone().applyMatrix4(portals.transform(Q, P));
+    const to = aim.clone().sub(eye);
+    const dist = to.length();
+    if (dist > RANGE || dist < 0.3) return null;
+    const dir = to.divideScalar(dist);
+    if (Math.acos(THREE.MathUtils.clamp(dir.dot(fwd), -1, 1)) >= FOV) return null;
+    const sa = _a.subVectors(eye, P.center).dot(P.normal);
+    const den = dir.dot(P.normal);
+    if (sa <= 0.02 || den >= -1e-4) return null;
+    const s = -sa / den;
+    const x = eye.clone().addScaledVector(dir, s);
+    const l = P.local(x);
+    if ((l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 > 0.85) return null;
+    if (this.physics.castRay(eye, dir, Math.max(0, s - 0.12), (p) => p === this)) return null;
+    // do outro lado: da boca de Q até o alvo
+    const xq = x.clone().applyMatrix4(portals.transform(P, Q));
+    const d2 = real.clone().sub(xq);
+    const L = d2.length();
+    d2.divideScalar(L);
+    if (L > 0.6 && this.physics.castRay(xq.clone().addScaledVector(d2, 0.12), d2, L - 0.55, (p) => p === this)) return null;
+    return { aim, x };
+  }
+
+  /** `via`: alvos pelos portais [{ real, P, Q, past }] (o primeiro que ela enxergar vale) */
+  update(dt, world, portals, gravityAt, target, cubes, via = null) {
     this.animate(dt);
     // caída (deitada) por um tempinho: desliga
     const gUp = gravityAt(this.pos).clone().normalize().negate();
@@ -243,17 +277,31 @@ export class Turret extends Prop {
       const hit = this.physics.castRay(eye, dir, dist - 0.4, (p) => p === this);
       if (hit) sees = false;
     }
+    // pelos portais (o laser vai até a boca; as balas, para o alvo visto lá dentro)
+    let aim = target;
+    let laserTo = null;
+    this.viaPast = false;
+    if (!sees && via)
+      for (const v of via) {
+        const got = this.seeThrough(eye, fwd, v.real, v.P, v.Q);
+        if (!got) continue;
+        sees = true;
+        aim = got.aim;
+        laserTo = got.x;
+        this.viaPast = !!v.past;
+        break;
+      }
     if (sees) {
       this.lock = Math.min(1, this.lock + dt / 0.7);
       this.laser.visible = true;
-      this.laser.geometry.setFromPoints([eye, target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.05, -0.15, 0))]);
+      this.laser.geometry.setFromPoints([eye, laserTo ?? aim.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.05, -0.15, 0))]);
       this.laser.material.opacity = 0.4 + this.lock * 0.5;
       if (this.lock >= 1) {
         this.fireAcc += dt;
         while (this.fireAcc > 0.1) {
           this.fireAcc -= 0.1;
           shots++;
-          this.muzzle(target);
+          this.muzzle(aim);
         }
       }
     } else {

@@ -88,6 +88,8 @@ export class Chronos {
   // ------------------------------------------------------------------ estado
   clear() {
     if (this.frozenProps) this.setFreeze(false);
+    for (const d of this.doubles ?? []) this.dropDouble(d);
+    this.doubles = [];
     for (const c of this.clones ?? []) this.dropClone(c);
     this.paused = false;
     this.tw = 0;
@@ -367,6 +369,12 @@ export class Chronos {
   // ------------------------------------------------------------------ quadro
   /** devolve o quanto o mundo avança neste quadro (0 = parado) */
   frame(dt) {
+    const out = this.frameInner(dt);
+    this.updateDoubles();
+    return out;
+  }
+
+  frameInner(dt) {
     const { player } = this.ctx;
     this.pre = { pos: player.pos.clone(), vel: player.vel.clone(), yaw: player.yaw, pitch: player.pitch, up: player.upSign };
     this.holoMat.uniforms.uTime.value = this.ctx.t();
@@ -661,6 +669,10 @@ export class Chronos {
       const st = this.propAt(c.script, (this.tw - c.script[0].t) / RATE, c.echo.k);
       if (st && !st.gone && !st.held) out.push(st.p);
     }
+    for (const d of this.doubles ?? []) {
+      const st = this.doubleAt(d, this.tw);
+      if (st) out.push(st.p);
+    }
     return out;
   }
 
@@ -886,6 +898,7 @@ export class Chronos {
 
   /** solta pelo azul as bolas cuja hora de sair chegou (chamado a cada quadro) */
   pastPellets() {
+    this.scanPastBalls();
     if (!this.ballQueue?.length) return;
     const { portals, energy } = this.ctx;
     // o tempo voltou (salto, paradoxo): o que entrou depois de agora não aconteceu
@@ -912,42 +925,433 @@ export class Chronos {
   }
 
   /**
-   * Objeto solto que entra no azul temporal: vai para o passado. Ele sai do laranja
-   * Δ segundos atrás e, de lá até agora, cai/quica sozinho (simulado aqui de uma vez);
-   * o "ele mesmo" mais novo é o que acabou de entrar no azul, então agora só existe um.
+   * Bolas que JÁ estavam na história (antes de você abrir o laranja): conforme o
+   * instante mostrado pelo laranja (agora − Δ) anda, procura nas fotos uma bola que bateu
+   * onde hoje está o laranja. Ela entrou no portal (loop fechado) e sai agora pelo azul —
+   * se isso não mudar o que já aconteceu: se, depois daquele instante, essa bola ligou um
+   * receptor, tirá-la da história seria um paradoxo, e ela fica como estava.
+   */
+  scanPastBalls() {
+    const { portals, energy, world } = this.ctx;
+    const O = portals.orange;
+    if (!O.placed || !(O.delta > 0) || !portals.isLinked(O) || this.paused || this.sweep) {
+      this.scanT = null;
+      return;
+    }
+    const cur = this.tw - O.delta;
+    const from = this.scanT ?? cur;
+    this.scanT = cur;
+    const limit = Math.min(cur, O.placedTw ?? -Infinity); // depois de abrir, quem cuida é ballIntoPast
+    if (!(limit > from)) return;
+    const n = O.normal;
+    const R = 0.16;
+    for (let i = Math.max(1, this.indexAt(from)); i <= this.indexAt(limit); i++) {
+      const A = this.samples[i - 1];
+      const B = this.samples[i];
+      if (!A || !B || B.t <= from - 1e-6) continue;
+      for (const a of A.w.pellets) {
+        const vn = a.vel.dot(n);
+        if (vn >= -1e-3) continue; // não vai em direção à parede do laranja
+        const la = O.local(a.pos);
+        if (la.z < -0.05) continue;
+        const sHit = (la.z - R) / -vn;
+        if (sHit < 0 || sHit > RATE * 1.5) continue;
+        const at = a.pos.clone().addScaledVector(a.vel, sHit);
+        const l = O.local(at);
+        if ((l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 > 1) continue;
+        const tHit = A.t + sHit;
+        const key = `${a.li}|${Math.round(tHit * 30)}`;
+        if (this.pastHits?.has(key)) continue;
+        (this.pastHits ??= new Set()).add(key);
+        // consequências: depois disso, essa mesma bola (a do lançador li, enquanto ela
+        // existir sem sumir) foi pega por um receptor? Então tirá-la da história é paradoxo
+        let caughtLater = false;
+        for (let j = this.indexAt(tHit) + 1; j < this.samples.length; j++) {
+          const S = this.samples[j].w;
+          const P0 = this.samples[j - 1].w;
+          const ball = P0.pellets.find((q) => q.li === a.li);
+          if (!ball) break; // a bola acabou
+          const flip = S.catchers.findIndex((on, c) => on && !P0.catchers[c] && world.catchers[c]?.pos.distanceTo(ball.pos) < 1.5);
+          if (flip >= 0) {
+            caughtLater = true;
+            break;
+          }
+          if (!S.pellets.some((q) => q.li === a.li)) break; // sumiu sem ser pega
+        }
+        if (caughtLater) {
+          this.ctx.fx.paradox?.('essa bola do passado ligou um receptor depois: ela não pode ter entrado no laranja', at);
+          continue;
+        }
+        // a mesma bola ainda existe agora? então ela some (foi para o portal lá atrás)
+        for (const p of [...energy.pellets]) {
+          const born = this.tw - ((p.from?.life ?? p.life) - p.life);
+          if (world.launchers.indexOf(p.from) === a.li && born <= tHit + 0.05) energy.kill(p);
+        }
+        const out = { tIn: tHit, tOut: tHit + O.delta, pos: at, vel: a.vel.clone(), key: this.orangeKey(O), life: world.launchers[a.li]?.life ?? a.life };
+        (this.ballQueue ??= []).push(out);
+      }
+    }
+  }
+
+  /**
+   * Bola do presente que entra no azul temporal: vai para o passado. Sai do laranja em
+   * Td = agora − Δ e anda Δ segundos lá (simulado agora): quica, pode ser pega por um
+   * receptor (que fica ligado), pode voltar a entrar no laranja (sai do azul Δ s depois)
+   * ou acabar o tempo dela. Se no caminho ela acertaria você (onde você estava então), é
+   * paradoxo: ela não vai. Se sobreviver, ela está agora onde a simulação terminou.
+   */
+  ballToPast(p, blue) {
+    const { portals, world } = this.ctx;
+    const O = blue.partner;
+    const delta = O.delta;
+    if (!(delta > 0) || this.paused || this.sweep) return false;
+    const Td = this.tw - delta;
+    if (Td < this.samples[0].t - 1e-6) return false;
+    const pos = p.pos.clone();
+    const vel = p.vel.clone();
+    portals.carry(blue, pos, vel);
+    pos.addScaledVector(O.normal, 0.2);
+    const sim = this.simBall(pos, vel, Math.max(p.life, p.from?.life ?? 0), Td, delta);
+    if (sim.paradox) {
+      this.ctx.fx.paradox?.(sim.paradox, sim.at ?? pos);
+      return 'paradox';
+    }
+    (this.ballDoubles ??= []).push({ from: Td, to: this.tw, track: sim.track, mesh: null });
+    for (const C of sim.caught) {
+      if (C.active) continue;
+      C.active = true;
+      if (p.from && !p.from.free) p.from.done = true;
+      this.ctx.fx.caught?.(C);
+    }
+    for (const r of sim.reenter) (this.ballQueue ??= []).push(r);
+    if (sim.alive) {
+      const np = this.ctx.energy.spawnFree(sim.pos, sim.vel, sim.life);
+      np.cooldown = 0.1;
+    }
+    return true;
+  }
+
+  /** voo de uma bola no passado, de t0 a t0 + dur, contra o cenário de agora */
+  simBall(pos, vel, life, t0, dur) {
+    const { world, portals } = this.ctx;
+    const R = 0.16;
+    const O = portals.orange;
+    const track = [];
+    const caught = [];
+    const reenter = [];
+    const dt = 1 / 120;
+    let next = 0;
+    let t = 0;
+    for (; t <= dur + 1e-9; t += dt) {
+      if (t >= next - 1e-9) {
+        track.push({ t: t0 + t, p: pos.clone() });
+        next += RATE;
+      }
+      life -= dt;
+      if (life <= 0) return { track, caught, reenter, alive: false };
+      // você estava ali naquele instante?
+      const S = this.samples[this.indexAt(t0 + t)];
+      if (S) {
+        const half = this.ctx.player.half;
+        const d = pos.clone().sub(S.p);
+        if (Math.abs(d.x) < half.x + R && Math.abs(d.y) < half.y + R && Math.abs(d.z) < half.z + R)
+          return { track, caught, reenter, paradox: 'a bola mandada ao passado teria acertado você', at: pos.clone() };
+      }
+      let rest = vel.length() * dt;
+      while (rest > 1e-5) {
+        const step = Math.min(rest, 0.12);
+        rest -= step;
+        const dir = vel.clone().normalize();
+        const hit = world.raycast(pos, dir, step + R);
+        if (hit) {
+          // de novo no laranja: entra e sai pelo azul Δ s depois
+          const l = O.local(hit.point);
+          if (O.placed && Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1) {
+            reenter.push({ tIn: t0 + t, tOut: t0 + t + O.delta, pos: pos.clone(), vel: vel.clone(), key: this.orangeKey(O), life: Math.max(life, 1) });
+            return { track, caught, reenter, alive: false };
+          }
+          pos.copy(hit.point).addScaledVector(hit.normal, R + 0.002);
+          vel.addScaledVector(hit.normal, -2 * vel.dot(hit.normal));
+          continue;
+        }
+        pos.addScaledVector(dir, step);
+      }
+      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(pos) < (c.radius ?? 0.8));
+      if (C) {
+        caught.push(C);
+        return { track, caught, reenter, alive: false };
+      }
+    }
+    return { track, caught, reenter, alive: true, pos, vel, life };
+  }
+
+  // ------------------------------------------------------------------ torretas e o par temporal
+  /** onde estava o seu olho Δ segundos atrás (o "você do passado" visto pelo azul) */
+  pastSelfEye(delta) {
+    if (!(delta > 0) || this.paused) return null;
+    const S = this.samples[this.indexAt(this.tw - delta)];
+    if (!S || this.tw - delta < this.samples[0].t) return null;
+    return S.p.clone().add(new V3(0, 0.7 * (S.up ?? 1), 0));
+  }
+
+  /**
+   * Torretas do passado: cada uma, na pose que tinha Δ s atrás, olhando para o laranja
+   * (que estava aberto naquele instante) vê você agora pelo azul e atira — as balas saem
+   * do azul. Devolve quantos tiros te acertaram neste quadro.
+   */
+  pastTurretShots(dt, eye) {
+    const { portals, world } = this.ctx;
+    const O = portals.orange;
+    const B = portals.blue;
+    if (!dt || this.paused || this.sweep || !O.placed || !(O.delta > 0) || !B.placed || !portals.isLinked(O)) return 0;
+    const S = this.samples[this.indexAt(this.tw - O.delta)]?.w;
+    if (!S) return 0;
+    const aim = eye.clone().applyMatrix4(portals.transform(B, O)); // você, visto do lado do laranja
+    const toB = portals.transform(O, B);
+    this.pastLock ??= new Map();
+    let shots = 0;
+    this.props().forEach((t, k) => {
+      const st = S.props[k];
+      if (t.kind !== 'turret' || !st || st.gone) return this.pastLock.delete(k);
+      const up = new V3(0, 1, 0).applyQuaternion(st.q);
+      if (up.y < 0.6) return this.pastLock.delete(k); // caída então: desligada
+      const sc = t.mesh?.scale.x ?? 1;
+      const tEye = new V3(0, 0.35, 0.2).multiplyScalar(sc).applyQuaternion(st.q).add(st.p);
+      const fwd = new V3(0, 0, 1).applyQuaternion(st.q);
+      const to = aim.clone().sub(tEye);
+      const dist = to.length();
+      const dir = to.divideScalar(dist);
+      let ok = dist < 26 && Math.acos(THREE.MathUtils.clamp(dir.dot(fwd), -1, 1)) < THREE.MathUtils.degToRad(55);
+      let x = null;
+      if (ok) {
+        const sa = tEye.clone().sub(O.center).dot(O.normal);
+        const den = dir.dot(O.normal);
+        ok = sa > 0.02 && den < -1e-4;
+        if (ok) {
+          const sHit = -sa / den;
+          x = tEye.clone().addScaledVector(dir, sHit);
+          const l = O.local(x);
+          ok = (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 0.85 && !(world.raycast(tEye, dir, Math.max(0, sHit - 0.12))?.dist >= 0);
+        }
+      }
+      if (ok) {
+        // do lado de agora: da boca do azul até você
+        const xb = x.clone().applyMatrix4(toB);
+        const d2 = eye.clone().sub(xb);
+        const L = d2.length();
+        d2.divideScalar(L);
+        ok = !(L > 0.6 && world.physics?.castRay(xb.clone().addScaledVector(d2, 0.12), d2, L - 0.55));
+        if (ok) {
+          const lock = Math.min(1, (this.pastLock.get(k) ?? 0) + dt / 0.7);
+          this.pastLock.set(k, lock);
+          if (lock >= 1) {
+            const acc = (this.pastAcc?.get(k) ?? 0) + dt;
+            let n = Math.floor(acc / 0.1);
+            (this.pastAcc ??= new Map()).set(k, acc - n * 0.1);
+            shots += n;
+            if (n) this.pastTracer(xb, eye);
+          }
+          return;
+        }
+      }
+      this.pastLock.delete(k);
+    });
+    if (shots && !this.saidPastTurret) {
+      this.saidPastTurret = true;
+      this.ctx.fx.toast?.('Uma torreta do passado viu você pelo laranja: as balas saem do azul.');
+    }
+    return shots;
+  }
+
+  /** risco de bala saindo da boca do azul */
+  pastTracer(from, to) {
+    this.tracers ??= [];
+    let tr = this.tracers.find((l) => l.material.opacity <= 0.05);
+    if (!tr) {
+      tr = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new V3(), new V3()]), new THREE.LineBasicMaterial({ color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false }));
+      tr.frustumCulled = false;
+      this.ctx.scene.add(tr);
+      this.tracers.push(tr);
+    }
+    const d = to.clone().sub(from);
+    const a = from.clone().addScaledVector(d, Math.random() * 0.3);
+    tr.geometry.setFromPoints([a, a.clone().addScaledVector(d.normalize(), 1.4)]);
+    tr.material.opacity = 0.9;
+    const fade = () => {
+      tr.material.opacity *= 0.6;
+      if (tr.material.opacity > 0.05) requestAnimationFrame(fade);
+      else tr.material.opacity = 0;
+    };
+    requestAnimationFrame(fade);
+  }
+
+  /** bolas mandadas ao passado: como estavam no instante T (para a vista do azul) */
+  showBallDoubles(T) {
+    this.ballMeshes ??= [];
+    let n = 0;
+    for (const d of this.ballDoubles ?? []) {
+      if (T < d.from - 1e-6 || T >= d.to) continue;
+      const i = Math.max(0, Math.min(d.track.length - 1, Math.floor((T - d.from) / RATE)));
+      let m = this.ballMeshes[n];
+      if (!m) {
+        m = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.8, 0.6), toneMapped: false }));
+        this.ctx.scene.add(m);
+        this.ballMeshes[n] = m;
+      }
+      m.visible = true;
+      m.position.copy(d.track[i].p);
+      n++;
+    }
+    for (let i = n; i < this.ballMeshes.length; i++) this.ballMeshes[i].visible = false;
+  }
+
+  /**
+   * Objeto solto que entra no azul temporal: vai para o passado. Ele sai do laranja no
+   * instante Td = agora − Δ e, de lá até agora, cai/quica/escorrega (simulado de uma vez
+   * contra o cenário). Entre Td e agora existem DOIS dele: o mais novo (a gravação, que
+   * acaba de entrar no azul) e o mais velho (o "duplo", que veio do laranja). O duplo
+   * aparece na vista do azul, existe de verdade (colide e aperta botões) se você voltar
+   * para dentro desse intervalo, e se funde ao objeto real no instante em que ele foi
+   * jogado. Agora, só existe o mais velho: o objeto real vai para onde o duplo chegou.
    */
   sendToPast(prop, blue) {
     const { portals, world } = this.ctx;
     const O = blue.partner;
     const delta = O.delta;
     if (!(delta > 0) || this.paused || this.sweep) return;
+    const Td = this.tw - delta;
+    if (Td < this.samples[0].t - 1e-6) return;
+    const k = this.props().indexOf(prop);
     const pos = prop.pos.clone();
     const vel = prop.vel.clone();
-    portals.carry(blue, pos, vel);
+    const { rot } = portals.carry(blue, pos, vel);
+    const quat = rot.clone().multiply(prop.quat);
     const h = (prop.half?.y ?? 0.3) * 0.95;
     pos.addScaledVector(O.normal, h + 0.05);
     const g = this.ctx.gravityAt?.(pos)?.clone() ?? new V3(0, -9.81, 0);
-    // Δ segundos de voo: gravidade, choque com o cenário (quique fraco e atrito no chão)
+    // Δ segundos de voo, em passos de 1/120 s; a pose fica guardada a cada quadro do relógio
+    const track = [];
     const dt = 1 / 120;
-    for (let t = 0; t < delta; t += dt) {
-      vel.addScaledVector(g, dt);
-      let move = vel.length() * dt;
-      if (move < 1e-6) continue;
-      const dir = vel.clone().normalize();
-      const hit = world.raycast(pos, dir, move + h);
-      if (hit && hit.dist < move + h) {
-        pos.addScaledVector(dir, Math.max(0, hit.dist - h - 0.002));
-        const vn = vel.dot(hit.normal);
-        vel.addScaledVector(hit.normal, -1.15 * vn);
-        if (hit.normal.dot(g) < -0.7 * g.length()) vel.multiplyScalar(Math.max(0, 1 - 8 * dt)); // atrito no chão
-        continue;
+    let next = 0;
+    for (let t = 0; t <= delta + 1e-9; t += dt) {
+      if (t >= next - 1e-9) {
+        track.push({ t: Td + t, p: pos.clone(), q: quat.clone() });
+        next += RATE;
       }
-      pos.addScaledVector(dir, move);
+      vel.addScaledVector(g, dt);
+      const move = vel.length() * dt;
+      if (move > 1e-6) {
+        const dir = vel.clone().normalize();
+        const hit = world.raycast(pos, dir, move + h);
+        if (hit && hit.dist < move + h) {
+          pos.addScaledVector(dir, Math.max(0, hit.dist - h - 0.002));
+          const vn = vel.dot(hit.normal);
+          vel.addScaledVector(hit.normal, -1.15 * vn);
+        } else pos.addScaledVector(dir, move);
+      }
+      // apoio: nunca dentro do chão; no chão, sem afundar e com atrito
+      const down = g.clone().normalize();
+      const floor = world.raycast(pos.clone().addScaledVector(down, -0.2), down, h + 0.22);
+      if (floor && floor.dist < h + 0.2) {
+        pos.addScaledVector(down, -(h + 0.2 - floor.dist));
+        const vd = vel.dot(down);
+        if (vd > 0) vel.addScaledVector(down, -vd);
+        vel.multiplyScalar(Math.max(0, 1 - 6 * dt));
+      }
     }
+    this.doubles ??= [];
+    this.doubles.push({ k, prop, from: Td, to: this.tw, track, mesh: null, box: null });
     this.free.add(prop); // sai de qualquer trilho de gravação
     this.driven.delete(prop);
-    prop.place(pos, prop.quat.clone(), { x: vel.x, y: vel.y, z: vel.z });
+    prop.place(pos, quat, { x: vel.x, y: vel.y, z: vel.z });
     this.ctx.fx.toPast?.(pos);
+  }
+
+  /** pose do duplo no instante t (ou null fora do intervalo dele) */
+  doubleAt(d, t) {
+    if (t < d.from - 1e-6 || t >= d.to) return null;
+    const i = Math.max(0, Math.min(d.track.length - 1, Math.floor((t - d.from) / RATE)));
+    const a = d.track[i];
+    const b = d.track[Math.min(i + 1, d.track.length - 1)];
+    const k = b === a ? 0 : Math.min(1, (t - a.t) / RATE);
+    return { p: a.p.clone().lerp(b.p, k), q: a.q.clone().slerp(b.q, k) };
+  }
+
+  doubleMesh(d) {
+    if (d.mesh) return d.mesh;
+    d.mesh = d.prop.mesh.clone(true);
+    d.mesh.traverse((o) => {
+      if (o.isLight) o.visible = false;
+    });
+    d.mesh.visible = false;
+    this.ctx.scene.add(d.mesh);
+    return d.mesh;
+  }
+
+  /** mostra o duplo numa pose (o modelo do objeto fica com o centro em p) */
+  poseDouble(d, st) {
+    const m = this.doubleMesh(d);
+    m.visible = !!st;
+    if (!st) return;
+    m.quaternion.copy(st.q);
+    m.position.copy(d.prop.meshOffset ?? new V3()).applyQuaternion(st.q).add(st.p);
+  }
+
+  /** a cada quadro: duplos visíveis e com colisão só dentro do intervalo deles */
+  updateDoubles() {
+    if (!this.doubles?.length) return;
+    const phys = this.ctx.world.physics;
+    const sample = this.samples[this.indexAt(this.tw)]?.w;
+    for (const d of this.doubles) {
+      const st = this.doubleAt(d, this.tw);
+      this.poseDouble(d, st);
+      // o objeto ainda não existia nessa parte da história (veio depois): só o duplo existe;
+      // no fim do intervalo, o objeto real reaparece onde o duplo chegou
+      const younger = sample?.props?.[d.k];
+      if (st && (!younger || younger.gone) && !d.prop.gone && !d.prop.held) {
+        d.prop.vanish();
+        d.hid = true;
+      } else if (!st && d.hid && this.tw >= d.to) {
+        d.hid = false;
+        const end = d.track[d.track.length - 1];
+        d.prop.gone = false;
+        d.prop.body?.setEnabled(true);
+        d.prop.place(end.p, end.q);
+      }
+      const h = d.prop.half ?? new V3(0.3, 0.3, 0.3);
+      if (st) {
+        if (!d.box && phys?.addBox) {
+          d.box = { min: st.p.clone().sub(h), max: st.p.clone().add(h) };
+          phys.addBox(d.box, true);
+        }
+        if (d.box) {
+          d.box.min.copy(st.p).sub(h);
+          d.box.max.copy(st.p).add(h);
+          phys.moveBox(d.box);
+        }
+      } else if (d.box) this.dropDoubleBody(d);
+    }
+    // história velha demais: esquece
+    this.doubles = this.doubles.filter((d) => {
+      if (this.tw - d.to < KEEP) return true;
+      this.dropDouble(d);
+      return false;
+    });
+  }
+
+  dropDoubleBody(d) {
+    const phys = this.ctx.world.physics;
+    if (d.box?.collider && phys?.world) {
+      phys.ents.delete(d.box.collider.handle);
+      if (d.box.kbody) phys.world.removeRigidBody(d.box.kbody);
+      else phys.world.removeCollider(d.box.collider, false);
+    }
+    d.box = null;
+  }
+
+  dropDouble(d) {
+    this.dropDoubleBody(d);
+    if (d.mesh) this.ctx.scene.remove(d.mesh);
   }
 
   // ------------------------------------------------------------------ o passado visto pelo azul e mirado pelo laranja
@@ -1070,10 +1474,15 @@ export class Chronos {
     });
     this._pastSelf ??= this.ctx.makeGhost();
     this._pastSelf.set(this.feetOf(s.p, s.up), s.yaw, s.up, s.mv, t, dt, 0.9);
+    // objetos mandados para o passado: o duplo deles, como estava então
+    for (const d of this.doubles ?? []) this.poseDouble(d, this.doubleAt(d, T));
+    this.showBallDoubles(T);
   }
 
   endPast() {
     this.ctx.beams?.pastView(false);
+    for (const d of this.doubles ?? []) this.poseDouble(d, this.doubleAt(d, this.tw));
+    for (const m of this.ballMeshes ?? []) m.visible = false;
     for (const g of this._hide ?? []) g.visible = true;
     this._hide = null;
     this._undoPast?.();
@@ -1099,6 +1508,8 @@ export class Chronos {
       if (res.ok) {
         portals.orange.delta = delta;
         portals.orange.fixed = false;
+        portals.orange.placedTw = this.tw; // antes disso, as bolas da história contam pelas fotos
+        this.pastHits = new Set();
       }
       return res;
     });
@@ -1187,6 +1598,16 @@ export class Chronos {
     this.tw = this.samples[i].t;
     this.next = this.tw + RATE;
     this.arrival = this.tw;
+    // bolas mandadas ao passado que estão no ar no instante de destino: existem de verdade
+    for (const d of this.ballDoubles ?? []) {
+      if (this.tw < d.from - 1e-6 || this.tw >= d.to) continue;
+      const k = Math.max(0, Math.min(d.track.length - 2, Math.floor((this.tw - d.from) / RATE)));
+      const a = d.track[k].p;
+      const b = d.track[k + 1]?.p ?? a;
+      const v = b.clone().sub(a).divideScalar(RATE);
+      if (v.lengthSq() > 0.01) this.ctx.energy.spawnFree(a.clone(), v, 10);
+    }
+    this.ballDoubles = (this.ballDoubles ?? []).filter((d) => d.from > this.tw);
     // 5) os portais se desfazem; o mundo "rebobina" ao seu redor
     portals.fizzle();
     this.paused = false;
@@ -1202,6 +1623,7 @@ export class Chronos {
     return {
       samples: this.samples,
       clones: this.clones.slice(),
+      doubles: (this.doubles ?? []).slice(),
       tw: this.tw,
       next: this.next,
       arrival: this.arrival,
@@ -1302,6 +1724,9 @@ export class Chronos {
     const { player, portals } = this.ctx;
     this.ctx.fx.paradox?.(why, at);
     for (const c of this.clones) if (!cp.clones.includes(c)) this.dropClone(c);
+    // objetos mandados ao passado dentro do loop desfeito: não aconteceu
+    for (const d of this.doubles ?? []) if (!cp.doubles?.includes(d)) this.dropDouble(d);
+    this.doubles = (this.doubles ?? []).filter((d) => cp.doubles?.includes(d));
     this.sweep?.undo?.();
     this.sweep = null;
     this.resetDriven();

@@ -327,6 +327,12 @@ function timeRing(pos, normal, color, life = 0.8, size = 1.6, ellipse = false) {
 }
 
 const chronosFx = {
+  caught() {
+    sfx.caught();
+  },
+  toast(m) {
+    toast(m);
+  },
   pause(on) {
     on ? sfx.freeze() : sfx.unfreeze();
     post.shockwave();
@@ -2289,6 +2295,7 @@ function update(dt, t) {
     hitPlayer: () => die(),
     props: () => [...cubes, ...turrets],
     intoPast: (p, O) => relogio?.ballIntoPast(p, O),
+    toPast: relogio ? (p, P) => relogio.ballToPast(p, P) : null,
   });
   relogio?.pastPellets(); // bolas do passado que entraram no laranja temporal saem pelo azul
 
@@ -2307,8 +2314,27 @@ function update(dt, t) {
     const eye = player.eye();
     let shotsTaken = 0;
     let anySees = false;
+    // alvos pelos portais: você do outro lado de um par comum; pelo azul temporal, o seu
+    // eu do passado (acertá-lo machuca você agora: era você)
+    const via = [];
+    for (const P of [portals.blue, portals.orange]) {
+      if (!P.placed || !portals.isLinked(P)) continue;
+      if (P.delta > 0) continue; // o laranja do passado não existe no presente
+      if (P.partner.delta > 0) {
+        const me = relogio?.pastSelfEye?.(P.partner.delta);
+        if (me) via.push({ real: me, P, Q: P.partner, past: true });
+      } else via.push({ real: eye, P, Q: P.partner });
+    }
+    // torretas do passado (como estavam Δ s atrás) que viam o laranja: as balas saem do azul agora
+    if (relogio) {
+      const past = relogio.pastTurretShots?.(wdt, eye) ?? 0;
+      if (past) {
+        shotsTaken += past;
+        sfx.turretShot(portals.blue.center.distanceTo(eye));
+      }
+    }
     for (const t of turrets) {
-      const shots = t.update(wdt, world, portals, gravityAt, eye, cubes);
+      const shots = t.update(wdt, world, portals, gravityAt, eye, cubes, via);
       if (t.spottedNow) anySees = true;
       // bipes de alvo encontrado / perdido e o desligar
       if (t.spottedNow && !t.wasSpotted) sfx.turretSpot();
@@ -2328,6 +2354,10 @@ function update(dt, t) {
       if (shots) {
         shotsTaken += shots;
         sfx.turretShot(t.pos.distanceTo(eye));
+        if (t.viaPast && !t.saidPast) {
+          t.saidPast = true;
+          toast('A torreta acertou o seu eu do passado pelo azul — e era você.');
+        }
       }
     }
     if (anySees && !spottedOnce) {

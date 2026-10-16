@@ -219,6 +219,17 @@ export class EnergySystem {
         rest -= step;
         const dir = p.vel.clone().normalize();
         const next = p.pos.clone().addScaledVector(dir, step);
+        // azul temporal: a bola vai para o passado (o relógio simula; paradoxo = ela some)
+        const TB = p.cooldown <= 0 && on.toPast ? portals.temporalCrossing?.(p.pos, next) : null;
+        if (TB) {
+          const res = on.toPast(p, TB);
+          if (res) {
+            if (res === 'paradox') on.pop?.(p.pos.clone());
+            this.kill(p);
+            entered = true;
+            break;
+          }
+        }
         const P = p.cooldown <= 0 ? portals.crossing(p.pos, next) : null;
         if (P) {
           p.pos.copy(next);
@@ -249,7 +260,7 @@ export class EnergySystem {
         const intoPortal =
           hit &&
           portals.list.some((Q) => {
-            if (!portals.isLinked(Q) || Q.delta > 0 || Q.partner.delta > 0 || Q.box !== hit.box) return false;
+            if (!portals.isLinked(Q) || Q.delta > 0 || (Q.partner.delta > 0 && !on.toPast) || Q.box !== hit.box) return false;
             const l = Q.local(hit.point);
             return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1;
           });

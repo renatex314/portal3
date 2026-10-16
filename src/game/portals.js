@@ -746,6 +746,30 @@ export class PortalSystem {
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */
+  /** a parede do azul temporal, se `p` está perto da boca dele (o objeto segurado a atravessa) */
+  temporalWallNear(p) {
+    for (const P of this.list) {
+      if (!this.isLinked(P) || !P.box || P.delta > 0 || !(P.partner.delta > 0)) continue;
+      const l = P.local(p);
+      if (l.z < 1.2 && l.z > -1.5 && Math.abs(l.x) < PORTAL_A + 0.4 && Math.abs(l.y) < PORTAL_B + 0.4) return P.box;
+    }
+    return null;
+  }
+
+  /** o segmento a→b cruza a boca de um azul temporal (o par com o laranja no passado)? */
+  temporalCrossing(a, b) {
+    for (const P of this.list) {
+      if (!this.isLinked(P) || P.delta > 0 || !(P.partner.delta > 0)) continue;
+      const sa = _v.subVectors(a, P.center).dot(P.normal);
+      const sb = _v.subVectors(b, P.center).dot(P.normal);
+      if (sa > 0 && sb <= 0) {
+        const l = P.local(_v.copy(a).lerp(b, sa / (sa - sb)));
+        if ((l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1) return P;
+      }
+    }
+    return null;
+  }
+
   /** `who`: true = o jogador; um objeto (Prop); nada = bola/tiro */
   crossing(a, b, who = false) {
     for (const P of this.list) {

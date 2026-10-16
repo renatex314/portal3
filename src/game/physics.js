@@ -239,7 +239,7 @@ export class Physics {
   _skip(prop, other) {
     if (prop.gone) return true;
     if (other.kind === 'player') return prop.held;
-    if (other.kind === 'static') return prop.mouths.length > 0 && this.portals.passes(other.box, prop.mouths, prop.min, prop.max);
+    if (other.kind === 'static') return (!!prop.passWall && other.box === prop.passWall) || (prop.mouths.length > 0 && this.portals.passes(other.box, prop.mouths, prop.min, prop.max));
     if (other.kind === 'dyn') return other.prop.gone;
     return false;
   }
@@ -266,6 +266,8 @@ export class Physics {
         p.min = (p.min ?? new THREE.Vector3()).copy(p.prevCenter).min(_p).subScalar(p.radius);
         p.max = (p.max ?? new THREE.Vector3()).copy(p.prevCenter).max(_p).addScalar(p.radius);
         p.mouths = this.portals.mouths(p.prevCenter, false, _v.length());
+        // segurado perto do azul temporal: atravessa a parede dele (vai junto no salto)
+        p.passWall = p.held ? this.portals.temporalWallNear?.(p.prevCenter) ?? null : null;
         // corpo "dormindo" não reavalia contatos: na boca de um portal, acorda
         if (p.mouths.length && p.body.isSleeping()) p.body.wakeUp();
         pre(p, h);
