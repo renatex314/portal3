@@ -413,8 +413,24 @@ export class CampaignRuntime {
     }
     const tmp = new THREE.Matrix4();
     const q = new THREE.Quaternion();
+    n.realBase = base;
     n.tick = (dt) => {
       obj.mixer.update(dt);
+      if (n.attach) {
+        const P = n.attach.parent;
+        P.realCont.updateMatrixWorld(true);
+        const bone = P.real.bones[n.attach.att.bone];
+        if (bone) cont.matrix.copy(bone.matrixWorld).multiply(n.attach.local);
+        return;
+      }
+      if (n.reparent) {
+        cont.matrix.copy(n.realBase);
+        if (n.reparent.node) {
+          const o = this.totalOffset(n.reparent.node).clone().sub(n.reparent.ref);
+          cont.matrix.premultiply(tmp.makeTranslation(o.x, o.y, o.z));
+        }
+        return;
+      }
       const off = this.parentOffset(n);
       cont.matrix.copy(base);
       if (spin) {
@@ -501,8 +517,10 @@ export class CampaignRuntime {
   generic(n, input, ev) {
     switch (input) {
       case 'kill':
-      case 'killhierarchy':
         this.kill(n);
+        return true;
+      case 'killhierarchy':
+        this.killTree(n);
         return true;
       case 'fireuser1':
       case 'fireuser2':
@@ -518,6 +536,17 @@ export class CampaignRuntime {
       }
     }
     return false;
+  }
+
+  /** KillHierarchy: a entidade e tudo o que está preso nela (o núcleo no trilho que desce) */
+  killTree(n, depth = 0) {
+    this.kill(n);
+    if (!n.name || depth > 8) return;
+    for (const m of this.nodes) {
+      if (m.dead || m === n) continue;
+      const pn = (m.curParentName ?? m.e.kv.get('parentname') ?? '').toLowerCase();
+      if (pn === n.name) this.killTree(m, depth + 1);
+    }
   }
 
   kill(n) {
@@ -1132,6 +1161,26 @@ const INPUTS = {
       this.queue = this.queue.filter((q) => !(q.caller === n && q.input === 'FireAnimDone'));
       this.schedule(dur, '!self', 'FireAnimDone', '', ev?.activator ?? null, n);
     } else if (input === 'fireanimdone') this.fire(n, 'onanimationdone');
+    if (n.real && /^(setparentattachment|setparentattachmentmaintainoffset)$/.test(input)) {
+      // preso num ponto de encaixe do modelo da mãe (os núcleos no corpo da GLaDOS):
+      // anda junto com a animação dela
+      const parent = this.find(n.curParentName ?? n.e.kv.get('parentname') ?? '', n, null).find((x) => x.real);
+      const att = parent?.real.model.attachments?.find((a) => a.name === param.trim().toLowerCase());
+      if (parent && att) {
+        const m = att.local;
+        n.attach = { parent, att, local: new THREE.Matrix4().set(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], 0, 0, 0, 1) };
+      }
+      return;
+    }
+    if (n.real && (input === 'setparent' || input === 'clearparent')) {
+      // solto do encaixe: continua de onde está e passa a seguir a mãe nova (um trilho)
+      n.realBase = n.realCont.matrix.clone();
+      n.attach = null;
+      n.curParentName = input === 'setparent' ? param.trim().toLowerCase() : '';
+      const parent = input === 'setparent' ? this.find(param, n, null).find((x) => x.doors?.length || x.offset) : null;
+      n.reparent = parent ? { node: parent, ref: this.totalOffset(parent).clone() } : { node: null, ref: null };
+      return;
+    }
     if (n.real) {
       const anim = param.trim().toLowerCase();
       if (input === 'setdefaultanimation') {

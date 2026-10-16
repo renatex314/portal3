@@ -79,6 +79,17 @@ export function parseAnimatedModel(mdl, vvd, vtx, ani = null) {
     });
   }
 
+  // pontos de encaixe (attachments): osso + matriz local 3×4
+  const nAtt = md.getInt32(240, true);
+  const attIdx = md.getInt32(244, true);
+  const attachments = [];
+  for (let i = 0; i < nAtt; i++) {
+    const o = attIdx + i * 92;
+    const m = [];
+    for (let k = 0; k < 12; k++) m.push(md.getFloat32(o + 12 + k * 4, true));
+    attachments.push({ name: cstr(mdl, o + md.getInt32(o, true)).toLowerCase(), bone: md.getInt32(o + 8, true), local: m });
+  }
+
   // vértices (VVD), com os pesos
   const vd = new DataView(vvd.buffer, vvd.byteOffset, vvd.byteLength);
   if (vd.getUint32(0, true) !== 0x56534449) return null;
@@ -242,7 +253,7 @@ export function parseAnimatedModel(mdl, vvd, vtx, ani = null) {
     if (!A) continue;
     sequences.push({ name, fps: A.fps || 30, frames: A.frames, loop: !!(flags & 1) || A.loop, pos: A.pos, rot: A.rot });
   }
-  return { textures, dirs, skins, bones, groups: [...bySlot.values()].filter((g) => g.indices.length), sequences };
+  return { textures, dirs, skins, bones, attachments, groups: [...bySlot.values()].filter((g) => g.indices.length), sequences };
 }
 
 /** um quadro de animação (dados RLE por osso) sobre as poses de repouso P, Q */

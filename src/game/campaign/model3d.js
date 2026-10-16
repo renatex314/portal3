@@ -166,7 +166,7 @@ export function buildModel(model, read, { skin = 0, animated = true } = {}) {
       clips.set(s.name, new THREE.AnimationClip(s.name, s.frames > 1 ? (s.frames - 1) / s.fps : 0, tracks));
     }
   const mixer = new THREE.AnimationMixer(root);
-  return { root, mixer, clips, seqs, bones };
+  return { root, mixer, clips, seqs, bones, model };
 }
 
 /** container que leva o modelo (Source, polegadas) para o mundo daqui, na pose da entidade */

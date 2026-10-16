@@ -2363,7 +2363,7 @@ function update(dt, t) {
 
   // amostra em cima de um botão acende a janela do núcleo
   for (const c of cubes) {
-    c.mesh.userData.mixer?.update(wdt); // núcleo do original: o olho se mexe
+    c.mesh.coreMixer?.update(wdt); // núcleo do original: o olho se mexe
     const gl = c.mesh.userData.glow;
     if (!gl) continue;
     const on = world.buttons.some((b) => Math.hypot(c.pos.x - b.pos.x, c.pos.z - b.pos.z) < 0.85 && c.pos.y - b.pos.y > 0 && c.pos.y - b.pos.y < 0.9);

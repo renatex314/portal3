@@ -105,7 +105,7 @@ export function realCoreModel(type = 0) {
   const g = new THREE.Group();
   g.scale.setScalar(0.8); // cabe no corpo físico do cubo
   g.add(inner);
-  g.userData.mixer = obj.mixer;
+  g.coreMixer = obj.mixer; // fora do userData: o clone do objeto (efeito de queima) copia o userData por JSON
   return g;
 }
 
