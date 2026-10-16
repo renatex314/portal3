@@ -41,8 +41,7 @@ const NOISE = /* glsl */ `
 const displayFS = /* glsl */ `
   uniform sampler2D map;
   uniform vec3 uCenter, uRight, uUp, uNormal, uColor;
-  uniform float uA, uB, uLinked, uOpen, uTime, uPast, uStatic, uMirror;
-  uniform mat4 uTexMat;
+  uniform float uA, uB, uLinked, uOpen, uTime, uPast, uStatic;
   uniform vec2 uRes;
   varying vec3 vW;
   ${NOISE}
@@ -57,18 +56,14 @@ const displayFS = /* glsl */ `
     vec2 e = pl / (vec2(uA, uB) * max(uOpen, 0.001));
     float r = length(e);
     if (r > 1.0) discard;
-    vec3 view;
-    if (uMirror > 0.5) {
-      // espelho: a cena vista pela câmera refletida no plano do portal
-      vec4 pc = uTexMat * vec4(q, 1.0);
-      view = texture2D(map, pc.xy / pc.w * 0.5 + 0.5).rgb;
-    } else view = texture2D(map, gl_FragCoord.xy / uRes).rgb;
+    // laranja temporal com laser saindo dele: só estática (sem vista nenhuma por baixo)
+    vec3 view = uStatic > 0.0 ? vec3(0.04) : texture2D(map, gl_FragCoord.xy / uRes).rgb;
     if (uStatic > 0.0) {
-      // muita estática por cima (laser indo/vindo pelo tempo): chuvisco, faixas e rolagem
+      // muita estática (laser indo/vindo pelo tempo): chuvisco, faixas e rolagem
       float sn = h(floor(gl_FragCoord.xy * 0.5) + floor(uTime * 30.0) * 17.31);
       float band = step(0.9, fract(gl_FragCoord.y * 0.011 + uTime * 1.7)) * 0.7;
       float roll = 0.5 + 0.5 * sin(gl_FragCoord.y * 0.09 + uTime * 47.0);
-      view = mix(view, vec3(sn), 0.55 * uStatic) + band * uColor * 0.6 * uStatic;
+      view = mix(view, vec3(sn), 0.75 * uStatic) + band * uColor * 0.6 * uStatic;
       view *= 0.8 + 0.2 * roll;
       view = mix(view, view * uColor * 1.5, 0.3 * uStatic);
     }
@@ -215,8 +210,6 @@ class Portal {
       uLinked: { value: 0 },
       uPast: { value: 0 },
       uStatic: { value: 0 },
-      uMirror: { value: 0 },
-      uTexMat: { value: new THREE.Matrix4() },
       uOpen: { value: 0 },
       uTime: { value: 0 },
       uRes: { value: new THREE.Vector2(size.x, size.y) },
@@ -384,10 +377,9 @@ export class PortalSystem {
     this.remote = new Map(); // id do jogador → { blue, orange }
     // laranjas "de estática": onde um laser vai/vem pelo tempo (no presente, o laranja que
     // está no passado; no passado, a parede de onde sai o laser do futuro). Só imagem:
-    // espelham o ambiente sob muita estática e não levam a lugar nenhum
+    // só estática (sem espelho) e não levam a lugar nenhum
     this.statics = [0, 1].map(() => new Portal('orange', scene, renderer, SLOT_COLORS[0][1]));
     this.staticFrames = [];
-    this.mcam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.01, 1000);
     this.vcam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.01, 1000);
     this.vcam.matrixAutoUpdate = false;
     this.vcam.matrixWorldAutoUpdate = false;
@@ -968,7 +960,6 @@ export class PortalSystem {
       S.uniforms.uOpen.value = S.open;
       S.uniforms.uLinked.value = 1;
       S.uniforms.uStatic.value = 1;
-      S.uniforms.uMirror.value = 1;
       S.rimMat.uniforms.uFlash.value = 0;
       S.light.intensity = 3 + 2 * Math.sin(t * 23) * Math.sin(t * 7);
     });
@@ -1055,10 +1046,7 @@ export class PortalSystem {
     _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_pm);
     const todo = this.list.filter((P) => this.isLinked(P) && P.delta === 0 && _frustum.intersectsSphere(_sphere.set(P.center, PORTAL_B * 1.2)));
-    if (!todo.length) {
-      this.renderStatics();
-      return;
-    }
+    if (!todo.length) return;
     const prevTarget = r.getRenderTarget();
     const prevClip = r.clippingPlanes;
     // os laranjas de estática ficam no plano do laranja: nas vistas pelos portais eles
@@ -1105,52 +1093,6 @@ export class PortalSystem {
       P.read = 1 - P.read;
       P.uniforms.map.value = P.rt[P.read].texture;
     }
-    this.renderStatics();
   }
 
-  /** espelho dos laranjas de estática (câmera refletida no plano deles, como um refletor) */
-  renderStatics() {
-    const r = this.renderer;
-    const cam = this.camera;
-    const live = this.statics.filter((S) => S.group.visible && _frustum.intersectsSphere(_sphere.set(S.center, PORTAL_B * 1.2)));
-    if (!live.length) return;
-    const prevTarget = r.getRenderTarget();
-    const prevClip = r.clippingPlanes;
-    const camPos = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
-    const fwd = new THREE.Vector3(0, 0, -1).transformDirection(cam.matrixWorld);
-    const up = new THREE.Vector3(0, 1, 0).transformDirection(cam.matrixWorld);
-    const reflect = (p, n, c) => p.clone().addScaledVector(n, -2 * p.clone().sub(c).dot(n));
-    for (const S of live) {
-      const n = S.normal;
-      const c = S.center;
-      // atrás do espelho não há reflexo
-      if (camPos.clone().sub(c).dot(n) <= 0) continue;
-      const m = this.mcam;
-      m.fov = cam.fov;
-      m.aspect = cam.aspect;
-      m.near = cam.near;
-      m.far = cam.far;
-      m.projectionMatrix.copy(cam.projectionMatrix);
-      m.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
-      m.position.copy(reflect(camPos, n, c));
-      m.up.copy(up.clone().addScaledVector(n, -2 * up.dot(n)));
-      m.lookAt(reflect(camPos.clone().add(fwd), n, c));
-      m.updateMatrixWorld();
-      m.matrixWorldInverse.copy(m.matrixWorld).invert();
-      this.clip.setFromNormalAndCoplanarPoint(n, c);
-      r.clippingPlanes = [this.clip];
-      const was = S.group.visible;
-      S.group.visible = false;
-      r.setRenderTarget(S.rt[1 - S.read]);
-      r.setScissorTest(false);
-      r.clear();
-      r.render(this.scene, m);
-      S.group.visible = was;
-      S.read = 1 - S.read;
-      S.uniforms.map.value = S.rt[S.read].texture;
-      S.uniforms.uTexMat.value.multiplyMatrices(m.projectionMatrix, m.matrixWorldInverse);
-    }
-    r.clippingPlanes = prevClip;
-    r.setRenderTarget(prevTarget);
-  }
 }
