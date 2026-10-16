@@ -120,45 +120,88 @@ export class CampaignRuntime {
       if (!n) continue;
       n.rotGroup = g;
       const root = nodeOf.get(built.movingRoot?.(g.e));
-      const base = (s) => (s._base ??= { min: s.min.clone(), max: s.max.clone() });
-      const collide = (s, on) => {
-        s.disabled = !on;
-        s.collider?.setEnabled(on);
+      const base = (sd) => (sd._base ??= { min: sd.min.clone(), max: sd.max.clone() });
+      const collide = (sd, on) => {
+        sd.disabled = !on;
+        sd.collider?.setEnabled(on);
       };
-      const qk = new THREE.Quaternion();
-      const ID = new THREE.Quaternion();
+      const rad = THREE.MathUtils.degToRad(g.deg);
+      // cada "unidade" (peça presa direto na porta, com as dela) guarda os giros já
+      // assados (catraca) e se está presa; a porta em si é a unidade ''
+      g.units = new Map();
+      const unit = (name) => {
+        if (!g.units.has(name)) g.units.set(name, { count: 0, attached: true });
+        return g.units.get(name);
+      };
+      for (const p of g.parts) {
+        unit(p.unit);
+        const pn = nodeOf.get(p.e);
+        if (pn && p.unit && (pn.name === p.unit || `#${this.bsp.entities.indexOf(p.e)}` === p.unit)) pn.rotUnit = { g, name: p.unit };
+      }
+      // lançadores presos numa peça do grupo giram junto (posição, direção e o soquete)
+      const reaches = (e) => {
+        let cur = e;
+        for (let i = 0; i < 16 && cur; i++) {
+          const pn = (cur.kv.get('parentname') ?? '').toLowerCase();
+          if (!pn) return false;
+          cur = this.bsp.entities.find((x) => (x.kv.get('targetname') ?? '').toLowerCase() === pn);
+          if (cur === g.e) return true;
+        }
+        return false;
+      };
+      g.launchers = [];
+      for (const [e, L] of this.launchers)
+        if (reaches(e)) g.launchers.push({ L, unit: g.unitOf(e), base: { pos: L.pos.clone(), dir: L.dir.clone(), gpos: L.group.position.clone(), gq: L.group.quaternion.clone() } });
       g.k = 0;
-      let lastK = -1;
+      const qu = new THREE.Quaternion();
+      const last = new Map();
       const d = { id: `rot-${g.e.kv.get('targetname') ?? ''}`, box: g.closed[0], plain: false, open: 0, target: 0, baseMin: new THREE.Vector3(), baseMax: new THREE.Vector3(), mesh: g.closed[0].mesh, delta: new THREE.Vector3(), offset: new THREE.Vector3() };
+      const turnOf = (name) => {
+        const U = unit(name);
+        return U.count + (U.attached ? g.k : 0);
+      };
+      const about = (p, q, off) => p.clone().sub(g.hinge).applyQuaternion(q).add(g.hinge).add(off);
       d.drive = (dt) => {
         const off = root ? this.totalOffset(root) : ZERO;
         const rate = Math.max(1, n.speed ?? num(g.e, 'speed', 100)) / Math.max(1, Math.abs(g.deg));
         const target = n.isOpen ? 1 : 0;
         g.k += Math.sign(target - g.k) * Math.min(Math.abs(target - g.k), rate * dt);
-        // portal num pedaço que vai girar some (como no original)
-        if (g.k !== lastK && lastK >= 0)
-          for (const P of this.ctx.portals.list ?? [])
-            if (P.placed && (g.closed.includes(P.box) || g.open.includes(P.box))) P.remove();
-        lastK = g.k;
-        qk.slerpQuaternions(ID, g.q, g.k);
-        const isOpen = g.k >= 0.5;
-        for (const s of g.closed) {
-          const b = base(s);
-          s.min.copy(b.min).add(off);
-          s.max.copy(b.max).add(off);
-          s.mesh.quaternion.copy(qk);
-          s.mesh.position.copy(g.hinge).sub(g.hinge.clone().applyQuaternion(qk)).add(off);
-          collide(s, !isOpen);
-          w.physics?.moveBox(s);
+        for (const p of g.parts) {
+          const x = turnOf(p.unit);
+          // portal num pedaço que vai girar some (como no original)
+          if (last.has(p) && last.get(p) !== x)
+            for (const P of this.ctx.portals.list ?? []) if (P.placed && (p.closed.includes(P.box) || p.states.some((st) => st?.includes(P.box)))) P.remove();
+          last.set(p, x);
+          qu.setFromAxisAngle(g.axis, x * rad);
+          const st = (((Math.round(x) % g.turns) + g.turns) % g.turns);
+          for (const sd of p.closed) {
+            const b = base(sd);
+            sd.min.copy(b.min).add(off);
+            sd.max.copy(b.max).add(off);
+            sd.mesh.quaternion.copy(qu);
+            sd.mesh.position.copy(g.hinge).sub(g.hinge.clone().applyQuaternion(qu)).add(off);
+            collide(sd, st === 0);
+            w.physics?.moveBox(sd);
+          }
+          p.states.forEach((list, k) => {
+            if (!list) return;
+            for (const sd of list) {
+              const b = base(sd);
+              sd.min.copy(b.min).add(off);
+              sd.max.copy(b.max).add(off);
+              sd.mesh.position.copy(off);
+              sd.mesh.visible = false; // só colisão: o visual é o das peças girando
+              collide(sd, st === k);
+              w.physics?.moveBox(sd);
+            }
+          });
         }
-        for (const s of g.open) {
-          const b = base(s);
-          s.min.copy(b.min).add(off);
-          s.max.copy(b.max).add(off);
-          s.mesh.position.copy(off);
-          s.mesh.visible = false; // só colisão: o visual é o das peças girando
-          collide(s, isOpen);
-          w.physics?.moveBox(s);
+        for (const l of g.launchers) {
+          qu.setFromAxisAngle(g.axis, turnOf(l.unit) * rad);
+          l.L.pos.copy(about(l.base.pos, qu, off));
+          l.L.dir.copy(l.base.dir).applyQuaternion(qu);
+          l.L.group.position.copy(about(l.base.gpos, qu, off));
+          l.L.group.quaternion.copy(qu).multiply(l.base.gq);
         }
       };
       w.doors.push(d);
@@ -894,6 +937,49 @@ CampaignRuntime.prototype.nextTrack = function (node, dir) {
   return this.nodes.find((x) => x.cls === 'path_track' && (x.e.kv.get('target') ?? '').toLowerCase() === me) ?? null;
 };
 
+/** uma cópia de carrinho do molde: cria o nó dele na primeira vez e o põe para andar */
+CampaignRuntime.prototype.spawnTrain = function (pool) {
+  const c = pool.find((x) => !x.node || x.node.dead);
+  if (!c) return;
+  const w = this.ctx.world;
+  if (!c.node) {
+    // entidade só deste carrinho (mesmo nome: o "!activator.KillHierarchy" do fim acha ele)
+    const e = { classname: 'func_tracktrain', kv: new Map(c.train.kv), outputs: c.train.outputs };
+    this.brushOf.set(e, { e, solids: c.trainSolids, bounds: null });
+    const n = this.add(e);
+    c.node = n;
+    // as peças presas (o piso, o casco do modelo) seguem o carrinho
+    const base = c.children.map((sd) => ({ min: sd.min.clone(), max: sd.max.clone() }));
+    const prev = new THREE.Vector3();
+    w.doors.push({
+      id: `train-kids-${pool.indexOf(c)}`, box: c.children[0] ?? c.trainSolids[0], plain: false, open: 0, target: 0,
+      baseMin: new THREE.Vector3(), baseMax: new THREE.Vector3(), mesh: (c.children[0] ?? c.trainSolids[0]).mesh,
+      delta: new THREE.Vector3(), offset: new THREE.Vector3(),
+      drive() {
+        if (n.dead || !n.offset) return;
+        this.delta.subVectors(n.offset, prev);
+        prev.copy(n.offset);
+        c.children.forEach((sd, k) => {
+          sd.min.copy(base[k].min).add(n.offset);
+          sd.max.copy(base[k].max).add(n.offset);
+          sd.mesh.position.copy(n.offset);
+          w.physics?.moveBox(sd);
+        });
+      },
+    });
+    n.onKill = () => {
+      n.dir = 0;
+      c.children.forEach((sd) => w.setSolidEnabled(sd, false));
+    };
+  }
+  const n = c.node;
+  n.dead = false;
+  for (const sd of [...c.trainSolids, ...c.children]) w.setSolidEnabled(sd, true);
+  n.speed = n.speedMax;
+  n.init?.();
+  n.dir = 1;
+};
+
 CampaignRuntime.prototype.spawnTemplate = function (tpl, at) {
   const origin = vecKV(tpl.e, 'origin');
   for (const name of tpl.templates)
@@ -1191,6 +1277,19 @@ const INPUTS = {
     }
   },
   func_brush(n, input) {
+    // peça presa numa porta giratória (catraca): solta, fica com o giro; presa, volta a girar junto
+    if (n.rotUnit && (input === 'clearparent' || input === 'setparent')) {
+      const { g, name } = n.rotUnit;
+      const U = g.units.get(name);
+      if (input === 'clearparent' && U.attached) {
+        U.count += Math.round(g.k);
+        U.attached = false;
+      } else if (input === 'setparent' && !U.attached) {
+        U.count -= Math.round(g.k);
+        U.attached = true;
+      }
+      return;
+    }
     const b = this.brushOf.get(n.e);
     if (!b) return;
     const on = input === 'enable' ? true : input === 'disable' ? false : input === 'toggle' ? !!b.solids[0]?.disabled : null;
@@ -1227,6 +1326,13 @@ const INPUTS = {
   env_entity_maker(n, input) {
     if (input !== 'forcespawn') return;
     const tpl = this.find(n.e.kv.get('entitytemplate') ?? '', n, null).find((x) => x.cls === 'point_template');
+    // molde com carrinho: solta a próxima cópia livre, no começo do trilho, andando
+    const pool = tpl && this.built.trainPools?.get(tpl.name);
+    if (pool) {
+      this.spawnTrain(pool);
+      this.fire(n, 'onentityspawned');
+      return;
+    }
     if (tpl) {
       this.spawnTemplate(tpl, vecKV(n.e, 'origin'));
       this.fire(n, 'onentityspawned');

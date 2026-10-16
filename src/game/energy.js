@@ -23,6 +23,33 @@ function glowTexture() {
   return new THREE.CanvasTexture(cv);
 }
 
+const _z = new THREE.Vector3(0, 0, 1);
+const HINT_GEO = new THREE.PlaneGeometry(1.6, 1.6);
+let HINT_MAT = null;
+/** brilho verde redondo, suave nas bordas, pulsando devagar */
+function hintMaterial() {
+  HINT_MAT ??= new THREE.ShaderMaterial({
+    uniforms: { uT: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `
+      uniform float uT; varying vec2 vUv;
+      void main(){
+        float r = length(vUv - 0.5) * 2.0;
+        float glow = smoothstep(1.0, 0.0, r);
+        float ring = smoothstep(0.08, 0.0, abs(r - 0.62)) * 0.6;
+        float a = (glow * glow * 0.32 + ring * 0.35) * (0.75 + 0.25 * sin(uT * 2.2));
+        gl_FragColor = vec4(vec3(0.35, 1.6, 0.6) * a, a);
+      }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    toneMapped: false,
+  });
+  return HINT_MAT;
+}
+
 export class EnergySystem {
   constructor(scene) {
     this.scene = scene;
@@ -176,7 +203,37 @@ export class EnergySystem {
    * avança as bolas; `player` = { min, max } do corpo. Eventos em `on`:
    * bounce(pos), caught(catcher), pop(pos), hitPlayer()
    */
+  /**
+   * Dica de mira: uma luz verde suave na parede em frente a cada lançador e receptor
+   * (onde um portal ali leva/recebe a bola). Só aparece em superfície que aceita portal.
+   */
+  updateHints(world, t) {
+    this.hintT = (this.hintT ?? 0) - 1;
+    const recast = this.hintT <= 0;
+    if (recast) this.hintT = 12; // refaz o raio a cada ~12 quadros (os lançadores podem girar)
+    const items = [...world.launchers.map((L) => ({ o: L, from: L.pos, dir: L.dir })), ...world.catchers.map((C) => ({ o: C, from: C.pos, dir: C.normal }))];
+    for (const { o, from, dir } of items) {
+      if (!o.hint) {
+        o.hint = new THREE.Mesh(HINT_GEO, hintMaterial());
+        o.hint.renderOrder = 4;
+        o.hint.visible = false;
+        world.group.add(o.hint);
+      }
+      if (recast) {
+        const hit = world.raycast(from.clone().addScaledVector(dir, 0.3), dir, 60);
+        const ok = hit && (hit.box.portalAt ? hit.box.portalAt(hit.normal) : hit.box.portalable);
+        o.hint.visible = !!ok;
+        if (ok) {
+          o.hint.position.copy(hit.point).addScaledVector(hit.normal, 0.02);
+          o.hint.quaternion.setFromUnitVectors(_z, hit.normal);
+        }
+      }
+      if (o.hint.visible) o.hint.material.uniforms.uT.value = t;
+    }
+  }
+
   update(dt, t, world, portals, player, on = {}) {
+    this.updateHints(world, t);
     for (const L of world.launchers) {
       L.group.userData.glow.color.setRGB(2.6, 1.4 + Math.sin(t * 6) * 0.3, 0.5);
       if (L.done || L.pellet) continue;

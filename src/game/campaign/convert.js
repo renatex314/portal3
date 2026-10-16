@@ -209,12 +209,28 @@ export function relocateTemplates(bsp) {
     makersOf.get(tpl).push(m);
   }
   const fmt = (v) => `${(v.x / S).toFixed(3)} ${(-v.z / S).toFixed(3)} ${(v.y / S).toFixed(3)}`;
-  for (const [tpl, makers] of makersOf) {
-    if (makers.length !== 1) continue;
-    const members = [];
-    for (const [k, v] of tpl.kv) if (/^template\d+$/.test(k)) members.push(...named(v));
-    if (!members.length || members.every((e) => isCube(e) || e.classname === 'prop_glados_core')) continue;
-    const maker = makers[0];
+  for (const [tpl, makersAll] of makersOf) {
+    const members0 = [];
+    for (const [k, v] of tpl.kv) if (/^template\d+$/.test(k)) members0.push(...named(v));
+    if (!members0.length || members0.every((e) => isCube(e) || e.classname === 'prop_glados_core')) continue;
+    // um molde com vários "makers" (dois receptores iguais na câmara 17): uma cópia das
+    // entidades para cada maker a mais; sem "preservar nomes" (flag 2), os nomes ganham
+    // um sufixo e as ligações de dentro do molde apontam para a cópia certa
+    makersAll.forEach((maker, mi) => {
+    let members = members0;
+    if (mi > 0) {
+      const keep = parseInt(tpl.kv.get('spawnflags') || '0', 10) & 2;
+      const names = new Set(members0.map((e) => (e.kv.get('targetname') ?? '').toLowerCase()).filter(Boolean));
+      const ren = (v) => (!keep && v && names.has(v.toLowerCase()) ? `${v}&${mi}` : v);
+      members = members0.map((e) => {
+        const kv = new Map(e.kv);
+        for (const k of ['targetname', 'parentname', 'filtername', 'target']) if (kv.has(k)) kv.set(k, ren(kv.get(k)));
+        const c = { classname: e.classname, kv, outputs: e.outputs.map((o) => ({ ...o, target: ren(o.target) })) };
+        if (e._origin) c.kv.set('origin', e._origin);
+        return c;
+      });
+      ents.push(...members);
+    } else for (const e of members0) e._origin = e.kv.get('origin');
     const T = vecKV(tpl, 'origin');
     const M = vecKV(maker, 'origin');
     const [mp, my, mr] = parseVec(maker.kv.get('angles'));
@@ -230,6 +246,7 @@ export function relocateTemplates(bsp) {
       e._up = fr.u.applyMatrix3(rot).normalize();
       if ((e.kv.get('model') ?? '')[0] === '*') e._rot = rot;
     }
+    });
   }
 }
 
@@ -332,20 +349,41 @@ export function buildMap(w, bsp) {
     const deg = (sf & (64 | 128) ? dist : -dist) * (sf & 2 ? -1 : 1);
     const hinge = vecKV(e, 'origin');
     const q = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(deg));
-    const rot = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
-    const open = [];
-    for (const m of members) {
-      const off = vecKV(m.e, 'origin').sub(hinge).applyQuaternion(q).add(hinge);
-      const mi = parseInt(m.e.kv.get('model').slice(1), 10);
-      for (const bi of bsp.modelBrushes(mi)) {
-        const s = addBrush(w, bsp, bi, off, { kinematic: true, rot });
-        if (!s) continue;
-        w.setSolidEnabled(s, false);
-        open.push(s);
+    // giros acumulados (catraca: a peça é solta no fim do giro e a porta volta sem ela):
+    // até uma volta inteira em passos de `deg`; cada passo tem a sua cópia de colisão
+    const turns = 360 % Math.abs(deg) < 1e-6 ? Math.round(360 / Math.abs(deg)) : 2;
+    const parentOf = (x) => (byName.get((x.kv.get('parentname') ?? '').toLowerCase()) ?? [])[0];
+    const unitOf = (x) => {
+      // a peça presa direto na porta (as dela vão junto); a própria porta é a unidade ''
+      let cur = x;
+      for (let i = 0; i < 16 && cur && cur !== e; i++) {
+        const par = parentOf(cur);
+        if (par === e) return (cur.kv.get('targetname') ?? '').toLowerCase() || `#${ents.indexOf(cur)}`;
+        cur = par;
       }
-    }
+      return '';
+    };
+    const parts = members.map((m) => {
+      const states = [null];
+      for (let k = 1; k < turns; k++) {
+        const qk = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(deg * k));
+        const rot = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(qk));
+        const off = vecKV(m.e, 'origin').sub(hinge).applyQuaternion(qk).add(hinge);
+        const mi = parseInt(m.e.kv.get('model').slice(1), 10);
+        const list = [];
+        for (const bi of bsp.modelBrushes(mi)) {
+          const sd = addBrush(w, bsp, bi, off, { kinematic: true, rot });
+          if (!sd) continue;
+          w.setSolidEnabled(sd, false);
+          list.push(sd);
+        }
+        states.push(list);
+      }
+      return { e: m.e, unit: m.e === e ? '' : unitOf(m.e), closed: m.solids, states };
+    });
     const closed = members.flatMap((m) => m.solids);
-    rotGroups.push({ e, hinge, q, deg, closed, open });
+    const open = parts.flatMap((p) => p.states.slice(1).flat());
+    rotGroups.push({ e, hinge, q, deg, axis, turns, closed, open, parts, unitOf });
     // as peças do grupo passam a ser movidas por ele (giro + o deslocamento da mãe)
     for (let i = followers.length - 1; i >= 0; i--) if (followers[i].solids.some((s) => closed.includes(s))) followers.splice(i, 1);
   }
@@ -404,6 +442,55 @@ export function buildMap(w, bsp) {
     if (!root && w.pointInSolid(c)) continue;
     const box = w.importedBox(min, max, ['metal', 'metal', 'metal', 'metal', 'metal', 'metal'], { kinematic: !!root });
     if (root) followers.push({ solids: [box], root });
+  }
+
+  // moldes com um carrinho (func_tracktrain) criados de tempos em tempos (a esteira de
+  // plataformas da câmara 15): cópias prontas, escondidas, que o runtime solta a cada
+  // ForceSpawn — várias andam ao mesmo tempo, como no original
+  const trainPools = new Map();
+  for (const tpl of ents) {
+    if (tpl.classname !== 'point_template') continue;
+    const names = [...tpl.kv].filter(([k]) => /^template\d+$/.test(k)).map(([, v]) => v.toLowerCase());
+    const members = names.flatMap((nm) => byName.get(nm) ?? []);
+    const train = members.find((e) => e.classname === 'func_tracktrain');
+    if (!train) continue;
+    // só os criados de tempos em tempos (um logic_timer manda o "maker" do molde criar)
+    const tn = (tpl.kv.get('targetname') ?? '').toLowerCase();
+    const makers = ents.filter((m) => m.classname === 'env_entity_maker' && (m.kv.get('entitytemplate') ?? '').toLowerCase() === tn).map((m) => (m.kv.get('targetname') ?? '').toLowerCase());
+    const timed = ents.some((t) => t.classname === 'logic_timer' && t.outputs.some((o) => makers.includes(o.target.toLowerCase()) && o.input.toLowerCase() === 'forcespawn'));
+    if (!timed) continue;
+    const tname = (train.kv.get('targetname') ?? '').toLowerCase();
+    const pool = [];
+    for (let k = 0; k < 6; k++) {
+      const solidsOf = (e, kind) => {
+        const mi = parseInt((e.kv.get('model') ?? '').slice(1), 10);
+        if (!bsp.models[mi]) return [];
+        const out = [];
+        for (const bi of bsp.modelBrushes(mi)) {
+          const sd = addBrush(w, bsp, bi, vecKV(e, 'origin'), { kinematic: true, fallbackKind: kind, rot: e._rot });
+          if (sd) out.push(sd);
+        }
+        return out;
+      };
+      const trainSolids = solidsOf(train, 'metal');
+      const children = [];
+      for (const m of members) {
+        if (m === train || (m.kv.get('parentname') ?? '').toLowerCase() !== tname) continue;
+        if ((m.kv.get('model') ?? '')[0] === '*') children.push(...solidsOf(m, null));
+        const hull = MODEL_HULLS[(m.kv.get('model') ?? '').toLowerCase()];
+        if (hull) {
+          const o = parseVec(m.kv.get('origin'));
+          const yaw = Math.round((parseVec(m.kv.get('angles'))[1] || 0) / 90) & 1;
+          const [hx, hy] = yaw ? [hull[1], hull[0]] : [hull[0], hull[1]];
+          const a = toV(o[0] - hx, o[1] - hy, o[2] + hull[2]);
+          const b = toV(o[0] + hx, o[1] + hy, o[2] + hull[3]);
+          children.push(w.importedBox(a.clone().min(b), a.clone().max(b), ['metal', 'metal', 'metal', 'metal', 'metal', 'metal'], { kinematic: true }));
+        }
+      }
+      for (const sd of [...trainSolids, ...children]) w.setSolidEnabled(sd, false);
+      pool.push({ train, trainSolids, children });
+    }
+    trainPools.set((tpl.kv.get('targetname') ?? '').toLowerCase(), pool);
   }
 
   // dispensadores de cubo: no original o modelo é só visual (a boca fica na origem,
@@ -532,7 +619,7 @@ export function buildMap(w, bsp) {
 
   // abaixo de tudo o que existe no mapa não há chão: quem cai ali morre logo
   const floor = Math.min(...w.solids.map((b) => b.min.y));
-  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, followers, rotGroups, movingRoot, stats: { solids: count, lights: picked.length, props: propStats } };
+  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, followers, rotGroups, trainPools, movingRoot, stats: { solids: count, lights: picked.length, props: propStats } };
 }
 
 // ---------------------------------------------------------------- objetos estáticos

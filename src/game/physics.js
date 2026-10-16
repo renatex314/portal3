@@ -267,7 +267,10 @@ export class Physics {
         p.max = (p.max ?? new THREE.Vector3()).copy(p.prevCenter).max(_p).addScalar(p.radius);
         p.mouths = this.portals.mouths(p.prevCenter, false, _v.length());
         // segurado perto do azul temporal: atravessa a parede dele (vai junto no salto)
-        p.passWall = p.held ? this.portals.temporalWallNear?.(p.prevCenter) ?? null : null;
+        // (tudo o que estiver atrás do plano do portal: a parede pode ser feita de vários blocos)
+        const TP = p.held ? this.portals.temporalWallNear?.(p.prevCenter) ?? null : null;
+        p.passWall = TP?.box ?? null;
+        if (TP && !p.mouths.includes(TP)) p.mouths = [...p.mouths, TP];
         // corpo "dormindo" não reavalia contatos: na boca de um portal, acorda
         if (p.mouths.length && p.body.isSleeping()) p.body.wakeUp();
         pre(p, h);

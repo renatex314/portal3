@@ -746,12 +746,12 @@ export class PortalSystem {
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */
-  /** a parede do azul temporal, se `p` está perto da boca dele (o objeto segurado a atravessa) */
+  /** o azul temporal, se `p` está perto da boca dele (o objeto segurado atravessa a parede) */
   temporalWallNear(p) {
     for (const P of this.list) {
       if (!this.isLinked(P) || !P.box || P.delta > 0 || !(P.partner.delta > 0)) continue;
       const l = P.local(p);
-      if (l.z < 1.2 && l.z > -1.5 && Math.abs(l.x) < PORTAL_A + 0.4 && Math.abs(l.y) < PORTAL_B + 0.4) return P.box;
+      if (l.z < 1.4 && l.z > -2 && Math.abs(l.x) < PORTAL_A + 0.5 && Math.abs(l.y) < PORTAL_B + 0.5) return P;
     }
     return null;
   }
