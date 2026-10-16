@@ -149,6 +149,63 @@ export class Frontier {
   }
 
   /**
+   * Laser mandado para o passado: depois de um salto, as versões passadas guardam os
+   * instantes em que um feixe entrava num azul temporal; Δ segundos antes deles, o feixe
+   * sai de verdade do laranja (liga receptores, queima). O laço tem de fechar: no instante
+   * gravado o feixe precisa entrar de novo no azul — senão, paradoxo.
+   */
+  pastEmissions(ctx) {
+    const R = ctx.relogio;
+    if (!R?.clones?.length || R.paused || R.sweep) return [];
+    const out = [];
+    const tol = 1 / 30 * 0.6;
+    for (const c of R.clones) {
+      for (const e of c.laserEmits ?? []) {
+        if (Math.abs(e.t - R.tw) > tol) continue;
+        if (out.some((x) => x.o.distanceTo(e.exit) < 0.2 && x.d.dot(e.dir) > 0.98)) continue;
+        out.push({ o: e.exit.clone(), d: e.dir.clone(), fromPast: true, frame: e.frame });
+      }
+    }
+    return out;
+  }
+
+  /** o feixe que veio do passado acertaria a sua versão passada? (paradoxo) */
+  checkPastSelf(ctx, a, b) {
+    const R = ctx.relogio;
+    if (!R) return;
+    for (const c of R.clones) {
+      const pose = R.clonePose(c);
+      if (!pose || pose.jumped) continue;
+      const q = closest(a, b, pose.p);
+      if (Math.hypot(q.x - pose.p.x, q.z - pose.p.z) < 0.4 && Math.abs(q.y - pose.p.y) < 0.95) {
+        R.rollback(c.cp, 'o laser mandado ao passado acertaria a sua versão passada', q);
+        return;
+      }
+    }
+  }
+
+  /** depois dos feixes do quadro: o laço de cada laser mandado ao passado fechou? */
+  checkLaserLoops(ctx, dt) {
+    const R = ctx.relogio;
+    if (!R?.clones?.length || R.paused || R.sweep) return;
+    const tol = 1 / 30 * 0.6;
+    for (const c of R.clones) {
+      let need = null;
+      for (const e of c.laserEmits ?? []) if (Math.abs(e.entryT - R.tw) <= tol) need = e;
+      if (!need) {
+        c.laserMiss = 0;
+        continue;
+      }
+      const ok = (this.liveEntries ?? []).some((x) => x.at.distanceTo(need.at) < 0.5);
+      c.laserMiss = ok ? 0 : (c.laserMiss ?? 0) + dt;
+      if (c.laserMiss > 0.2) {
+        R.rollback(c.cp, 'o laser não voltou a entrar no azul (era ele que saía do laranja)', need.at.clone());
+        return;
+      }
+    }
+  }
+
+  /**
    * O laser do passado: com o laranja temporal aberto, o feixe é refeito como era Δ segundos antes
    * (cubos e portas nas posições da foto). O que entra no laranja sai no azul do presente: devolve
    * essas saídas [{ o, d }]. Os trechos do passado ficam guardados para a vista do azul.
@@ -165,7 +222,8 @@ export class Frontier {
     }
     const keyParts = oranges.map((O) => [R.samples[R.indexAt(R.tw - O.delta)], O.delta, O.center.x, O.center.y, O.center.z, O.normal.x, O.normal.z]);
     const k = this.pastKey;
-    if (k && k.length === keyParts.length && k.every((a, i) => a.every((v, j) => v === keyParts[i][j]))) return this.pastExtra;
+    const entering = (this.prevEntries ?? []).length > 0; // laser indo para o passado: refaz sempre
+    if (!entering && k && k.length === keyParts.length && k.every((a, i) => a.every((v, j) => v === keyParts[i][j]))) return this.pastExtra;
     this.pastKey = keyParts;
     const segs = [];
     const extra = [];
@@ -176,8 +234,10 @@ export class Frontier {
         const e = snap.props[i];
         if (c.kind === 'cube' && e && !e.gone) props.push({ c, p: e.p, q: e.q });
       });
+      // o feixe que entra no azul agora sai deste laranja no passado (para a vista do azul)
+      const fromBlue = (this.prevEntries ?? []).filter((e) => e.B.partner === O).map((e) => ({ pos: e.exit, dir: e.dir, mine: true }));
       R.inPast(O.delta, () => {
-        for (const L of this.world.lasers) {
+        for (const L of [...this.world.lasers, ...fromBlue]) {
           let o = L.pos;
           let d = L.dir;
           let ignore = null;
@@ -333,7 +393,16 @@ export class Frontier {
         const l = Q.local(hit.point);
         return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && Math.abs(l.z) < 0.05;
       });
-      if (!P) return { segs, point: hit.point, normal: hit.normal, box: hit.box };
+      if (!P) {
+        // azul temporal (o par com o laranja no passado): o feixe vai para o passado
+        const TB = this.portals.list.find((Q) => {
+          if (!this.portals.isLinked(Q) || Q.delta > 0 || !(Q.partner.delta > 0) || Q.box !== hit.box) return false;
+          const l = Q.local(hit.point);
+          return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && Math.abs(l.z) < 0.05;
+        });
+        if (TB) return { segs, point: hit.point, intoPast: { B: TB, dir: d.clone() } };
+        return { segs, point: hit.point, normal: hit.normal, box: hit.box };
+      }
       if (P.delta > 0) return { segs, point: hit.point, temporal: { P, dir: d.clone() } };
       const pos = hit.point.clone();
       const vel = d.clone();
@@ -530,14 +599,30 @@ export class Frontier {
     for (const c of ctx.props) if (c.redirect) c.lit = false;
     let burn = 0;
     let nearest = Infinity;
-    // os feixes de agora e os que saem do azul vindos do laranja do passado
+    // os feixes de agora, os que saem do azul vindos do laranja do passado e os que saem
+    // do laranja de uma versão passada sua (laser que você mandou para o passado)
     const extra = ctx.relogio?.virtualProps?.() ?? null;
-    for (const L of [...W.lasers, ...this.updatePast(ctx)]) {
+    this.prevEntries = this.liveEntries ?? [];
+    this.liveEntries = [];
+    const emitted = this.pastEmissions(ctx);
+    for (const L of [...W.lasers, ...this.updatePast(ctx), ...emitted]) {
       let o = L.pos ?? L.o;
       let d = L.dir ?? L.d;
       let ignore = null;
       for (let hop = 0; hop < 6; hop++) {
         const res = this.trace(o, d, { ignore, glass: true, extra });
+        if (L.fromPast) for (const [a, b] of res.segs) this.checkPastSelf(ctx, a, b);
+        if (res.intoPast) {
+          // entrou no azul temporal: some aqui e sai do laranja Δ s atrás (gravado no relógio)
+          const pos = res.point.clone();
+          const vel = res.intoPast.dir.clone();
+          this.portals.carry(res.intoPast.B, pos, vel);
+          vel.normalize();
+          const O = res.intoPast.B.partner;
+          this.liveEntries.push({ B: res.intoPast.B, delta: O.delta, at: res.point.clone(), exit: pos.addScaledVector(vel, 0.03), dir: vel, frame: { c: O.center.clone(), n: O.normal.clone(), u: O.up.clone(), box: O.box } });
+          for (const [a, b] of res.segs) this.drawBeam(a, b);
+          break;
+        }
         for (const [a, b] of res.segs) {
           this.drawBeam(a, b);
           // o jogador encostou no feixe?
@@ -587,6 +672,9 @@ export class Frontier {
         break;
       }
     }
+    this.checkLaserLoops(ctx, dt);
+    // laranjas de estática: onde o laser entra no passado agora e de onde sai o do futuro
+    this.portals.setStatics?.([...this.liveEntries.map((e) => e.frame), ...emitted.map((e) => e.frame)].filter(Boolean));
     for (const C of W.laserCatchers) {
       if (C.active && !C.wasActive) sfx.laserOn();
       const k = C.active ? 2.4 : 0.6 + Math.sin(ctx.t * 3) * 0.15;

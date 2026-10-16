@@ -194,6 +194,8 @@ export class Chronos {
       hm: this.pushed(),
       ...this.gapMoves(),
       ...(this.markArrive ? { arrive: true } : {}),
+      // lasers entrando num azul temporal agora (viram feixes saindo do laranja Δ s antes)
+      lz: (this.ctx.beams?.liveEntries ?? []).map((e) => ({ delta: e.delta, at: e.at.clone(), exit: e.exit.clone(), dir: e.dir.clone(), frame: e.frame })),
       w: this.snapshot(),
     });
     this.markArrive = false;
@@ -1745,6 +1747,8 @@ export class Chronos {
       cp,
       exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() },
       bad: {},
+      // laser que você mandou para o passado: sai do laranja Δ antes de cada entrada no azul
+      laserEmits: tail.flatMap((s) => (s.lz ?? []).map((e) => ({ t: s.t - e.delta, entryT: s.t, at: e.at, exit: e.exit, dir: e.dir, frame: e.frame }))),
     });
     this.samples = this.samples.slice(0, i + 1);
     this.tw = this.samples[i].t;
