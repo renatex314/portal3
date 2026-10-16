@@ -864,50 +864,90 @@ export class Chronos {
     this.blocked = this.destinationBlocked(s);
   }
 
-  // ------------------------------------------------------------------ bolas do passado
+  // ------------------------------------------------------------------ bolas e objetos pelo par temporal
   /**
-   * Como os lasers: a bola de energia que, Δ segundos atrás, entrou onde hoje está o
-   * laranja temporal sai agora pelo azul (com o tempo de vida cheio). Compara as fotos
-   * do passado, quadro a quadro, conforme o tempo do mundo anda.
+   * Bola que bate no laranja temporal: ela entrou no portal aberto no passado, então
+   * (loop fechado) sai pelo azul Δ segundos depois — como o laser. Devolve true (a
+   * bola some agora).
    */
+  ballIntoPast(p, O) {
+    if (this.paused || this.sweep) return false;
+    const pos = p.pos.clone();
+    const vel = p.vel.clone();
+    this.ballQueue ??= [];
+    this.ballQueue.push({ tIn: this.tw, tOut: this.tw + O.delta, pos, vel, key: this.orangeKey(O), life: p.from?.life ?? p.life });
+    this.ctx.fx.fizzleBall?.(pos);
+    return true;
+  }
+
+  orangeKey(O) {
+    return `${O.center.x.toFixed(3)},${O.center.y.toFixed(3)},${O.center.z.toFixed(3)}`;
+  }
+
+  /** solta pelo azul as bolas cuja hora de sair chegou (chamado a cada quadro) */
   pastPellets() {
+    if (!this.ballQueue?.length) return;
     const { portals, energy } = this.ctx;
+    // o tempo voltou (salto, paradoxo): o que entrou depois de agora não aconteceu
+    this.ballQueue = this.ballQueue.filter((b) => b.tIn <= this.tw + 1e-6);
     const O = portals.orange;
-    const on = O.placed && O.delta > 0 && portals.isLinked(O) && !this.paused && !this.sweep;
-    const key = on ? `${O.delta}|${O.center.x},${O.center.y},${O.center.z}` : null;
-    const i1 = on ? this.indexAt(this.tw - O.delta) : -1;
-    if (key !== this.ppKey) {
-      // portal novo (ou mudou): conta a partir de agora
-      this.ppKey = key;
-      this.ppIdx = i1;
-      return;
-    }
-    if (!on || i1 <= this.ppIdx) return;
-    const life = this.ctx.world.launchers[0]?.life ?? 12;
-    for (let i = Math.max(1, this.ppIdx + 1); i <= i1; i++) {
-      const a = this.samples[i - 1].w.pellets;
-      const b = this.samples[i].w.pellets;
-      for (const q of b) {
-        // a mesma bola no quadro anterior: mesmo lançador e perto
-        const p = a.find((x) => x.li === q.li && x.pos.distanceTo(q.pos) < q.vel.length() * RATE * 2 + 0.3);
-        if (!p) continue;
-        const la = O.local(p.pos);
-        const lb = O.local(q.pos);
-        if (!(la.z > 0 && lb.z <= 0)) continue;
-        const k = la.z / (la.z - lb.z);
-        const lx = la.x + (lb.x - la.x) * k;
-        const ly = la.y + (lb.y - la.y) * k;
-        if ((lx / PORTAL_A) ** 2 + (ly / PORTAL_B) ** 2 > 1) continue;
-        const pos = p.pos.clone().lerp(q.pos, k);
-        const vel = q.vel.clone();
-        portals.carry(O, pos, vel);
-        pos.addScaledVector(vel.clone().normalize(), 0.05);
-        const np = energy.spawnFree(pos, vel, Math.max(life, q.life));
-        np.cooldown = 0.15;
-        this.ctx.fx.launch?.(pos);
+    const ok = O.placed && portals.isLinked(O);
+    const keep = [];
+    for (const b of this.ballQueue) {
+      if (this.tw < b.tOut) {
+        keep.push(b);
+        continue;
       }
+      // o laranja mudou de lugar ou fechou: a bola se perdeu no tempo
+      if (!ok || this.orangeKey(O) !== b.key) continue;
+      const pos = b.pos.clone();
+      const vel = b.vel.clone();
+      portals.carry(O, pos, vel);
+      pos.addScaledVector(vel.clone().normalize(), 0.25);
+      const np = energy.spawnFree(pos, vel, b.life);
+      np.cooldown = 0.15;
+      this.ctx.fx.launch?.(pos);
     }
-    this.ppIdx = i1;
+    this.ballQueue = keep;
+  }
+
+  /**
+   * Objeto solto que entra no azul temporal: vai para o passado. Ele sai do laranja
+   * Δ segundos atrás e, de lá até agora, cai/quica sozinho (simulado aqui de uma vez);
+   * o "ele mesmo" mais novo é o que acabou de entrar no azul, então agora só existe um.
+   */
+  sendToPast(prop, blue) {
+    const { portals, world } = this.ctx;
+    const O = blue.partner;
+    const delta = O.delta;
+    if (!(delta > 0) || this.paused || this.sweep) return;
+    const pos = prop.pos.clone();
+    const vel = prop.vel.clone();
+    portals.carry(blue, pos, vel);
+    const h = (prop.half?.y ?? 0.3) * 0.95;
+    pos.addScaledVector(O.normal, h + 0.05);
+    const g = this.ctx.gravityAt?.(pos)?.clone() ?? new V3(0, -9.81, 0);
+    // Δ segundos de voo: gravidade, choque com o cenário (quique fraco e atrito no chão)
+    const dt = 1 / 120;
+    for (let t = 0; t < delta; t += dt) {
+      vel.addScaledVector(g, dt);
+      let move = vel.length() * dt;
+      if (move < 1e-6) continue;
+      const dir = vel.clone().normalize();
+      const hit = world.raycast(pos, dir, move + h);
+      if (hit && hit.dist < move + h) {
+        pos.addScaledVector(dir, Math.max(0, hit.dist - h - 0.002));
+        const vn = vel.dot(hit.normal);
+        vel.addScaledVector(hit.normal, -1.15 * vn);
+        if (hit.normal.dot(g) < -0.7 * g.length()) vel.multiplyScalar(Math.max(0, 1 - 8 * dt)); // atrito no chão
+        continue;
+      }
+      pos.addScaledVector(dir, move);
+    }
+    this.free.add(prop); // sai de qualquer trilho de gravação
+    this.driven.delete(prop);
+    prop.place(pos, prop.quat.clone(), { x: vel.x, y: vel.y, z: vel.z });
+    this.ctx.fx.toPast?.(pos);
   }
 
   // ------------------------------------------------------------------ o passado visto pelo azul e mirado pelo laranja

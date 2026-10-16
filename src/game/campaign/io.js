@@ -627,11 +627,14 @@ const SETUP = {
     const b = this.brushOf.get(n.e);
     if (!b) return;
     const size = new THREE.Vector3().subVectors(b.bounds.max, b.bounds.min);
-    const dist = Math.max(0, Math.abs(dir.x) * size.x + Math.abs(dir.y) * size.y + Math.abs(dir.z) * size.z - num(n.e, 'lip', 0) * S);
-    n.doors = this.movers(n, dir.multiplyScalar(dist), num(n.e, 'speed', 100), flags(n.e) & 1 ? 1 : 0);
+    // como no Source: o curso é o tamanho na direção do movimento menos 2 unidades e o "lip"
+    const dist = Math.max(0, Math.abs(dir.x) * size.x + Math.abs(dir.y) * size.y + Math.abs(dir.z) * size.z - (2 + num(n.e, 'lip', 0)) * S);
+    // começa aberta: flag antiga 1 ou "spawnpos" 1 (a porta da sala da GLaDOS)
+    const startOpen = flags(n.e) & 1 || n.e.kv.get('spawnpos') === '1' ? 1 : 0;
+    n.doors = this.movers(n, dir.multiplyScalar(dist), num(n.e, 'speed', 100), startOpen);
     n.waitClose = num(n.e, 'wait', -1);
     if (flags(n.e) & 256) n.useable = () => INPUTS.func_door.call(this, n, n.doors[0]?.target ? 'close' : 'open', '', {});
-    n.state = flags(n.e) & 1 ? 1 : 0;
+    n.state = startOpen;
     n.tick = (dt) => {
       const d = n.doors[0];
       if (!d) return;
@@ -704,12 +707,30 @@ const SETUP = {
       n.node = this.find(n.e.kv.get('target') ?? '', n, null).find((x) => x.cls === 'path_track');
       if (n.node) place(n.node.pos.clone().add(new THREE.Vector3(0, n.height, 0)).sub(n.origin), 0);
       n.next = n.node ? this.nextTrack(n.node, 1) : null;
+      // plataforma com gatilho "subiu → volta, desceu → vai" (câmara 11): depois de ligada,
+      // ela vai e volta sozinha, com ou sem o jogador em cima
+      const name = (n.e.kv.get('targetname') ?? '').toLowerCase();
+      const to = (o, out, inp) => o.output === out && o.target.toLowerCase() === name && o.input.toLowerCase() === inp;
+      n.shuttleTrig = name ? (this.nodes.find((t) => /^trigger_/.test(t.cls) && t.e.outputs.some((o) => to(o, 'onstarttouch', 'startbackward')) && t.e.outputs.some((o) => to(o, 'onendtouch', 'startforward'))) ?? null) : null;
     };
     n.doors[0].drive = (dt) => {
       for (const d of n.doors) d.delta.set(0, 0, 0);
+      if (!n.dir && n.shuttleWait != null) {
+        n.shuttleWait -= dt;
+        if (n.shuttleWait <= 0) {
+          n.dir = n.shuttleDir;
+          n.speed = n.speedMax;
+          n.shuttleWait = null;
+        }
+      }
+      if (n.dir) n.lastDir = n.dir;
       if (!n.dir || !n.node) return;
       const goal = n.dir > 0 ? n.next : this.nextTrack(n.node, -1);
       if (!goal) {
+        if (n.shuttleTrig?.enabled) {
+          n.shuttleWait = 2;
+          n.shuttleDir = -n.dir;
+        }
         n.dir = 0;
         this.fire(n, 'onnextpoint');
         return;
@@ -726,8 +747,13 @@ const SETUP = {
         if (sp > 0) n.speed = sp * S;
         this.fire(goal, 'onpass', n);
         if (flags(goal.e) & 16 || !(n.dir > 0 ? n.next : this.nextTrack(goal, -1))) {
+          const was = n.dir;
           n.dir = 0; // trilho com "parar aqui" ou fim do caminho
           this.fire(n, 'onnextpoint');
+          if (n.shuttleTrig?.enabled) {
+            n.shuttleWait = 2;
+            n.shuttleDir = -was;
+          }
         }
       } else place(n.offset.clone().add(to.setLength(step)), dt);
     };
@@ -838,7 +864,8 @@ const SETUP = {
     const speed = num(n.e, 'speed', 40) * S;
     n.tick = (dt) => {
       this.tickTrigger(n);
-      if (n.enabled && n.touching.has(this.player)) this.ctx.player.vel.addScaledVector(dir, speed * dt * 4);
+      // como no Source: leva a velocidade na direção do empurrão até `speed` (sem passar dela)
+      if (n.enabled && n.touching.has(this.player)) (this.ctx.player.push ??= new THREE.Vector3()).addScaledVector(dir, speed);
     };
   },
   func_rot_button(n) {
@@ -1134,7 +1161,9 @@ const INPUTS = {
     else if (input === 'close') set(0);
     else if (input === 'setposition') set(Math.min(1, Math.max(0, parseFloat(param) || 0)));
   },
-  func_tracktrain(n, input, param) {
+  func_tracktrain(n, input, param, ev) {
+    // no vai e volta sozinho, o gatilho de cima da plataforma não manda mais
+    if (n.shuttleTrig && ev?.caller === n.shuttleTrig && n.shuttleTrig.enabled) return;
     if (input === 'startforward' || input === 'resume') {
       n.dir = 1;
       n.speed = n.speedMax;

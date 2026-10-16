@@ -213,6 +213,7 @@ export class EnergySystem {
       }
       // passos curtos: a bola nunca atravessa uma parede fina
       let rest = p.vel.length() * dt;
+      let entered = false;
       while (rest > 1e-4) {
         const step = Math.min(rest, 0.12);
         rest -= step;
@@ -233,8 +234,11 @@ export class EnergySystem {
           p.vel.addScaledVector(ph.normal, -2 * p.vel.dot(ph.normal));
           const b = ph.prop.body;
           if (b && !ph.prop.held) {
-            const imp = dir.clone().multiplyScalar(ph.prop.kind === 'turret' ? 9 : 4);
-            const at = ph.point.clone().addScaledVector(ph.normal, -R);
+            // a bola é bem mais "pesada" que eles: o golpe vale uns 4–5 m/s de uma vez; na
+            // torreta, no alto do corpo, para tombá-la (caída, ela desliga)
+            const turret = ph.prop.kind === 'turret';
+            const imp = dir.clone().setY(Math.max(dir.y, turret ? 0 : 0.15)).normalize().multiplyScalar(b.mass() * (turret ? 5 : 4));
+            const at = turret ? ph.prop.pos.clone().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(ph.prop.quat), ph.prop.half.y * 0.75) : ph.point.clone().addScaledVector(ph.normal, -R);
             b.applyImpulseAtPoint({ x: imp.x, y: imp.y, z: imp.z }, { x: at.x, y: at.y, z: at.z }, true);
           }
           on.bounce?.(p.pos);
@@ -249,6 +253,16 @@ export class EnergySystem {
             const l = Q.local(hit.point);
             return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1;
           });
+        // o laranja temporal (aberto no passado): a bola entra e sai pelo azul Δ s depois
+        const O = portals.orange;
+        if (hit && !intoPortal && O?.placed && O.delta > 0 && portals.isLinked(O)) {
+          const l = O.local(hit.point);
+          if (Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && on.intoPast?.(p, O)) {
+            this.kill(p);
+            entered = true;
+            break;
+          }
+        }
         if (hit && !intoPortal) {
           p.pos.copy(hit.point).addScaledVector(hit.normal, R + 0.002);
           p.vel.addScaledVector(hit.normal, -2 * p.vel.dot(hit.normal));
@@ -257,6 +271,7 @@ export class EnergySystem {
         }
         p.pos.copy(next);
       }
+      if (entered) continue;
       p.group.position.copy(p.pos);
       p.light?.position.copy(p.pos);
       p.shell.rotation.set(t * 3.1, t * 4.3, t * 2.2);

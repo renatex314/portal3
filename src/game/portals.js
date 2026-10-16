@@ -746,11 +746,14 @@ export class PortalSystem {
   }
 
   /** o ponto foi de `a` para `b`: atravessou algum portal? */
-  crossing(a, b, player = false) {
+  /** `who`: true = o jogador; um objeto (Prop); nada = bola/tiro */
+  crossing(a, b, who = false) {
     for (const P of this.list) {
       if (!this.isLinked(P)) continue;
       if (P.delta > 0) continue; // o laranja do passado não existe no presente
-      if (P.partner.delta > 0 && !player) continue; // azul temporal: o jogador e os objetos ('prop') atravessam (as bolas, não)
+      // azul temporal: atravessam o jogador (salto) e o objeto solto (vai para o passado);
+      // o segurado entra na parede e viaja junto no salto
+      if (P.partner.delta > 0 && who !== true && !(who && typeof who === 'object' && !who.held)) continue;
       const sa = _v.subVectors(a, P.center).dot(P.normal);
       const sb = _v.subVectors(b, P.center).dot(P.normal);
       if (sa > 0 && sb <= 0) {

@@ -302,6 +302,8 @@ export class Physics {
       const e = this.ents.get(c.handle);
       if (!e || e.kind === 'player') return false;
       if (e.kind === 'dyn') return !e.prop.gone && !skip?.(e.prop);
+      // grade, "clip" e vidro deixam a visão passar (como os tiros)
+      if (e.box && (e.box.noRay || e.box.disabled || e.box.seeThrough)) return false;
       return !propsOnly;
     });
     if (!hit) return null;

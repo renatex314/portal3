@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { CONTENTS, SURF } from './bsp.js';
 import { portalGun } from '../models.js';
 import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export const S = 0.025;
 export const toV = (x, y, z) => new THREE.Vector3(x * S, z * S, -y * S);
@@ -44,7 +45,8 @@ export function faceKind(tex) {
   if (name.includes('glass')) return 'glass';
   if (name.includes('toxicslime') || name.includes('water') || flags & SURF.WARP) return 'goo';
   if (name.startsWith('lights/') || flags & SURF.LIGHT) return 'lamp';
-  if (flags & SURF.NOPORTAL || name.includes('grate')) return 'metal';
+  if (name.includes('metalgrate')) return 'grate'; // vazada: dá para ver através
+  if (flags & SURF.NOPORTAL) return 'metal';
   return 'white';
 }
 
@@ -114,15 +116,33 @@ function addBrush(w, bsp, bi, offset, opts = {}) {
     kinematic: !!opts.kinematic,
   };
 
+  // pincel sólido todo em "nodraw": invisível, mas aceita portal (como no Portal 1; os
+  // mapas o usam onde o portal deve parar sobre uma peça que se move, ex.: a rampa da 12)
+  const seeThrough = kinds.includes('grate');
+  const nodrawPortal = !clipOnly && !grate && !opts.visualOnly && planes.every((p) => p.tex?.name === 'tools/toolsnodraw');
   const axial = planes.length === 6 && planes.every((p) => Math.max(Math.abs(p.n.x), Math.abs(p.n.y), Math.abs(p.n.z)) > 0.9999);
   if (axial) {
     const faces = FACE_N.map((fn) => {
       const p = planes.find((q) => q.n.x * fn[0] + q.n.y * fn[1] + q.n.z * fn[2] > 0.999);
       return p ? kinds[planes.indexOf(p)] : null;
     });
-    return w.importedBox(min, max, faces, common);
+    const b = w.importedBox(min, max, faces, common);
+    if (b) b.seeThrough = seeThrough;
+    if (b) b.src = { bi, contents: c, tex: [...new Set(planes.map((p) => p.tex?.name))] };
+    if (b && nodrawPortal) {
+      b.portalable = true;
+      b.portalAt = () => true;
+    }
+    return b;
   }
-  return w.convex(pts, planes.map((p, i) => ({ n: p.n, d: p.d, kind: kinds[i] })), common);
+  const b = w.convex(pts, planes.map((p, i) => ({ n: p.n, d: p.d, kind: kinds[i] })), common);
+  if (b) b.seeThrough = seeThrough;
+  if (b) b.src = { bi, contents: c, tex: [...new Set(planes.map((p) => p.tex?.name))] }; // para depurar
+  if (b && nodrawPortal) {
+    for (const p of b.planes0) p.portal = true;
+    b.portalable = true;
+  }
+  return b;
 }
 
 export const isCube = (e) =>
@@ -240,7 +260,10 @@ export function buildMap(w, bsp) {
   // mundo (modelo 0)
   const zero = new THREE.Vector3();
   let count = 0;
+  const worldFrom = w.solids.length;
   for (const bi of bsp.modelBrushes(0)) if (addBrush(w, bsp, bi, zero)) count++;
+  // o mapa fixo (milhares de pincéis, cada face uma chamada de desenho) vira poucas malhas
+  mergeStatic(w, w.solids.slice(worldFrom));
 
   // cadeia de pais: a peça que se move (porta, plataforma, trilho) de que esta depende
   const MOVING = /^func_(door|movelinear|tracktrain|rotating|door_rotating|platrot|train|physbox|water_analog)/;
@@ -519,7 +542,9 @@ const propGeo = new Map(); // modelo → [{ geo, mat }] (geometria já nas unida
 const propMats = new Map();
 
 /** material pelo nome da textura do modelo (as texturas em si não são lidas) */
-function propMaterial(tex, model) {
+function propMaterial(tex, model, w) {
+  // cercas e grades de arame: vazadas (a mesma grade dos pincéis)
+  if (/fence|grate|chainlink|mesh/.test(tex + model)) return w.importedMat('grate');
   const k = /glass/.test(tex) ? 'glass' : /clear_tube/.test(model) ? 'tubeframe' : /pipe/.test(tex + model) ? 'pipe' : /rail|fence|metal|grate|lever|light|spot/.test(tex + model) ? 'metal' : /concrete|debris|rock/.test(tex + model) ? 'concrete' : /desk|chair|stool|monitor|speaker/.test(tex + model) ? 'office' : 'default';
   if (propMats.has(k)) return propMats.get(k);
   const P = {
@@ -536,12 +561,13 @@ function propMaterial(tex, model) {
   return m;
 }
 
-function propParts(name, model) {
+function propParts(name, model, w) {
   if (propGeo.has(name)) return propGeo.get(name);
   const parts = model.groups.map((g) => {
     const n = g.positions.length / 3;
     const pos = new Float32Array(n * 3);
     const nor = new Float32Array(n * 3);
+    const uv = new Float32Array(g.uvs);
     for (let i = 0; i < n; i++) {
       const [x, y, z] = [g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]];
       pos.set([x * S, z * S, -y * S], i * 3);
@@ -554,9 +580,10 @@ function propParts(name, model) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
-    return { geo, mat: propMaterial(g.material, name) };
+    return { geo, mat: propMaterial(g.material, name, w) };
   });
   propGeo.set(name, parts);
   return parts;
@@ -565,20 +592,21 @@ function propParts(name, model) {
 function addStaticProps(w, bsp) {
   let shown = 0;
   let hulls = 0;
+  // tudo o que tem o mesmo material vira uma malha só (centenas de objetos → poucas
+  // chamadas de desenho, também na vista de cada portal)
+  const batches = new Map();
   for (const p of bsp.staticProps ?? []) {
     if (SKIP_PROP.test(p.model)) continue;
     const model = bsp.propModels?.get(p.model);
     if (!model) continue;
+    const seeThrough = /fence|grate|chainlink/.test(p.model);
     const { f, u } = frameOf(p.angles[0], p.angles[1], p.angles[2]);
     const left = new THREE.Vector3().crossVectors(u, f);
     // eixos locais daqui: x = frente do Source, y = cima, z = −esquerda
     const M = new THREE.Matrix4().makeBasis(f, u, left.clone().negate()).setPosition(toV(...p.origin));
-    for (const { geo, mat } of propParts(p.model, model)) {
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.matrixAutoUpdate = false;
-      mesh.matrix.copy(M);
-      if (mat.transparent) mesh.renderOrder = 5;
-      w.group.add(mesh);
+    for (const { geo, mat } of propParts(p.model, model, w)) {
+      if (!batches.has(mat)) batches.set(mat, []);
+      batches.get(mat).push(geo.clone().applyMatrix4(M));
     }
     shown++;
     if (!p.solid) continue;
@@ -602,9 +630,74 @@ function addStaticProps(w, bsp) {
       const s = w.convex(verts, planes, { solid: true, noRay: false });
       if (s) {
         s.prop = true;
+        s.seeThrough = seeThrough; // cerca: a torreta enxerga através
         hulls++;
       }
     }
   }
-  return { shown, hulls };
+  for (const [mat, geos] of batches) {
+    // em lotes de até ~1 milhão de vértices (índices de 32 bits dão conta)
+    const merged = mergeGeometries(geos, false);
+    for (const g of geos) g.dispose();
+    if (!merged) continue;
+    merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, mat);
+    if (mat.transparent) mesh.renderOrder = 5;
+    w.group.add(mesh);
+  }
+  return { shown, hulls, batches: batches.size };
+}
+
+// ---------------------------------------------------------------- malhas do mapa fixo
+/** trecho [start, start+count) de uma geometria (por grupo de material), sem índice */
+function geometryRange(g, start, count) {
+  const out = new THREE.BufferGeometry();
+  const idx = g.index;
+  for (const [name, attr] of Object.entries(g.attributes)) {
+    const n = attr.itemSize;
+    const arr = new Float32Array(count * n);
+    for (let i = 0; i < count; i++) {
+      const v = idx ? idx.getX(start + i) : start + i;
+      for (let k = 0; k < n; k++) arr[i * n + k] = attr.array[v * n + k];
+    }
+    out.setAttribute(name, new THREE.BufferAttribute(arr, n));
+  }
+  return out;
+}
+
+/**
+ * Junta as faces visíveis dos pincéis fixos por material: as malhas de cada pincel
+ * ficam escondidas (os sólidos continuam para colisão, tiros e portais).
+ */
+function mergeStatic(w, solids) {
+  const buckets = new Map();
+  for (const s of solids) {
+    const m = s.mesh;
+    if (!m || !m.visible || s.disabled || s.kbody) continue;
+    m.updateMatrixWorld(true);
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const g = m.geometry;
+    const total = g.index ? g.index.count : g.attributes.position.count;
+    const groups = g.groups.length ? g.groups : [{ start: 0, count: total, materialIndex: 0 }];
+    for (const gr of groups) {
+      const mat = mats[gr.materialIndex ?? 0];
+      if (!mat || mat.visible === false || !gr.count) continue;
+      const part = geometryRange(g, gr.start, gr.count).applyMatrix4(m.matrixWorld);
+      const key = `${mat.uuid}|${m.renderOrder}|${Object.keys(part.attributes).sort().join(',')}`;
+      if (!buckets.has(key)) buckets.set(key, { mat, order: m.renderOrder, geos: [] });
+      buckets.get(key).geos.push(part);
+    }
+    m.visible = false;
+    m.userData.merged = true;
+  }
+  for (const { mat, order, geos } of buckets.values()) {
+    const merged = mergeGeometries(geos, false);
+    for (const g of geos) g.dispose();
+    if (!merged) continue;
+    merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.receiveShadow = true;
+    mesh.renderOrder = order;
+    w.group.add(mesh);
+  }
 }

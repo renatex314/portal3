@@ -130,6 +130,8 @@ export class Player {
     if (this.grounded) {
       // no chão: responde rápido, mas não "mata" velocidade de lançamento de uma vez
       const target = wish.clone().multiplyScalar(this.crouched ? WALK * 0.5 : WALK);
+      // empurrão do mapa (trigger_push): soma à caminhada, como a "velocidade de base" do Source
+      if (this.push) target.add(this.push.clone().projectOnPlane(up));
       const k = horiz.length() > WALK * 1.5 ? 4 : 14;
       horiz.lerp(target, 1 - Math.exp(-k * dt));
       if (input.jump) {
@@ -145,6 +147,14 @@ export class Player {
       else horiz.copy(next.setLength(Math.max(WALK, horiz.length())));
     }
     this.vel.copy(horiz).add(vert).addScaledVector(g, dt);
+    if (this.push) {
+      // no ar (ou na vertical): leva a velocidade na direção do empurrão até a dele
+      const dir = this.push.clone().normalize();
+      const along = this.vel.dot(dir);
+      const want = this.push.length();
+      if (along < want) this.vel.addScaledVector(dir, Math.min(want - along, want * dt * (this.grounded ? 0 : 6) + (this.push.dot(up) > 0 ? want : 0)));
+      this.push = null;
+    }
     if (this.vel.length() > MAX_FALL) this.vel.setLength(MAX_FALL);
     this.funnel(dt, portals, g);
     this.flingAssist(dt, portals, g);

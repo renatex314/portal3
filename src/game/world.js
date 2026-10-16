@@ -167,6 +167,31 @@ let MATS = null;
  * Materiais do cenário. `faces` (quando existe) dá um material para cada face
  * da caixa na ordem do BoxGeometry: +x, −x, +y (topo/piso), −y (teto), +z, −z.
  */
+/** grade de metal vazada (a das salas de torretas): só as barras são desenhadas */
+function grateMaterial() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, 256, 256);
+  const cells = 12;
+  const step = 256 / cells;
+  g.fillStyle = '#5c6268';
+  for (let i = 0; i < cells; i++) {
+    g.fillRect(i * step, 0, 4, 256);
+    g.fillRect(0, i * step, 256, 4);
+  }
+  g.fillStyle = 'rgba(255,255,255,0.18)';
+  for (let i = 0; i < cells; i++) {
+    g.fillRect(i * step, 0, 1, 256);
+    g.fillRect(0, i * step, 256, 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, transparent: false, side: THREE.DoubleSide, metalness: 0.7, roughness: 0.45 });
+}
+
 export function materials() {
   if (MATS) return MATS;
   const ENV = envMap();
@@ -573,6 +598,7 @@ export class World {
       M.hidden = new THREE.MeshBasicMaterial({ visible: false });
     }
     if (!kind) return M.hidden;
+    if (kind === 'grate') return (M.grateFace ??= grateMaterial());
     if (kind === 'door') return M.door;
     if (kind === 'button') return (M.buttonFace ??= new THREE.MeshStandardMaterial({ color: 0xc0392b, emissive: 0x5a0a05, roughness: 0.5 }));
     const m = kind === 'dark' ? M.darkFace : kind === 'goo' ? M.magma : M[kind] ?? M.metal;
@@ -1665,68 +1691,180 @@ export class World {
 
   /** Raio contra as caixas sólidas. Devolve a mais próxima com a normal da face atingida. */
   raycast(origin, dir, maxDist = 300, filter = null) {
+    // mapas grandes (campanha): grade espacial para os sólidos parados
+    if (this.solids.length > 600) return this.rayGrid(origin, dir, maxDist, filter);
     let best = null;
+    for (const b of this.solids) best = this.raySolid(b, origin, dir, maxDist, filter, best);
+    return best;
+  }
+
+  /** um sólido contra o raio: devolve o mais perto entre ele e `best` */
+  raySolid(b, origin, dir, maxDist, filter, best) {
+    if (filter && !filter(b)) return best;
+    if (b.noRay || b.disabled) return best;
+    if (b.planes) {
+      if (!rayHitsBox(origin, dir, b.min, b.max, best ? best.dist : maxDist)) return best; // corte rápido
+      const h = rayConvex(origin, dir, b.planes, maxDist);
+      if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+      return best;
+    }
+    if (b.obb) {
+      const h = rayObb(origin, dir, b.obb, maxDist);
+      if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+      return best;
+    }
+    let tmin = -Infinity;
+    let tmax = Infinity;
+    let axis = -1;
+    let sign = 0;
+    for (let i = 0; i < 3; i++) {
+      const o = origin.getComponent(i);
+      const d = dir.getComponent(i);
+      const lo = b.min.getComponent(i);
+      const hi = b.max.getComponent(i);
+      if (Math.abs(d) < 1e-9) {
+        if (o < lo || o > hi) return best;
+        continue;
+      }
+      let t1 = (lo - o) / d;
+      let t2 = (hi - o) / d;
+      let s = -1;
+      if (t1 > t2) {
+        [t1, t2] = [t2, t1];
+        s = 1;
+      }
+      if (t1 > tmin) {
+        tmin = t1;
+        axis = i;
+        sign = s;
+      }
+      tmax = Math.min(tmax, t2);
+      if (tmin > tmax) return best;
+    }
+    if (tmin < 0 || tmin > maxDist || axis < 0) return best;
+    if (!best || tmin < best.dist) {
+      const normal = new THREE.Vector3();
+      normal.setComponent(axis, sign);
+      best = { box: b, dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal, axis };
+    }
+    return best;
+  }
+
+  /**
+   * Grade uniforme dos sólidos que não se mexem (refeita quando a lista muda); os que se
+   * mexem (portas, plataformas, cinemáticos) e os enormes ficam numa lista testada sempre.
+   */
+  solidGrid() {
+    const doors = this.doors.length;
+    const G = this._grid;
+    if (G && G.n === this.solids.length && G.doors === doors) return G;
+    const moving = new Set(this.doors.map((d) => d.box));
+    const C = 3;
+    const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+    const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    const still = [];
+    const always = [];
     for (const b of this.solids) {
-      if (filter && !filter(b)) continue;
-      if (b.noRay || b.disabled) continue;
-      if (b.planes) {
-        if (!rayHitsBox(origin, dir, b.min, b.max, best ? best.dist : maxDist)) continue; // corte rápido
-        const h = rayConvex(origin, dir, b.planes, maxDist);
-        if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
+      if (b.kbody || moving.has(b) || !Number.isFinite(b.min.x)) always.push(b);
+      else {
+        still.push(b);
+        min.min(b.min);
+        max.max(b.max);
+      }
+    }
+    const nx = Math.max(1, Math.ceil((max.x - min.x) / C));
+    const ny = Math.max(1, Math.ceil((max.y - min.y) / C));
+    const nz = Math.max(1, Math.ceil((max.z - min.z) / C));
+    const cells = new Map();
+    const cl = (v, n) => Math.max(0, Math.min(n - 1, v));
+    for (const b of still) {
+      const x0 = cl(Math.floor((b.min.x - min.x) / C), nx);
+      const x1 = cl(Math.floor((b.max.x - min.x) / C), nx);
+      const y0 = cl(Math.floor((b.min.y - min.y) / C), ny);
+      const y1 = cl(Math.floor((b.max.y - min.y) / C), ny);
+      const z0 = cl(Math.floor((b.min.z - min.z) / C), nz);
+      const z1 = cl(Math.floor((b.max.z - min.z) / C), nz);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 400) {
+        always.push(b);
         continue;
       }
-      if (b.obb) {
-        const h = rayObb(origin, dir, b.obb, maxDist);
-        if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
-        continue;
-      }
-      let tmin = -Infinity;
-      let tmax = Infinity;
-      let axis = -1;
-      let sign = 0;
-      let ok = true;
-      for (let i = 0; i < 3; i++) {
-        const o = origin.getComponent(i);
-        const d = dir.getComponent(i);
-        const lo = b.min.getComponent(i);
-        const hi = b.max.getComponent(i);
-        if (Math.abs(d) < 1e-9) {
-          if (o < lo || o > hi) {
-            ok = false;
-            break;
+      for (let x = x0; x <= x1; x++)
+        for (let y = y0; y <= y1; y++)
+          for (let z = z0; z <= z1; z++) {
+            const k = x + nx * (y + ny * z);
+            const list = cells.get(k);
+            if (list) list.push(b);
+            else cells.set(k, [b]);
           }
-          continue;
-        }
-        let t1 = (lo - o) / d;
-        let t2 = (hi - o) / d;
-        let s = -1;
-        if (t1 > t2) {
-          [t1, t2] = [t2, t1];
-          s = 1;
-        }
-        if (t1 > tmin) {
-          tmin = t1;
-          axis = i;
-          sign = s;
-        }
-        tmax = Math.min(tmax, t2);
-        if (tmin > tmax) {
-          ok = false;
-          break;
-        }
+    }
+    this._grid = { n: this.solids.length, doors, min, C, nx, ny, nz, cells, always, stamp: 0 };
+    return this._grid;
+  }
+
+  rayGrid(origin, dir, maxDist, filter) {
+    const G = this.solidGrid();
+    let best = null;
+    for (const b of G.always) best = this.raySolid(b, origin, dir, maxDist, filter, best);
+    const stamp = ++G.stamp;
+    // entrada na caixa da grade
+    const { min, C, nx, ny, nz } = G;
+    const bmax = [min.x + nx * C, min.y + ny * C, min.z + nz * C];
+    const o = [origin.x, origin.y, origin.z];
+    const d = [dir.x, dir.y, dir.z];
+    const lo = [min.x, min.y, min.z];
+    let t0 = 0;
+    let t1 = best ? best.dist : maxDist;
+    for (let a = 0; a < 3; a++) {
+      if (Math.abs(d[a]) < 1e-12) {
+        if (o[a] < lo[a] || o[a] > bmax[a]) return best;
+        continue;
       }
-      if (!ok || tmin < 0 || tmin > maxDist || axis < 0) continue;
-      if (!best || tmin < best.dist) {
-        const normal = new THREE.Vector3();
-        normal.setComponent(axis, sign);
-        best = { box: b, dist: tmin, point: origin.clone().addScaledVector(dir, tmin), normal, axis };
-      }
+      let ta = (lo[a] - o[a]) / d[a];
+      let tb = (bmax[a] - o[a]) / d[a];
+      if (ta > tb) [ta, tb] = [tb, ta];
+      t0 = Math.max(t0, ta);
+      t1 = Math.min(t1, tb);
+    }
+    if (t0 > t1) return best;
+    // percorre as células (Amanatides–Woo)
+    const n = [nx, ny, nz];
+    const p = o.map((v, a) => v + d[a] * (t0 + 1e-6));
+    const cell = p.map((v, a) => Math.max(0, Math.min(n[a] - 1, Math.floor((v - lo[a]) / C))));
+    const step = d.map((v) => (v > 0 ? 1 : v < 0 ? -1 : 0));
+    const tMax = d.map((v, a) => (v === 0 ? Infinity : (lo[a] + (cell[a] + (v > 0 ? 1 : 0)) * C - o[a]) / v));
+    const tDelta = d.map((v) => (v === 0 ? Infinity : C / Math.abs(v)));
+    for (let guard = 0; guard < 4096; guard++) {
+      const list = G.cells.get(cell[0] + nx * (cell[1] + ny * cell[2]));
+      if (list)
+        for (const b of list) {
+          if (b._rs === stamp) continue;
+          b._rs = stamp;
+          best = this.raySolid(b, origin, dir, maxDist, filter, best);
+        }
+      const a = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;
+      const exit = tMax[a];
+      if (best && best.dist <= exit) break; // o acerto está nesta célula
+      if (exit > maxDist) break;
+      cell[a] += step[a];
+      if (cell[a] < 0 || cell[a] >= n[a]) break;
+      tMax[a] += tDelta[a];
     }
     return best;
   }
 
   pointInSolid(p, except = null) {
-    for (const b of this.solids) {
+    let list = this.solids;
+    if (list.length > 600) {
+      // mapas grandes: só a célula do ponto e os sólidos que se mexem
+      const G = this.solidGrid();
+      const cx = Math.floor((p.x - G.min.x) / G.C);
+      const cy = Math.floor((p.y - G.min.y) / G.C);
+      const cz = Math.floor((p.z - G.min.z) / G.C);
+      const inGrid = cx >= 0 && cy >= 0 && cz >= 0 && cx < G.nx && cy < G.ny && cz < G.nz;
+      const cell = inGrid ? (G.cells.get(cx + G.nx * (cy + G.ny * cz)) ?? []) : [];
+      list = cell.length ? G.always.concat(cell) : G.always;
+    }
+    for (const b of list) {
       if (b === except || b.disabled) continue;
       if (b.planes) {
         if (p.x < b.min.x || p.x > b.max.x || p.y < b.min.y || p.y > b.max.y || p.z < b.min.z || p.z > b.max.z) continue;

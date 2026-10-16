@@ -138,8 +138,9 @@ export class Turret extends Prop {
       yaw = THREE.MathUtils.clamp(Math.atan2(l.x, l.z), -0.3, 0.3);
       pitch = THREE.MathUtils.clamp(-Math.atan2(l.y, Math.hypot(l.x, l.z)) * 0.5, -0.15, 0.15);
     } else if (this.active) {
-      yaw = Math.sin(now * 0.8 + this.home.x) * 0.2;
-      pitch = Math.sin(now * 0.53) * 0.04;
+      // parada olhando para a frente (só vira para mirar em alguém)
+      yaw = 0;
+      pitch = 0;
     } else {
       this.downT += dt;
       pitch = 0.22;
@@ -257,8 +258,8 @@ export class Turret extends Prop {
       }
     } else {
       this.lock = Math.max(0, this.lock - dt);
-      // laser varrendo devagar à frente
-      const sweep = fwd.clone().applyAxisAngle(this.upright, Math.sin(performance.now() / 1400) * 0.45);
+      // laser parado, apontando para a frente
+      const sweep = fwd.clone();
       const hit = this.physics.castRay(eye, sweep, RANGE, (p) => p === this);
       this.laser.visible = true;
       this.laser.material.opacity = 0.35;

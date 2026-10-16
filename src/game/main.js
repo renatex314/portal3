@@ -960,6 +960,7 @@ function loadLevel(i, silent = false) {
         cubes: () => cubes,
         turrets: () => turrets,
         held: () => held,
+        gravityAt,
         beams: frontier,
         makeGhost: makeCloneGhost,
         t: () => clock.elapsedTime,
@@ -968,6 +969,7 @@ function loadLevel(i, silent = false) {
       })
     : null;
   portals.pastView = relogio ? { begin: (d) => relogio.beginPast(d), end: () => relogio.endPast() } : null;
+  portals.onTemporal = relogio ? (prop, P) => relogio.sendToPast(prop, P) : null;
   document.body.dataset.relogio = 'play';
   $('clock').hidden = !relogio;
   $('keys').textContent = relogio
@@ -2286,6 +2288,7 @@ function update(dt, t) {
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
     props: () => [...cubes, ...turrets],
+    intoPast: (p, O) => relogio?.ballIntoPast(p, O),
   });
   relogio?.pastPellets(); // bolas do passado que entraram no laranja temporal saem pelo azul
 
@@ -2586,4 +2589,4 @@ window.__jogo = {
     manualT += dt;
     update(dt, manualT);
   },
-  get campaign() { return campaign; }, get editor() { return editor; }, openEditor, mineLevel, get editing() { return editing; }, get testingMine() { return testingMine; }, backToEditor, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get editor() { return editor; }, openEditor, mineLevel, get editing() { return editing; }, get testingMine() { return testingMine; }, backToEditor, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, makeCube, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };

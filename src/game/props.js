@@ -76,9 +76,15 @@ export class Prop {
     const t = this.body.translation();
     this.pos.set(t.x, t.y, t.z);
     if (this.cooldown > 0) return;
-    let P = this.portals.crossing(this.prevCenter, this.pos, 'prop'); // também o azul temporal: o objeto vai para o laranja
+    let P = this.portals.crossing(this.prevCenter, this.pos, this);
     if (!P) P = this.portals.stuckIn(this.pos, _v.copy(this.pos).subScalar(0.3), this.pos.clone().addScalar(0.3));
     if (!P) return;
+    if (P.partner.delta > 0) {
+      // azul temporal: solto, o objeto vai para o passado (o relógio cuida); segurado,
+      // fica na boca do portal até você saltar com ele
+      if (!this.held) this.portals.onTemporal?.(this, P);
+      return;
+    }
     const { Q } = this.physics.carry(this, P);
     if (this.held) this.space.premultiply(this.portals.transform(P, P.partner));
     const t2 = this.body.translation();
