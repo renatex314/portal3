@@ -1441,6 +1441,7 @@ export class Chronos {
         if (!d.box && phys?.addBox) {
           d.box = { min: st.p.clone().sub(h), max: st.p.clone().add(h) };
           phys.addBox(d.box, true);
+          d.box.world = phys.world; // o mundo da física é trocado ao reiniciar o mapa
         }
         if (d.box) {
           d.box.min.copy(st.p).sub(h);
@@ -1459,7 +1460,8 @@ export class Chronos {
 
   dropDoubleBody(d) {
     const phys = this.ctx.world.physics;
-    if (d.box?.collider && phys?.world) {
+    // só se o corpo ainda é deste mundo (ao reiniciar, o mundo velho já foi descartado)
+    if (d.box?.collider && phys?.world && d.box.world === phys.world) {
       phys.ents.delete(d.box.collider.handle);
       if (d.box.kbody) phys.world.removeRigidBody(d.box.kbody);
       else phys.world.removeCollider(d.box.collider, false);
