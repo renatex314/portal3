@@ -547,7 +547,12 @@ export function buildMap(w, bsp) {
     const p = vecKV(e, 'origin');
     // o modelo daqui olha para +z local (o contrário do jogador): meia-volta a mais.
     // Menores e de pé estreito, como as originais: um cubo jogado as derruba
-    turrets.push([p.x, p.y, p.z, yawFromSource(parseVec(e.kv.get('angles'))[1] || 0) + Math.PI, { scale: 0.8, tippy: true }]);
+    // flags do original: 64 = começa desligada (a pilha de torretas da Fuga 2), 256 = sem munição
+    const sf = parseInt(e.kv.get('spawnflags') || '0', 10);
+    const [ap, ay, ar] = parseVec(e.kv.get('angles'));
+    const { f: tf, u: tu } = frameOf(ap || 0, ay || 0, ar || 0);
+    const quat = ap || ar ? new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(tu, tf), tu, tf)) : null;
+    turrets.push([p.x, p.y, p.z, yawFromSource(ay || 0) + Math.PI, { scale: 0.8, tippy: true, inactive: !!(sf & 64), noAmmo: !!(sf & 256), quat }]);
   }
 
   // bolas de energia

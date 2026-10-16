@@ -28,7 +28,8 @@ import { PORTAL_A, PORTAL_B } from './portals.js';
 const RATE = 1 / 30; // intervalo entre os quadros guardados (tempo do mundo)
 const KEEP = 120; // segundos de história
 const MAX_DELTA = 30;
-const STEP = 0.5; // passo da roda do mouse (s)
+const STEP = 0.5; // um "tique" da linha do tempo (s)
+const MIN_DELTA = 0.25; // o mínimo que dá para voltar
 const ECHO = 0.8; // o azul "eco" abre para o mergulho do clone nesse tempo final
 const MERGE = 12; // quadros sem mexer num objeto que ainda contam como o mesmo "uso" dele (0,4 s)
 const MISPLACED = 0.6; // m: o objeto não está onde o seu passado o encontrou → paradoxo
@@ -312,7 +313,7 @@ export class Chronos {
     if (on === this.paused || this.sweep) return;
     this.paused = on;
     if (!on) this.gap = true;
-    if (on) this.delta = THREE.MathUtils.clamp(this.delta, STEP, Math.max(STEP, this.maxDelta()));
+    if (on) this.delta = this.deltaGoal = THREE.MathUtils.clamp(this.delta, MIN_DELTA, Math.max(MIN_DELTA, this.maxDelta()));
     this.setFreeze(on);
     this.setHolo(on);
     this.ctx.fx.pause?.(on);
@@ -360,13 +361,29 @@ export class Chronos {
   }
 
   scrub(steps) {
+    return this.scrubBy(steps * STEP);
+  }
+
+  /**
+   * Roda do mouse na pausa: move o ALVO do Δ (em segundos, proporcional à rolagem); o Δ
+   * mostrado desliza até ele a cada quadro (smoothDelta), sem saltos de meio segundo.
+   */
+  scrubBy(seconds) {
     if (!this.paused) return false;
-    const max = this.maxDelta();
-    const d = THREE.MathUtils.clamp(Math.round((this.delta + steps * STEP) / STEP) * STEP, STEP, Math.max(STEP, max));
-    const changed = d !== this.delta;
-    this.delta = d;
-    if (changed) this.ctx.fx.scrub?.(d);
-    return changed;
+    const max = Math.max(MIN_DELTA, this.maxDelta());
+    const from = this.deltaGoal ?? this.delta;
+    this.deltaGoal = THREE.MathUtils.clamp(from + seconds, MIN_DELTA, max);
+    return this.deltaGoal !== from;
+  }
+
+  /** o Δ anda até o alvo; um "tique" a cada meio segundo atravessado */
+  smoothDelta(dtReal) {
+    if (this.deltaGoal == null) return;
+    const before = this.delta;
+    const k = 1 - Math.exp(-(dtReal || 1 / 60) * 14);
+    this.delta += (this.deltaGoal - this.delta) * k;
+    if (Math.abs(this.deltaGoal - this.delta) < 0.004) this.delta = this.deltaGoal;
+    if (Math.floor(before / STEP) !== Math.floor(this.delta / STEP)) this.ctx.fx.scrub?.(this.delta);
   }
 
   // ------------------------------------------------------------------ quadro
@@ -389,6 +406,7 @@ export class Chronos {
     }
     if (this.paused) {
       this.syncFreeze();
+      this.smoothDelta(this.ctx.dtReal?.());
       this.holoUpdate();
       this.syncAll();
       this.driveProps();
@@ -1687,6 +1705,9 @@ export class Chronos {
     S.undo?.();
     const idx = Math.round((1 - k) * (S.tail.length - 1));
     S.undo = k < 1 ? this.applyVisual(S.tail[idx].w) : null;
+    // as bolas não aparecem no "rebobinar": passar Δ segundos de quiques em 0,75 s vira
+    // um zigue-zague; elas surgem já no lugar quando o mundo chega ao destino
+    for (const b of this.pastBalls ?? []) b.visible = false;
     if (k >= 1) {
       this.sweep = null;
       this.restore(this.samples[this.samples.length - 1].w);

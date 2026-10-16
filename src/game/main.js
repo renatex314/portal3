@@ -1252,7 +1252,10 @@ function holdDistance(eye, fwd) {
   for (let k = 0; k < 3; k++) {
     const rest = MAX - dist;
     const wall = world.raycast(o, d, rest);
-    const P = portals.crossing(o, o.clone().addScaledVector(d, wall ? wall.dist + 0.01 : rest));
+    const end = o.clone().addScaledVector(d, wall ? wall.dist + 0.01 : rest);
+    // azul temporal: o objeto entra na parede junto com você (vai no salto), sem parar antes
+    if (portals.temporalCrossing?.(o, end)) return MAX;
+    const P = portals.crossing(o, end);
     if (!P) return wall ? Math.max(dist + wall.dist - 0.45, 0.5) : MAX;
     const tc = P.center.clone().sub(o).dot(P.normal) / d.dot(P.normal);
     dist += tc;
@@ -1466,11 +1469,9 @@ window.addEventListener(
     e.preventDefault();
     if (relogio?.paused) {
       // na pausa a roda escolhe quantos segundos voltar (para cima: mais longe no passado)
-      wheelSum += e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
-      while (Math.abs(wheelSum) >= 40) {
-        relogio.scrub(wheelSum < 0 ? 1 : -1);
-        wheelSum -= Math.sign(wheelSum) * 40;
-      }
+      // contínuo: ~0,5 s a cada "degrau" de roda (40 px); o trackpad anda fino
+      const px = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+      relogio.scrubBy((-px / 40) * 0.5);
       return;
     }
     wheelSum += e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;

@@ -18,7 +18,7 @@ const _a = new THREE.Vector3();
 export class Turret extends Prop {
   /** opts.scale: tamanho (1 = o padrão); opts.tippy: pés estreitos e corpo leve, que
    *  tomba com um cubo (como as da campanha original) */
-  constructor(scene, physics, portals, x, y, z, yaw, { scale = 1, tippy = false } = {}) {
+  constructor(scene, physics, portals, x, y, z, yaw, { scale = 1, tippy = false, inactive = false, noAmmo = false, quat = null } = {}) {
     super(physics, portals, turretModel());
     this.kind = 'turret';
     scene.add(this.mesh);
@@ -27,7 +27,7 @@ export class Turret extends Prop {
     this.half = new THREE.Vector3(0.28, 0.6, 0.28).multiplyScalar(k);
     this.meshOffset.set(0, -0.6 * k, 0);
     this.home = new THREE.Vector3(x, y + 0.62 * k, z);
-    this.homeQuat = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
+    this.homeQuat = quat ? quat.clone() : new THREE.Quaternion().setFromAxisAngle(UP, yaw);
     const feet = tippy ? 0.2 : 0.34;
     physics.addProp(this, {
       shapes: [
@@ -41,7 +41,8 @@ export class Turret extends Prop {
       quat: this.homeQuat,
     });
     this.sync();
-    this.active = true;
+    this.active = !inactive; // desligada desde o começo (largada, tombada)
+    this.noAmmo = noAmmo; // mira e acompanha, mas não atira
     this.lock = 0; // 0..1: tempo mirando antes de atirar
     this.fireAcc = 0;
     this.spotted = false;
@@ -296,7 +297,7 @@ export class Turret extends Prop {
       this.laser.visible = true;
       this.laser.geometry.setFromPoints([eye, laserTo ?? aim.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.05, -0.15, 0))]);
       this.laser.material.opacity = 0.4 + this.lock * 0.5;
-      if (this.lock >= 1) {
+      if (this.lock >= 1 && !this.noAmmo) {
         this.fireAcc += dt;
         while (this.fireAcc > 0.1) {
           this.fireAcc -= 0.1;
