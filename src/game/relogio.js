@@ -94,6 +94,8 @@ export class Chronos {
     this.ballDoubles = [];
     this.pastEntries = [];
     this.ballQueue = [];
+    this.blueEntries = [];
+    this.loopTw = null;
     for (const c of this.clones ?? []) this.dropClone(c);
     this.paused = false;
     this.tw = 0;
@@ -925,8 +927,31 @@ export class Chronos {
     return `${O.center.x.toFixed(3)},${O.center.y.toFixed(3)},${O.center.z.toFixed(3)}`;
   }
 
+  /**
+   * Bolas que (na história) entraram no azul temporal: quando o tempo passa de novo por
+   * aquele instante — você voltou para antes dele —, a mesma bola some ali (ela é a que
+   * saiu do laranja lá atrás). Se ela não estiver lá (você mexeu no caminho dela), é paradoxo.
+   */
+  closeBallLoops() {
+    const prev = this.loopTw ?? this.tw;
+    this.loopTw = this.tw;
+    if (!this.blueEntries?.length || this.paused || this.sweep) return;
+    this.blueEntries = this.blueEntries.filter((e) => this.tw - e.t < KEEP);
+    if (!(this.tw > prev)) return;
+    for (const e of this.blueEntries) {
+      if (!(e.t > prev && e.t <= this.tw)) continue;
+      const p = this.ctx.energy.pellets.find((q) => q.uid === e.uid);
+      if (!p) continue; // não existe nesta linha do tempo (já é a mais velha que continua)
+      if (p.pos.distanceTo(e.pos) < 2.5) {
+        this.ctx.fx.changed?.(p); // entrou no azul (que já não está aqui): vai para o passado
+        this.ctx.energy.kill(p);
+      } else this.ctx.fx.paradox?.('a esfera que foi para o passado não passou pelo azul desta vez', p.pos.clone());
+    }
+  }
+
   /** solta pelo azul as bolas cuja hora de sair chegou (chamado a cada quadro) */
   pastPellets() {
+    this.closeBallLoops();
     // o tempo voltou (salto, paradoxo): as entradas no laranja depois de agora não aconteceram
     if (this.pastEntries?.length) this.pastEntries = this.pastEntries.filter((e) => e.tIn <= this.tw + 1e-6);
     this.scanPastBalls();
@@ -1055,6 +1080,9 @@ export class Chronos {
     // foi pega ou acabou, some ali (sem ficar "grudada" na vista do azul)
     const end = sim.alive ? this.tw : Math.min(this.tw, (sim.track[sim.track.length - 1]?.t ?? Td) + RATE);
     (this.ballDoubles ??= []).push({ from: Td, to: end, track: sim.track, mesh: null, life: Math.max(p.life, p.from?.life ?? 0) });
+    // o laço fecha: se você voltar para antes de agora, esta mesma bola (a mais nova)
+    // tem de entrar no azul de novo neste instante e neste lugar
+    if (p.uid) (this.blueEntries ??= []).push({ uid: p.uid, t: this.tw, pos: p.pos.clone() });
     for (const C of sim.caught) {
       if (C.active) continue;
       C.active = true;
