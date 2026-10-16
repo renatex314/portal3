@@ -904,7 +904,7 @@ export class Chronos {
     // cubos e torretas
     this.props().forEach((c, k) => {
       const p = snap.props[k];
-      if (!p || !c.mesh || c === keep) return;
+      if (!p || !c.mesh) return;
       let g = H.props.get(c);
       const differs = p.gone !== !!c.gone || (!p.gone && p.p.distanceTo(c.pos) > 0.15);
       if (!g && differs && !p.gone) {
