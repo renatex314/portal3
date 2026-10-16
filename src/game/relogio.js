@@ -697,6 +697,26 @@ export class Chronos {
     return st;
   }
 
+  /**
+   * Cópias de objetos que agora existem só por causa do tempo — o eco (o objeto que viajou
+   * com você, refeito pela sua versão passada) e o duplo (o objeto mandado ao passado):
+   * [{ c: o objeto de verdade (tipo, refletor…), p, q }]. O laser as enxerga.
+   */
+  virtualProps() {
+    const out = [];
+    const props = this.props();
+    for (const c of this.clones) {
+      if (!c.echo || !this.clonePose(c)) continue;
+      const st = this.propAt(c.script, (this.tw - c.script[0].t) / RATE, c.echo.k);
+      if (st && !st.gone && props[c.echo.k]) out.push({ c: props[c.echo.k], p: st.p, q: st.q });
+    }
+    for (const d of this.doubles ?? []) {
+      const st = this.doubleAt(d, this.tw);
+      if (st) out.push({ c: d.prop, p: st.p, q: st.q });
+    }
+    return out;
+  }
+
   /** cópias do passado que apertam botões agora (as que o clone não está segurando) */
   echoes() {
     const out = [];

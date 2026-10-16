@@ -91,28 +91,53 @@ export class Dialogue {
   }
 
   /** começa uma cena; devolve a duração (s) na hora, e toca em segundo plano */
-  playScene(file) {
+  /**
+   * Cena falada (uma GLaDOS só: uma fala de cada vez). `wait` (busyactor 1 do mapa): entra
+   * depois da que está tocando; senão interrompe a atual (esmaece rápido e some a legenda).
+   * Devolve quanto falta para a cena acabar (para o OnCompletion).
+   */
+  playScene(file, { wait = false } = {}) {
     const info = this.failed ? null : this.sceneInfo(file);
     if (!info) return null;
     const run = this.run;
+    const now = this.audio().currentTime;
+    const start = wait ? Math.max(now, this.voiceEnd ?? 0) : now;
+    if (!wait) this.stopVoice();
+    const voice = { file: file.toLowerCase(), srcs: [], timers: [] };
+    this.voice = voice;
+    this.voiceEnd = start + info.ms / 1000;
     (async () => {
       const bufs = await Promise.all(info.sounds.map((s) => this.buffer(s)));
-      if (run !== this.run) return;
+      if (run !== this.run || voice.cancelled) return;
       // os sons da cena em sequência, com o tempo que sobra dividido entre as pausas
       const total = bufs.reduce((a, b) => a + (b?.duration ?? 0), 0);
       const gap = Math.max(0.12, Math.min(1.5, (info.ms / 1000 - total) / (info.sounds.length + 1)));
-      let t = this.audio().currentTime + 0.05;
+      let t = Math.max(start, this.audio().currentTime) + 0.05;
       info.sounds.forEach((name, k) => {
         const b = bufs[k];
         if (!b) return;
-        this.schedule(b, t, name);
+        const h = this.schedule(b, t, name, 1, voice);
+        voice.srcs.push(h);
         t += b.duration + gap;
       });
+      this.voiceEnd = Math.max(this.voiceEnd, t);
     })();
-    return info.ms / 1000;
+    return start - now + info.ms / 1000;
   }
 
-  schedule(buf, when, name, volume = 1) {
+  /** cala a cena que está tocando (ou só se for `file`) */
+  stopVoice(file = null) {
+    const v = this.voice;
+    if (!v || (file && v.file !== file.toLowerCase())) return;
+    v.cancelled = true;
+    for (const h of v.srcs) this.stopSound(h, 0.15);
+    for (const id of v.timers) clearTimeout(id);
+    this.subtitle?.('GLaDOS', '', 0);
+    this.voice = null;
+    this.voiceEnd = this.audio().currentTime;
+  }
+
+  schedule(buf, when, name, volume = 1, voice = null) {
     const ctx = this.audio();
     const src = ctx.createBufferSource();
     src.buffer = buf;
@@ -125,7 +150,8 @@ export class Dialogue {
     const cap = this.captions.get(name.toLowerCase());
     if (cap && !cap.sfx && cap.text) {
       const run = this.run;
-      setTimeout(() => run === this.run && this.subtitle('GLaDOS', cap.text, buf.duration + 0.4), Math.max(0, (when - ctx.currentTime) * 1000));
+      const id = setTimeout(() => run === this.run && !voice?.cancelled && this.subtitle('GLaDOS', cap.text, buf.duration + 0.4), Math.max(0, (when - ctx.currentTime) * 1000));
+      voice?.timers.push(id);
     }
     return { src, gain: g };
   }

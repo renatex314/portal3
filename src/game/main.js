@@ -868,7 +868,8 @@ const campaignCtx = {
     player.spawn(pos.x, pos.y, pos.z, yaw);
   },
   toast: (m) => toast(m),
-  scene: (file) => campaign.dialogue.playScene(file),
+  scene: (file, wait) => campaign.dialogue.playScene(file, { wait }),
+  stopScene: (file) => campaign.dialogue.stopVoice(file),
   sound: (name, vol) => campaign.dialogue.playSound(name, vol),
   stopSound: (h, fade) => campaign.dialogue.stopSound(h, fade),
   async credits() {
@@ -882,6 +883,12 @@ const campaignCtx = {
 let subTimer = 0;
 function campaignSubtitle(who, text, secs) {
   const subs = $('subs');
+  if (!text) {
+    // fala interrompida: a legenda some junto
+    clearTimeout(subTimer);
+    subs.classList.remove('show');
+    return;
+  }
   const w = document.createElement('span');
   w.className = 'who';
   w.textContent = who;

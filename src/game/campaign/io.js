@@ -1117,9 +1117,15 @@ CampaignRuntime.prototype.spawnTrain = function (pool) {
 
 CampaignRuntime.prototype.spawnTemplate = function (tpl, at) {
   const origin = vecKV(tpl.e, 'origin');
+  // o mapa tem entidades repetidas (mesmo nome e lugar: o núcleo da curiosidade da Fuga 3);
+  // cada uma só vira um objeto
+  const seen = new Set();
   for (const name of tpl.templates)
     for (const e of this.bsp.entities) {
       if ((e.kv.get('targetname') ?? '').toLowerCase() !== name || !(isCube(e) || e.classname === 'prop_glados_core')) continue;
+      const key = `${name}|${e.kv.get('origin')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       const p = vecKV(e, 'origin');
       if (at) p.sub(origin).add(at);
       this.ctx.spawnCube(new THREE.Vector3(p.x, p.y - 0.3, p.z), { ...cubeOpts(e), outputs: e.outputs });
@@ -1557,10 +1563,14 @@ const INPUTS = {
     // falas: tocadas pelo módulo de diálogo (ctx.scene); sem ele, só o tempo passa
     if (input === 'start') {
       this.fire(n, 'onstart');
-      const dur = this.ctx.scene?.(n.e.kv.get('scenefile') ?? '') ?? 3;
+      // "ator ocupado" 1: espera a fala atual acabar; o resto interrompe
+      const dur = this.ctx.scene?.(n.e.kv.get('scenefile') ?? '', n.e.kv.get('busyactor') === '1') ?? 3;
       this.schedule(dur, '!self', 'FireCompletion', '', null, n);
     } else if (input === 'firecompletion') this.fire(n, 'oncompletion');
-    else if (input === 'cancel') this.queue = this.queue.filter((ev) => !(ev.caller === n && ev.input === 'FireCompletion'));
+    else if (input === 'cancel') {
+      this.queue = this.queue.filter((ev) => !(ev.caller === n && ev.input === 'FireCompletion'));
+      this.ctx.stopScene?.(n.e.kv.get('scenefile') ?? '');
+    }
   },
 };
 INPUTS.func_wall_toggle = INPUTS.func_brush;

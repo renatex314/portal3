@@ -277,7 +277,7 @@ export class Frontier {
    * objeto ou entra num portal ligado e continua do outro lado. Devolve os
    * trechos [a, b] e o que encerrou o feixe.
    */
-  trace(o, d, { props = true, ignore = null, maxSeg = 8, maxDist = 400, glass = false, past = null, temporal = false } = {}) {
+  trace(o, d, { props = true, ignore = null, maxSeg = 8, maxDist = 400, glass = false, past = null, temporal = false, extra = null } = {}) {
     const segs = [];
     o = o.clone();
     d = d.clone().normalize();
@@ -300,6 +300,21 @@ export class Frontier {
           return { segs, prop: snapHit.e.c, snap: snapHit.e, point: end };
         }
       } else if (props) ph = this.physics.castRay(o, d, hit ? hit.dist : maxDist, (p) => p === ignore || p.gone, true);
+      // cópias do tempo (o eco do objeto que viajou com você, o duplo do mandado ao passado)
+      if (props && extra?.length) {
+        let best = null;
+        const lim = Math.min(hit ? hit.dist : maxDist, ph ? ph.dist : Infinity);
+        for (const e of extra) {
+          if (e === ignore) continue;
+          const t = rayBox(o, d, e.p, e.q, 0.3);
+          if (t !== null && t < lim && (!best || t < best.dist)) best = { dist: t, e };
+        }
+        if (best) {
+          const end = o.clone().addScaledVector(d, best.dist);
+          segs.push([o, end, d]);
+          return { segs, prop: best.e.c, snap: best.e, point: end };
+        }
+      }
       if (ph && (!hit || ph.dist < hit.dist)) {
         const end = o.clone().addScaledVector(d, ph.dist);
         segs.push([o, end, d]);
@@ -516,12 +531,13 @@ export class Frontier {
     let burn = 0;
     let nearest = Infinity;
     // os feixes de agora e os que saem do azul vindos do laranja do passado
+    const extra = ctx.relogio?.virtualProps?.() ?? null;
     for (const L of [...W.lasers, ...this.updatePast(ctx)]) {
       let o = L.pos ?? L.o;
       let d = L.dir ?? L.d;
       let ignore = null;
       for (let hop = 0; hop < 6; hop++) {
-        const res = this.trace(o, d, { ignore, glass: true });
+        const res = this.trace(o, d, { ignore, glass: true, extra });
         for (const [a, b] of res.segs) {
           this.drawBeam(a, b);
           // o jogador encostou no feixe?
@@ -551,6 +567,14 @@ export class Frontier {
         const p = res.prop;
         if (p?.redirect) {
           // cubo refletor: sai pela lente da frente
+          if (res.snap) {
+            // cópia do tempo (eco/duplo): a pose dela, não a do cubo de verdade
+            const f = new THREE.Vector3(0, 0, 1).applyQuaternion(res.snap.q).normalize();
+            o = res.snap.p.clone().addScaledVector(f, 0.36);
+            d = f;
+            ignore = res.snap;
+            continue;
+          }
           p.lit = true;
           // segurado: vale a mira de quem segura (o cubo encostado em algo gira com atraso)
           const f = new THREE.Vector3(0, 0, 1).applyQuaternion(p.held && p.holdQuat ? p.holdQuat : p.quat).normalize();
