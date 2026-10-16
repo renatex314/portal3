@@ -138,19 +138,23 @@ export class Chronos {
     };
   }
 
-  /** os seus portais normais agora (o par temporal não entra: ele é o salto); reaproveita o objeto se nada mudou */
+  /**
+   * os seus portais agora — também o par temporal (laranja no passado, com o Δ dele): a
+   * sua versão passada o terá de novo depois de um salto, e o que passa por ele (lasers,
+   * bolas, cubos, você) continua indo e vindo. Reaproveita o objeto se nada mudou
+   */
   portalState() {
     const { portals } = this.ctx;
     const { blue, orange } = portals;
-    const temporal = orange.placed && orange.delta > 0;
-    const fr = (P, on, old) => {
-      if (!on || !P.placed) return null;
-      if (old && old.box === P.box && old.c.equals(P.center) && old.n.equals(P.normal)) return old;
-      return { c: P.center.clone(), n: P.normal.clone(), u: P.up.clone(), box: P.box };
+    const fr = (P, old) => {
+      if (!P.placed) return null;
+      const delta = P.delta > 0 ? P.delta : 0;
+      if (old && old.box === P.box && old.c.equals(P.center) && old.n.equals(P.normal) && (old.delta ?? 0) === delta) return old;
+      return { c: P.center.clone(), n: P.normal.clone(), u: P.up.clone(), box: P.box, delta };
     };
     const old = this.samples[this.samples.length - 1]?.pt;
-    const b = fr(blue, !temporal, old?.b);
-    const o = fr(orange, !temporal, old?.o);
+    const b = fr(blue, old?.b);
+    const o = fr(orange, old?.o);
     return old && old.b === b && old.o === o ? old : { b, o };
   }
 
@@ -166,8 +170,10 @@ export class Chronos {
       const P = which === 'b' ? c.pair.blue : c.pair.orange;
       if (!f) {
         if (P.placed) P.remove();
+        P.delta = 0;
       } else if (!P.placed || c.shown?.[which] !== f) {
         P.setFrame(f.c, f.n, f.u, f.box);
+        P.delta = f.delta ?? 0; // laranja temporal da versão passada: aberto no passado dela
         (c.shown ??= {})[which] = f;
       }
     }
@@ -917,7 +923,7 @@ export class Chronos {
     const pos = p.pos.clone();
     const vel = p.vel.clone();
     this.ballQueue ??= [];
-    this.ballQueue.push({ tIn: this.tw, tOut: this.tw + O.delta, pos, vel, key: this.orangeKey(O), life: p.from?.life ?? p.life });
+    this.ballQueue.push({ tIn: this.tw, tOut: this.tw + O.delta, pos, vel, key: this.orangeKey(O), O, life: p.from?.life ?? p.life });
     (this.pastEntries ??= []).push({ li: this.ctx.world.launchers.indexOf(p.from), tIn: this.tw });
     this.ctx.fx.fizzleBall?.(pos);
     return true;
@@ -959,8 +965,6 @@ export class Chronos {
     const { portals, energy } = this.ctx;
     // o tempo voltou (salto, paradoxo): o que entrou depois de agora não aconteceu
     this.ballQueue = this.ballQueue.filter((b) => b.tIn <= this.tw + 1e-6);
-    const O = portals.orange;
-    const ok = O.placed && portals.isLinked(O);
     const keep = [];
     for (const b of this.ballQueue) {
       if (this.tw < b.tOut) {
@@ -968,7 +972,8 @@ export class Chronos {
         continue;
       }
       // o laranja mudou de lugar ou fechou: a bola se perdeu no tempo
-      if (!ok || this.orangeKey(O) !== b.key) continue;
+      const O = b.O ?? portals.orange;
+      if (!O.placed || !portals.isLinked(O) || this.orangeKey(O) !== b.key) continue;
       const pos = b.pos.clone();
       const vel = b.vel.clone();
       portals.carry(O, pos, vel);
@@ -988,15 +993,23 @@ export class Chronos {
    * receptor, tirá-la da história seria um paradoxo, e ela fica como estava.
    */
   scanPastBalls() {
-    const { portals, energy, world } = this.ctx;
-    const O = portals.orange;
-    if (!O.placed || !(O.delta > 0) || !portals.isLinked(O) || this.paused || this.sweep) {
+    const { portals } = this.ctx;
+    // o seu laranja temporal e os das suas versões passadas
+    const oranges = portals.list.filter((P) => P.placed && P.delta > 0 && portals.isLinked(P));
+    if (!oranges.length || this.paused || this.sweep) {
       this.scanT = null;
+      this.scanTs = new Map();
       return;
     }
+    this.scanTs ??= new Map();
+    for (const O of oranges) this.scanPastBallsFor(O);
+  }
+
+  scanPastBallsFor(O) {
+    const { portals, energy, world } = this.ctx;
     const cur = this.tw - O.delta;
-    const from = this.scanT ?? cur;
-    this.scanT = cur;
+    const from = this.scanTs.get(O) ?? cur;
+    this.scanTs.set(O, cur);
     const limit = Math.min(cur, O.placedTw ?? -Infinity); // depois de abrir, quem cuida é ballIntoPast
     if (!(limit > from)) return;
     const n = O.normal;
@@ -1065,6 +1078,12 @@ export class Chronos {
     const O = blue.partner;
     const delta = O.delta;
     if (!(delta > 0) || this.paused || this.sweep) return false;
+    // repetição: esta bola já foi mandada ao passado por este azul neste instante (o
+    // da sua versão passada) — é o laço fechando; ela só entra, sem mandar de novo
+    if (this.blueEntries?.some((e) => e.uid === p.uid && Math.abs(e.t - this.tw) < 0.6)) {
+      this.ctx.fx.changed?.(p);
+      return true;
+    }
     const Td = this.tw - delta;
     if (Td < this.samples[0].t - 1e-6) return false;
     const pos = p.pos.clone();
@@ -1738,8 +1757,9 @@ export class Chronos {
       arrival: this.arrival,
       w: this.snapshot(),
       player: this.pre,
-      blue: frame(blue),
-      orange: { ...frame(orange), delta: orange.delta },
+      // os SEUS portais (o salto pode ter sido pelo azul de uma versão passada)
+      blue: frame(this.ctx.portals.blue),
+      orange: { ...frame(this.ctx.portals.orange), delta: this.ctx.portals.orange.delta },
     };
   }
 

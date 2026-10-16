@@ -155,54 +155,56 @@ export class Frontier {
    */
   updatePast(ctx) {
     const R = ctx.relogio;
-    const O = this.portals.orange;
-    const on = !!R && O.placed && O.delta > 0 && this.portals.isLinked(O) && this.world.lasers.length > 0;
-    if (!on) {
+    // o seu laranja temporal e os das suas versões passadas (cada um com o seu Δ)
+    const oranges = R && this.world.lasers.length ? this.portals.list.filter((P) => P.placed && P.delta > 0 && this.portals.isLinked(P)) : [];
+    if (!oranges.length) {
       this.pastKey = null;
       this.pastN = 0;
       this.pastExtra = [];
       return this.pastExtra;
     }
-    const sample = R.samples[R.indexAt(R.tw - O.delta)];
+    const keyParts = oranges.map((O) => [R.samples[R.indexAt(R.tw - O.delta)], O.delta, O.center.x, O.center.y, O.center.z, O.normal.x, O.normal.z]);
     const k = this.pastKey;
-    if (k && k.sample === sample && k.delta === O.delta && k.c.equals(O.center) && k.n.equals(O.normal)) return this.pastExtra;
-    this.pastKey = { sample, delta: O.delta, c: O.center.clone(), n: O.normal.clone() };
-    const snap = sample.w;
-    const props = [];
-    R.props().forEach((c, i) => {
-      const e = snap.props[i];
-      if (c.kind === 'cube' && e && !e.gone) props.push({ c, p: e.p, q: e.q });
-    });
+    if (k && k.length === keyParts.length && k.every((a, i) => a.every((v, j) => v === keyParts[i][j]))) return this.pastExtra;
+    this.pastKey = keyParts;
     const segs = [];
     const extra = [];
-    R.inPast(O.delta, () => {
-      for (const L of this.world.lasers) {
-        let o = L.pos;
-        let d = L.dir;
-        let ignore = null;
-        for (let hop = 0; hop < 6; hop++) {
-          const res = this.trace(o, d, { ignore, glass: true, past: props, temporal: true });
-          for (const [a, b] of res.segs) segs.push([a, b]);
-          if (res.temporal) {
-            const pos = res.point.clone();
-            const vel = res.temporal.dir.clone();
-            this.portals.carry(res.temporal.P, pos, vel);
-            vel.normalize();
-            extra.push({ o: pos.addScaledVector(vel, 0.03), d: vel });
+    for (const O of oranges) {
+      const snap = R.samples[R.indexAt(R.tw - O.delta)].w;
+      const props = [];
+      R.props().forEach((c, i) => {
+        const e = snap.props[i];
+        if (c.kind === 'cube' && e && !e.gone) props.push({ c, p: e.p, q: e.q });
+      });
+      R.inPast(O.delta, () => {
+        for (const L of this.world.lasers) {
+          let o = L.pos;
+          let d = L.dir;
+          let ignore = null;
+          for (let hop = 0; hop < 6; hop++) {
+            const res = this.trace(o, d, { ignore, glass: true, past: props, temporal: O });
+            for (const [a, b] of res.segs) segs.push([a, b]);
+            if (res.temporal) {
+              const pos = res.point.clone();
+              const vel = res.temporal.dir.clone();
+              this.portals.carry(res.temporal.P, pos, vel);
+              vel.normalize();
+              extra.push({ o: pos.addScaledVector(vel, 0.03), d: vel });
+              break;
+            }
+            if (!res.point) break;
+            if (res.prop?.redirect) {
+              const f = new THREE.Vector3(0, 0, 1).applyQuaternion(res.snap.q).normalize();
+              o = res.snap.p.clone().addScaledVector(f, 0.36);
+              d = f;
+              ignore = res.prop;
+              continue;
+            }
             break;
           }
-          if (!res.point) break;
-          if (res.prop?.redirect) {
-            const f = new THREE.Vector3(0, 0, 1).applyQuaternion(res.snap.q).normalize();
-            o = res.snap.p.clone().addScaledVector(f, 0.36);
-            d = f;
-            ignore = res.prop;
-            continue;
-          }
-          break;
         }
-      }
-    });
+      });
+    }
     this.pastBeams ??= [];
     segs.forEach(([a, b], i) => {
       const beam = this.pastBeams[i] ?? this.beamMesh(this.pastBeams);
@@ -310,7 +312,9 @@ export class Frontier {
       segs.push([o, hit.point.clone(), d]);
       const P = this.portals.list.find((Q) => {
         if (!this.portals.isLinked(Q) || Q.partner.delta > 0 || Q.box !== hit.box) return false;
-        if (Q.delta > 0 && !temporal) return false; // o laranja do passado só vale para o feixe do passado (veja updatePast)
+        // o laranja do passado só vale para o feixe do passado (veja updatePast); com vários
+        // (os seus e os das suas versões passadas), cada um no Δ dele
+        if (Q.delta > 0 && !(temporal === true || temporal === Q)) return false;
         const l = Q.local(hit.point);
         return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && Math.abs(l.z) < 0.05;
       });

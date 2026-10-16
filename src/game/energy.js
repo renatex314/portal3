@@ -322,15 +322,18 @@ export class EnergySystem {
             return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1;
           });
         // o laranja temporal (aberto no passado): a bola entra e sai pelo azul Δ s depois
-        const O = portals.orange;
-        if (hit && !intoPortal && O?.placed && O.delta > 0 && portals.isLinked(O)) {
-          const l = O.local(hit.point);
-          if (Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && on.intoPast?.(p, O)) {
-            this.kill(p);
-            entered = true;
-            break;
+        // (o seu ou o de uma versão passada sua)
+        if (hit && !intoPortal)
+          for (const O of portals.list) {
+            if (!O.placed || !(O.delta > 0) || !portals.isLinked(O)) continue;
+            const l = O.local(hit.point);
+            if (Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && on.intoPast?.(p, O)) {
+              this.kill(p);
+              entered = true;
+              break;
+            }
           }
-        }
+        if (entered) break;
         if (hit && !intoPortal) {
           p.pos.copy(hit.point).addScaledVector(hit.normal, R + 0.002);
           p.vel.addScaledVector(hit.normal, -2 * p.vel.dot(hit.normal));
