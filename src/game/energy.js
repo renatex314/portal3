@@ -132,7 +132,7 @@ export class EnergySystem {
       light.intensity = 6;
     }
     const hist = Array.from({ length: TRAIL }, () => L.pos.clone());
-    const p = { pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, light, cooldown: 0 };
+    const p = { uid: `b${(this.uidSeq = (this.uidSeq ?? 0) + 1)}`, pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, light, cooldown: 0 };
     L.pellet = p;
     this.pellets.push(p);
     return p;

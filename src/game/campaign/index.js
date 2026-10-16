@@ -11,6 +11,9 @@ import { ensureSource, readFile, packedContent } from './source.js';
 import { MAPS } from './maps.js';
 import { animatedModels, sequenceDurations } from './mdl.js';
 import { parseStaticProps, parseModel } from './staticprops.js';
+import { parseAnimatedModel } from './mdlmodel.js';
+import { buildModel, placeModel, playSeq } from './model3d.js';
+import * as THREE from 'three';
 import { VPK } from './vpk.js';
 
 // falas e sons (um só para a campanha toda); a legenda é ligada pelo main.js
@@ -61,6 +64,51 @@ async function loadPropModels(bsp, pak) {
   bsp.propModels = propModels;
 }
 
+// modelos de entidade desenhados com o modelo do original (a sala da GLaDOS: corpo,
+// núcleos, discos, gerador, monitores, varanda, porta e os destroços do final)
+export const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/)/;
+const entModels = new Map();
+async function loadEntityModels(bsp, pak) {
+  const names = new Set();
+  for (const e of bsp.entities) {
+    const m = (e.kv.get('model') ?? '').toLowerCase().replace(/\\/g, '/');
+    if (/^prop_(dynamic|dynamic_override|physics|glados_core)/.test(e.classname) && REAL_MODEL.test(m)) names.add(m);
+  }
+  await Promise.all(
+    [...names].filter((n) => !entModels.has(n)).map(async (name) => {
+      const base = name.replace(/\.mdl$/, '');
+      try {
+        const [mdl, vvd, vtx, ani] = await Promise.all(['.mdl', '.vvd', '.dx90.vtx', '.ani'].map((x) => modelFile(pak, base + x)));
+        entModels.set(name, mdl && vvd && vtx ? parseAnimatedModel(mdl, vvd, vtx, ani) : null);
+      } catch (err) {
+        console.warn('modelo', name, err);
+        entModels.set(name, null);
+      }
+    }),
+  );
+  bsp.entModels = entModels;
+  bsp.readAsset = (p) => modelFile(pak, p); // texturas e materiais dos modelos
+  lastRead = bsp.readAsset;
+}
+let lastRead = null;
+
+/**
+ * Núcleo de personalidade com o modelo do original (os que caem da GLaDOS): pele
+ * pelo tipo (0 curiosidade, 1 raiva, 2 bolo/maluco; 3 = o "fictício"). null se não houver.
+ */
+export function realCoreModel(type = 0) {
+  const M = entModels.get('models/props_bts/glados_ball_reference.mdl');
+  if (!M || !lastRead) return null;
+  const obj = buildModel(M, lastRead, { skin: (((type + 1) % 4) + 4) % 4 });
+  if (!playSeq(obj, 'look_02', { loop: true })) playSeq(obj, 'idle', { loop: true });
+  const inner = placeModel(obj, new THREE.Vector3(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0));
+  const g = new THREE.Group();
+  g.scale.setScalar(0.8); // cabe no corpo físico do cubo
+  g.add(inner);
+  g.userData.mixer = obj.mixer;
+  return g;
+}
+
 export const CAMPAIGN = MAPS.map(([map, code], n) => ({
   id: `campanha-${map}`,
   series: 'campaign',
@@ -75,6 +123,7 @@ export const CAMPAIGN = MAPS.map(([map, code], n) => ({
     const bsp = await fetchMap(map);
     await dialogue.init();
     await loadPropModels(bsp, dialogue.pak);
+    await loadEntityModels(bsp, dialogue.pak);
     // duração das animações que a lógica do mapa espera terminar (OnAnimationDone)
     if (!bsp.animDurations) {
       bsp.animDurations = new Map();

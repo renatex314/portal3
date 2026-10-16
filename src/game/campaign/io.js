@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { S, toV, parseVec, vecKV, modelBounds, isCube, cubeOpts, yawFromSource } from './convert.js';
 import { PORTAL_B } from '../portals.js';
 import { RocketTurret, Rocket, bossMachine, animateBoss, coreModel, explosion, elevatorShell, pedestalSwitch } from './boss.js';
+import { buildModel, placeModel, playSeq } from './model3d.js';
+import { REAL_MODEL } from './index.js';
 
 const D2R = Math.PI / 180;
 const ZERO = new THREE.Vector3();
@@ -265,6 +267,31 @@ export class CampaignRuntime {
     this.fire(this.cubeNode(cube), 'onplayerpickup', this.player);
   }
 
+  /** vidro quebrável (func_breakable_surf / func_breakable): some em cacos e avisa o mapa */
+  breakGlass(n, at) {
+    if (n.broken) return;
+    n.broken = true;
+    const b = this.brushOf.get(n.e);
+    for (const s of b?.solids ?? []) this.ctx.world.setSolidEnabled(s, false);
+    this.fire(n, 'onbreak', this.player);
+    this.ctx.sound?.('Glass.Break', 1);
+    // cacos
+    const group = this.ctx.world.group;
+    const mat = new THREE.MeshStandardMaterial({ color: 0xcfe9f2, transparent: true, opacity: 0.7, roughness: 0.1, metalness: 0.2, side: THREE.DoubleSide });
+    const box = b?.solids?.[0];
+    const c = box ? box.min.clone().add(box.max).multiplyScalar(0.5) : at.clone();
+    const size = box ? box.max.clone().sub(box.min) : new THREE.Vector3(1, 1, 1);
+    for (let i = 0; i < 46; i++) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.08 + Math.random() * 0.14, 0.08 + Math.random() * 0.18), mat);
+      m.position.set(c.x + (Math.random() - 0.5) * size.x, c.y + (Math.random() - 0.5) * size.y, c.z + (Math.random() - 0.5) * size.z);
+      m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      group.add(m);
+      const v = m.position.clone().sub(at).setLength(1.5 + Math.random() * 3);
+      v.y += Math.random() * 2;
+      (this.shards ??= []).push({ m, v, w: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(12), t: 0 });
+    }
+  }
+
   /** foguetes, explosões e o resto da luta final */
   updateBoss(dt) {
     const { world, portals, player } = this.ctx;
@@ -296,13 +323,32 @@ export class CampaignRuntime {
         boom = true;
       }
       const step = r.pos.clone().sub(prev);
-      if (!boom && step.lengthSq() > 0 && world.raycast(prev, step.clone().normalize(), step.length())) boom = true;
+      if (!boom && step.lengthSq() > 0) {
+        const hit = world.raycast(prev, step.clone().normalize(), step.length());
+        if (hit) {
+          boom = true;
+          if (hit.box.breakable) this.breakGlass(hit.box.breakable, hit.point);
+        }
+      }
       if (boom) {
         explosion(world.group, r.pos, this.booms);
         this.ctx.sound?.('Portal.rocket_explode', 1);
         r.dispose();
         this.rockets.splice(i, 1);
       } else r.sync();
+    }
+    for (let i = (this.shards?.length ?? 0) - 1; i >= 0; i--) {
+      const sh = this.shards[i];
+      sh.t += dt;
+      sh.v.y -= 9.8 * dt;
+      sh.m.position.addScaledVector(sh.v, dt);
+      sh.m.rotation.x += sh.w.x * dt;
+      sh.m.rotation.y += sh.w.y * dt;
+      if (sh.t > 2.2) {
+        world.group.remove(sh.m);
+        sh.m.geometry.dispose();
+        this.shards.splice(i, 1);
+      }
     }
     for (let i = this.booms.length - 1; i >= 0; i--) {
       const b = this.booms[i];
@@ -334,6 +380,52 @@ export class CampaignRuntime {
       this.byName.get(n.name).push(n);
     }
     return n;
+  }
+
+  /**
+   * Desenha a entidade com o modelo do original, se ele foi lido (index.js). Segue a
+   * entidade-mãe (porta, trem) e gira com um func_rotating (os discos da GLaDOS).
+   */
+  realModel(n, model, at) {
+    const M = REAL_MODEL.test(model) ? this.bsp.entModels?.get(model.replace(/\\/g, '/')) : null;
+    if (!M || !this.bsp.readAsset) return false;
+    const skin = parseInt(n.e.kv.get('skin') || '0', 10) || 0;
+    const obj = buildModel(M, this.bsp.readAsset, { skin });
+    const [p, y, r] = parseVec(n.e.kv.get('angles'));
+    const v = anglesToVectors(p || 0, y || 0, r || 0);
+    const cont = placeModel(obj, at, v.forward, v.up);
+    const base = cont.matrix.clone();
+    this.ctx.world.group.add(cont);
+    n.real = obj;
+    n.realCont = cont;
+    const def = (n.e.kv.get('defaultanim') ?? '').toLowerCase();
+    n.defaultAnim = obj.clips.has(def) ? def : obj.clips.has('idle') ? 'idle' : null;
+    if (n.defaultAnim) playSeq(n.real, n.defaultAnim, { loop: true });
+    if (n.e.kv.get('startdisabled') === '1') cont.visible = false;
+    // mãe que gira (func_rotating): o modelo gira em volta do eixo dela
+    const pe = this.bsp.entities.find((x) => (x.kv.get('targetname') ?? '').toLowerCase() === (n.e.kv.get('parentname') ?? '').toLowerCase());
+    let spin = null;
+    if (pe?.classname === 'func_rotating') {
+      const sf = parseInt(pe.kv.get('spawnflags') || '0', 10);
+      const axis = sf & 4 ? new THREE.Vector3(1, 0, 0) : sf & 8 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+      spin = { axis, pivot: vecKV(pe, 'origin'), speed: THREE.MathUtils.degToRad(parseFloat(pe.kv.get('maxspeed')) || 30) * (sf & 2 ? -1 : 1), on: !!(sf & 1), a: 0, name: (pe.kv.get('targetname') ?? '').toLowerCase() };
+      n.spin = spin;
+    }
+    const tmp = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    n.tick = (dt) => {
+      obj.mixer.update(dt);
+      const off = this.parentOffset(n);
+      cont.matrix.copy(base);
+      if (spin) {
+        if (spin.on) spin.a += spin.speed * dt;
+        q.setFromAxisAngle(spin.axis, spin.a);
+        tmp.makeTranslation(spin.pivot.x, spin.pivot.y, spin.pivot.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(new THREE.Matrix4().makeTranslation(-spin.pivot.x, -spin.pivot.y, -spin.pivot.z));
+        cont.matrix.premultiply(tmp);
+      }
+      if (off.lengthSq()) cont.matrix.premultiply(tmp.makeTranslation(off.x, off.y, off.z));
+    };
+    return true;
   }
 
   /** deslocamento atual da entidade-mãe (porta, plataforma ou trem) de `n`, se houver */
@@ -429,6 +521,7 @@ export class CampaignRuntime {
   }
 
   kill(n) {
+    if (n.realCont) n.realCont.visible = false;
     if (n.sound) INPUTS.ambient_generic.call(this, n, 'stopsound', '');
     n.dead = true;
     if (n.cube) this.ctx.removeCube(n.cube);
@@ -845,6 +938,14 @@ const SETUP = {
   prop_dynamic(n) {
     const model = (n.e.kv.get('model') ?? '').toLowerCase();
     const at = vecKV(n.e, 'origin');
+    // modelo do original (sala da GLaDOS): malha, texturas e animações de verdade
+    if (this.realModel(n, model, at)) {
+      if (/glados_body\.mdl$/.test(model)) {
+        this.hitTargets.push({ node: n, a: at.clone().add(new THREE.Vector3(0, -1.6, 0)), b: at.clone().add(new THREE.Vector3(0, -5.6, 0)), r: 1.9 });
+        n.boss = true;
+      }
+      return;
+    }
     if (/glados_body\.mdl$/.test(model)) {
       // a máquina central (desenho próprio) e o volume que recebe os foguetes
       n.machine = bossMachine();
@@ -891,6 +992,10 @@ const SETUP = {
       };
     }
   },
+  func_breakable_surf(n) {
+    // vidro que quebra: os sólidos sabem de quem são (o foguete que acerta quebra)
+    for (const s of this.brushOf.get(n.e)?.solids ?? []) s.breakable = n;
+  },
   func_door_rotating(n) {
     // botão de pedestal: a porta giratória invisível com "abre com o uso" recebe o E
     if (flags(n.e) & 256) n.useable = (a) => !n.isOpen && INPUTS.func_door_rotating.call(this, n, 'open', '', { activator: a });
@@ -926,6 +1031,7 @@ for (const c of ['trigger_look', 'trigger_vphysics_motion']) SETUP[c] = SETUP.tr
 SETUP.func_water_analog = SETUP.func_movelinear;
 SETUP.func_button = SETUP.func_rot_button;
 SETUP.prop_dynamic_override = SETUP.prop_dynamic;
+SETUP.func_breakable = SETUP.func_breakable_surf;
 
 /** próximo ponto do trilho (dir > 0) ou o anterior (dir < 0) */
 CampaignRuntime.prototype.nextTrack = function (node, dir) {
@@ -992,6 +1098,22 @@ CampaignRuntime.prototype.spawnTemplate = function (tpl, at) {
 };
 
 const INPUTS = {
+  func_breakable_surf(n, input) {
+    if (input === 'shatter' || input === 'break') this.breakGlass(n, vecKV(n.e, 'origin'));
+  },
+  func_breakable(n, input) {
+    if (input === 'break') this.breakGlass(n, vecKV(n.e, 'origin'));
+  },
+  func_rotating(n, input) {
+    // só os modelos presos a ele giram (os discos da GLaDOS)
+    for (const m of this.nodes)
+      if (m.spin?.name === n.name) {
+        if (input === 'start' || input === 'turnon') m.spin.on = true;
+        else if (input === 'stop' || input === 'turnoff') m.spin.on = false;
+        else if (input === 'toggle') m.spin.on = !m.spin.on;
+        else if (input === 'reverse') m.spin.speed = -m.spin.speed;
+      }
+  },
   func_noportal_volume(n, input) {
     if (input === 'activate') n.active = true;
     else if (input === 'deactivate') n.active = false;
@@ -1010,6 +1132,16 @@ const INPUTS = {
       this.queue = this.queue.filter((q) => !(q.caller === n && q.input === 'FireAnimDone'));
       this.schedule(dur, '!self', 'FireAnimDone', '', ev?.activator ?? null, n);
     } else if (input === 'fireanimdone') this.fire(n, 'onanimationdone');
+    if (n.real) {
+      const anim = param.trim().toLowerCase();
+      if (input === 'setdefaultanimation') {
+        n.defaultAnim = anim;
+        if (!n.real.current?.isRunning() || n.real.current?.loop === THREE.LoopRepeat) playSeq(n.real, anim, { loop: true });
+      } else if (input === 'setanimation') playSeq(n.real, anim, { then: n.defaultAnim });
+      if (n.boss && /death/.test(anim)) explosion(this.ctx.world.group, vecKV(n.e, 'origin').add(new THREE.Vector3(0, -3, 0)), this.booms);
+      if (input === 'disable' || input === 'turnoff') n.realCont.visible = false;
+      else if (input === 'enable' || input === 'turnon') n.realCont.visible = true;
+    }
     if (n.machine) {
       if (input === 'setdefaultanimation' || input === 'setanimation') {
         const m = /insanity_0?(\d)/.exec(param);

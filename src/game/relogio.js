@@ -127,7 +127,7 @@ export class Chronos {
       catchers: world.catchers.map((c) => c.active),
       incin: world.incinerators.map((i) => i.active),
       launchers: world.launchers.map((L) => [L.wait, L.done]),
-      pellets: energy.pellets.map((p) => ({ li: world.launchers.indexOf(p.from), pos: p.pos.clone(), vel: p.vel.clone(), life: p.life, cd: p.cooldown })),
+      pellets: energy.pellets.map((p) => ({ uid: p.uid, li: world.launchers.indexOf(p.from), pos: p.pos.clone(), vel: p.vel.clone(), life: p.life, cd: p.cooldown })),
       props: this.props().map((c) => {
         const v = c.body?.linvel?.();
         const a = c.body?.angvel?.();
@@ -249,21 +249,28 @@ export class Chronos {
     });
     world.catchers.forEach((c, k) => (c.active = !!snap.catchers[k]));
     world.incinerators.forEach((f, k) => (f.active = !!snap.incin[k]));
-    // bolas de energia: reaproveita as que existem, cria as que faltam, tira as que sobram
-    const want = new Map(snap.pellets.map((p) => [p.li, p]));
+    // bolas de energia, pela identidade de cada uma: reaproveita as que existem, cria as
+    // que faltam (as soltas — vindas pelo par temporal — também), tira as que sobram
+    const key = (p) => p.uid ?? `li${p.li}`;
+    const want = new Map(snap.pellets.map((p) => [key(p), p]));
     for (const p of [...energy.pellets]) {
-      const w = want.get(world.launchers.indexOf(p.from));
+      const k = p.uid ?? `li${world.launchers.indexOf(p.from)}`;
+      const w = want.get(k);
       if (!w) {
         energy.kill(p);
         continue;
       }
       this.setPellet(p, w);
-      want.delete(world.launchers.indexOf(p.from));
+      want.delete(k);
     }
-    for (const [li, w] of want) {
-      const L = world.launchers[li];
-      if (!L || L.pellet) continue;
-      this.setPellet(energy.spawn(L), w);
+    for (const w of want.values()) {
+      const L = world.launchers[w.li];
+      let p = null;
+      if (L && !L.pellet) p = energy.spawn(L);
+      else if (!L) p = energy.spawnFree(w.pos, w.vel, w.life);
+      if (!p) continue;
+      if (w.uid) p.uid = w.uid;
+      this.setPellet(p, w);
     }
     world.launchers.forEach((L, k) => {
       if (!snap.launchers[k]) return;
@@ -1047,7 +1054,7 @@ export class Chronos {
     // a bola do passado só existe enquanto voou de verdade: se entrou de novo no laranja,
     // foi pega ou acabou, some ali (sem ficar "grudada" na vista do azul)
     const end = sim.alive ? this.tw : Math.min(this.tw, (sim.track[sim.track.length - 1]?.t ?? Td) + RATE);
-    (this.ballDoubles ??= []).push({ from: Td, to: end, track: sim.track, mesh: null });
+    (this.ballDoubles ??= []).push({ from: Td, to: end, track: sim.track, mesh: null, life: Math.max(p.life, p.from?.life ?? 0) });
     for (const C of sim.caught) {
       if (C.active) continue;
       C.active = true;
@@ -1525,6 +1532,30 @@ export class Chronos {
     // objetos mandados para o passado: o duplo deles, como estava então
     for (const d of this.doubles ?? []) this.poseDouble(d, this.doubleAt(d, T));
     this.showBallDoubles(T);
+    // o que você está segurando e enfiou no azul aparece saindo do laranja (como num
+    // portal comum, o pedaço que já passou é visto do outro lado)
+    const held = this.ctx.held?.();
+    const { portals } = this.ctx;
+    const B = portals.blue;
+    if (held && !held.gone && B.placed && B.partner?.delta > 0 && portals.temporalWallNear?.(held.pos) === B) {
+      const M = portals.transform(B, B.partner);
+      const m = held.mesh;
+      const old = { p: m.position.clone(), q: m.quaternion.clone(), v: m.visible };
+      const world = new THREE.Matrix4().compose(held.pos, held.quat, new THREE.Vector3(1, 1, 1)).premultiply(M);
+      const p = new THREE.Vector3();
+      const q = new THREE.Quaternion();
+      world.decompose(p, q, new THREE.Vector3());
+      m.quaternion.copy(q);
+      m.position.copy(held.meshOffset ?? new THREE.Vector3()).applyQuaternion(q).add(p);
+      m.visible = true;
+      const undo0 = this._undoPast;
+      this._undoPast = () => {
+        m.position.copy(old.p);
+        m.quaternion.copy(old.q);
+        m.visible = old.v;
+        undo0?.();
+      };
+    }
   }
 
   endPast() {
@@ -1647,13 +1678,15 @@ export class Chronos {
     this.next = this.tw + RATE;
     this.arrival = this.tw;
     // bolas mandadas ao passado que estão no ar no instante de destino: existem de verdade
+    // (criadas quando o "rebobinar" termina — ele restaura o mundo de novo)
+    this.pendingBalls = [];
     for (const d of this.ballDoubles ?? []) {
       if (this.tw < d.from - 1e-6 || this.tw >= d.to) continue;
       const k = Math.max(0, Math.min(d.track.length - 2, Math.floor((this.tw - d.from) / RATE)));
       const a = d.track[k].p;
       const b = d.track[k + 1]?.p ?? a;
       const v = b.clone().sub(a).divideScalar(RATE);
-      if (v.lengthSq() > 0.01) this.ctx.energy.spawnFree(a.clone(), v, 10);
+      if (v.lengthSq() > 0.01) this.pendingBalls.push({ pos: a.clone(), vel: v, life: Math.max(1, (d.life ?? 10) - (this.tw - d.from)) });
     }
     this.ballDoubles = (this.ballDoubles ?? []).filter((d) => d.from > this.tw);
     // 5) os portais se desfazem; o mundo "rebobina" ao seu redor
@@ -1711,6 +1744,8 @@ export class Chronos {
     if (k >= 1) {
       this.sweep = null;
       this.restore(this.samples[this.samples.length - 1].w);
+      for (const b of this.pendingBalls ?? []) this.ctx.energy.spawnFree(b.pos, b.vel, b.life).cooldown = 0.1;
+      this.pendingBalls = [];
       this.setFreeze(false);
     }
   }

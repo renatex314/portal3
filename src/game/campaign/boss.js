@@ -146,7 +146,8 @@ export class RocketTurret {
     const to = eye.clone().sub(from);
     const dist = to.length();
     to.normalize();
-    const wall = world.raycast(from, to, dist);
+    // vê através de vidro (como no original: ela mira em você e o foguete quebra o vidro)
+    const wall = world.raycast(from, to, dist, (b) => b.mat !== 'glass' && !b.breakable);
     this.cool -= dt;
     if (wall) {
       this.lock = Math.max(0, this.lock - dt);

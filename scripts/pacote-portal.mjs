@@ -21,6 +21,8 @@ import { parseScenesImage, findScene, loadSoundScripts, cleanWave } from '../src
 import { MAPS } from '../src/game/campaign/maps.js';
 import { animatedModels } from '../src/game/campaign/mdl.js';
 import { parseStaticProps } from '../src/game/campaign/staticprops.js';
+import { parseAnimatedModel } from '../src/game/campaign/mdlmodel.js';
+import { parseVMT, texPath } from '../src/game/campaign/textures.js';
 
 const DEFAULT_DIR = '/Volumes/SSD/crossover/bottles/Steam/drive_c/Program Files (x86)/Steam/steamapps/common/Portal';
 const ROOT = path.resolve(process.argv[2] || process.env.PORTAL_DIR || DEFAULT_DIR);
@@ -200,6 +202,8 @@ console.log(`Portal em: ${ROOT}`);
 const pak = openVPK('portal/portal_pak');
 const hl2 = findFile('hl2/hl2_misc_dir.vpk') ? openVPK('hl2/hl2_misc') : null;
 const propModels = new Set(); // objetos estáticos (canos, tubos…) dos mapas
+const entModels = new Set(); // modelos desenhados de verdade (a sala da GLaDOS)
+const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/)/;
 const items = [];
 const add = (name, data) => items.push({ name, data });
 
@@ -222,6 +226,10 @@ for (const [map] of MAPS) {
   }
   for (const m of animatedModels(bsp.entities)) models.add(m);
   for (const p of parseStaticProps(small.buffer.slice(small.byteOffset, small.byteOffset + small.byteLength))) propModels.add(p.model);
+  for (const e of bsp.entities) {
+    const m = (e.kv.get('model') ?? '').toLowerCase().replace(/\\/g, '/');
+    if (/^prop_(dynamic|dynamic_override|physics|glados_core)/.test(e.classname) && REAL_MODEL.test(m)) entModels.add(m);
+  }
   add(`portal/maps/${map}.bsp`, small);
   console.log(`  ${map.padEnd(14)} ${(src.length / 1e6).toFixed(1).padStart(5)} MB → ${(small.length / 1e6).toFixed(1).padStart(4)} MB`);
 }
@@ -274,6 +282,37 @@ for (const m of propModels) {
   }
 }
 console.log(`  ${propModels.size} modelos de objetos estáticos (${propFiles} arquivos)`);
+
+// modelos de entidade com animação (.ani) e os materiais/texturas deles
+const readAny = (p) => (pak.has(p) ? pak.read(p) : hl2?.has(p) ? hl2.read(p) : null);
+const added = new Set(items.map((i) => i.name));
+const addPak = (p) => {
+  if (added.has(`pak/${p}`)) return true;
+  const b = readAny(p);
+  if (!b) return false;
+  add(`pak/${p}`, b);
+  added.add(`pak/${p}`);
+  return true;
+};
+let texFiles = 0;
+for (const m of entModels) {
+  const base = m.replace(/\.mdl$/, '');
+  for (const ext of ['.mdl', '.vvd', '.dx90.vtx', '.ani', '.phy']) addPak(base + ext);
+  const [mdl, vvd, vtx, ani] = ['.mdl', '.vvd', '.dx90.vtx', '.ani'].map((x) => readAny(base + x));
+  const M = mdl && vvd && vtx ? parseAnimatedModel(mdl, vvd, vtx, ani) : null;
+  if (!M) continue;
+  for (const t of M.textures)
+    for (const dir of M.dirs.length ? M.dirs : ['']) {
+      const vmtPath = `materials/${dir}${t}.vmt`;
+      const vb = readAny(vmtPath);
+      if (!vb) continue;
+      addPak(vmtPath);
+      const vmt = parseVMT(Buffer.from(vb).toString('latin1'));
+      for (const k of ['$basetexture', '$bumpmap']) if (vmt[k] && addPak(`materials/${texPath(vmt[k])}.vtf`)) texFiles++;
+      break;
+    }
+}
+console.log(`  ${entModels.size} modelos animados (sala da GLaDOS), ${texFiles} texturas`);
 
 // créditos do final: o roteiro, a música e a letra (no arquivo de idioma)
 add('pak/scripts/credits.txt', pak.read('scripts/credits.txt'));
