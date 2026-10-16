@@ -193,8 +193,10 @@ export class Chronos {
       h: this.props().indexOf(this.ctx.held?.() ?? null),
       hm: this.pushed(),
       ...this.gapMoves(),
+      ...(this.markArrive ? { arrive: true } : {}),
       w: this.snapshot(),
     });
+    this.markArrive = false;
     while (this.samples.length > 2 && t - this.samples[0].t > KEEP) this.samples.shift();
   }
 
@@ -232,15 +234,18 @@ export class Chronos {
     return Math.max(0, Math.min(s.length - 1, i));
   }
 
-  /** limite do Δ: história guardada, 30 s e a chegada do salto anterior */
+  /**
+   * limite do Δ: a história guardada e 30 s. Dá para voltar para antes da sua própria
+   * chegada: a versão nova refaz o caminho de antes do salto anterior e, no instante da
+   * chegada, o corpo "se divide" (a versão antiga segue dali; a nova sai do laranja)
+   */
   maxDelta() {
     const hist = this.tw - this.samples[0].t;
-    const sinceArrival = this.tw - this.arrival;
-    return Math.max(0, Math.min(MAX_DELTA, hist, sinceArrival));
+    return Math.max(0, Math.min(MAX_DELTA, hist));
   }
 
   /** põe o mundo exatamente como estava na foto (o jogador não é mexido) */
-  restore(snap) {
+  restore(snap, { keep = null } = {}) {
     const { world, energy, player } = this.ctx;
     const moved = [];
     world.doors.forEach((d, k) => {
@@ -286,6 +291,7 @@ export class Chronos {
       L.done = snap.launchers[k][1];
     });
     this.props().forEach((c, k) => {
+      if (c === keep) return; // o que você está segurando fica na sua mão
       const s = snap.props[k];
       if (!s) return;
       if (s.gone) {
@@ -447,7 +453,7 @@ export class Chronos {
     const a = s[i];
     const b = s[Math.min(s.length - 1, i + 1)];
     // um salto de posição entre dois quadros guardados (o jogador parou o tempo e andou, ou atravessou um portal): sem interpolar
-    const jumped = !!b.gap || a.p.distanceTo(b.p) > 2.5;
+    const jumped = !!b.gap || !!b.arrive || a.p.distanceTo(b.p) > 2.5;
     const k = jumped ? 0 : Math.max(0, Math.min(1, f - i));
     return { p: a.p.clone().lerp(b.p, k), yaw: a.yaw + (b.yaw - a.yaw) * k, up: a.up, mv: a.mv && !jumped, grounded: a.grounded, jumped };
   }
@@ -898,7 +904,7 @@ export class Chronos {
     // cubos e torretas
     this.props().forEach((c, k) => {
       const p = snap.props[k];
-      if (!p || !c.mesh) return;
+      if (!p || !c.mesh || c === keep) return;
       let g = H.props.get(c);
       const differs = p.gone !== !!c.gone || (!p.gone && p.p.distanceTo(c.pos) > 0.15);
       if (!g && differs && !p.gone) {
@@ -1486,7 +1492,7 @@ export class Chronos {
   }
 
   /** poses visuais do passado (para o render do azul e para o "rebobinar" do salto); devolve o desfazer */
-  applyVisual(snap) {
+  applyVisual(snap, { keep = null } = {}) {
     const { world, energy } = this.ctx;
     const undo = [];
     world.doors.forEach((d, k) => {
@@ -1518,7 +1524,7 @@ export class Chronos {
     });
     this.props().forEach((c, k) => {
       const p = snap.props[k];
-      if (!p || !c.mesh) return;
+      if (!p || !c.mesh || c === keep) return;
       const pos = c.mesh.position.clone();
       const quat = c.mesh.quaternion.clone();
       const vis = c.mesh.visible;
@@ -1704,8 +1710,8 @@ export class Chronos {
     }
     const cp = this.makeCheckpoint(blue, orange);
     const Td = this.tw - delta;
-    if (Td < this.samples[0].t - 1e-6 || Td < this.arrival - 1e-6) {
-      this.rollback(cp, 'não dá para voltar para antes da sua própria chegada');
+    if (Td < this.samples[0].t - 1e-6) {
+      this.rollback(cp, 'não há história guardada tão longe assim');
       return false;
     }
     const i = this.indexAt(Td);
@@ -1744,6 +1750,7 @@ export class Chronos {
     this.tw = this.samples[i].t;
     this.next = this.tw + RATE;
     this.arrival = this.tw;
+    this.markArrive = true; // o próximo quadro guardado é a chegada (a versão passada não "desliza" até lá)
     // bolas mandadas ao passado que estão no ar no instante de destino: existem de verdade
     // (criadas quando o "rebobinar" termina — ele restaura o mundo de novo)
     this.pendingBalls = [];
@@ -1785,13 +1792,33 @@ export class Chronos {
     };
   }
 
+  /**
+   * "O destino está ocupado": no instante de destino, o seu corpo (saindo do laranja)
+   * entraria numa peça sólida (porta, plataforma, parede) ou num cubo/torreta. Usa a forma
+   * real das peças (planos), não a caixa que as envolve, e ignora o que está desligado.
+   */
   playerBlocked() {
     const { player, world } = this.ctx;
-    const min = player.pos.clone().sub(player.half);
-    const max = player.pos.clone().add(player.half);
+    const m = 0.1; // folga: encostar não conta
+    const min = player.pos.clone().sub(player.half).addScalar(m);
+    const max = player.pos.clone().add(player.half).subScalar(m);
+    const corners = [];
+    for (const x of [min.x, max.x]) for (const y of [min.y, max.y]) for (const z of [min.z, max.z]) corners.push(new V3(x, y, z));
     for (const b of world.solids) {
-      if (b.solid === false) continue;
-      if (overlap(min, max, b.min, b.max, 0.12)) return true;
+      if (b.solid === false || b.disabled || !overlap(min, max, b.min, b.max)) continue;
+      let planes = b.planes;
+      if (!planes && b.obb) {
+        // caixa girada: os 6 planos dela
+        planes = [];
+        for (let i = 0; i < 3; i++)
+          for (const sgn of [1, -1]) {
+            const n = new V3(i === 0 ? sgn : 0, i === 1 ? sgn : 0, i === 2 ? sgn : 0).applyQuaternion(b.obb.q);
+            planes.push({ n, d: n.dot(b.obb.c) + b.obb.half.getComponent(i) });
+          }
+      }
+      // separado por algum plano da peça? então não encosta
+      if (planes && planes.some((pl) => corners.every((c) => pl.n.dot(c) > pl.d))) continue;
+      return true;
     }
     for (const c of this.props()) {
       if (c.gone) continue;
@@ -1807,13 +1834,14 @@ export class Chronos {
     const k = Math.min(1, S.t / S.dur);
     S.undo?.();
     const idx = Math.round((1 - k) * (S.tail.length - 1));
-    S.undo = k < 1 ? this.applyVisual(S.tail[idx].w) : null;
+    S.undo = k < 1 ? this.applyVisual(S.tail[idx].w, { keep: this.ctx.held?.() ?? null }) : null;
     // as bolas não aparecem no "rebobinar": passar Δ segundos de quiques em 0,75 s vira
     // um zigue-zague; elas surgem já no lugar quando o mundo chega ao destino
     for (const b of this.pastBalls ?? []) b.visible = false;
     if (k >= 1) {
       this.sweep = null;
-      this.restore(this.samples[this.samples.length - 1].w);
+      // (o objeto que viajou com você na mão não volta para onde estava no passado)
+      this.restore(this.samples[this.samples.length - 1].w, { keep: this.ctx.held?.() ?? null });
       for (const b of this.pendingBalls ?? []) this.ctx.energy.spawnFree(b.pos, b.vel, b.life).cooldown = 0.1;
       this.pendingBalls = [];
       this.setFreeze(false);
