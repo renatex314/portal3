@@ -127,7 +127,7 @@ function addBrush(w, bsp, bi, offset, opts = {}) {
       return p ? kinds[planes.indexOf(p)] : null;
     });
     const b = w.importedBox(min, max, faces, common);
-    if (b) b.seeThrough = seeThrough;
+    if (b && seeThrough) b.seeThrough = b.noRay = true; // tiros e portais atravessam a grade
     if (b) b.src = { bi, contents: c, tex: [...new Set(planes.map((p) => p.tex?.name))] };
     if (b && nodrawPortal) {
       b.portalable = true;
@@ -136,7 +136,7 @@ function addBrush(w, bsp, bi, offset, opts = {}) {
     return b;
   }
   const b = w.convex(pts, planes.map((p, i) => ({ n: p.n, d: p.d, kind: kinds[i] })), common);
-  if (b) b.seeThrough = seeThrough;
+  if (b && seeThrough) b.seeThrough = b.noRay = true; // tiros e portais atravessam a grade
   if (b) b.src = { bi, contents: c, tex: [...new Set(planes.map((p) => p.tex?.name))] }; // para depurar
   if (b && nodrawPortal) {
     for (const p of b.planes0) p.portal = true;
@@ -717,7 +717,7 @@ function addStaticProps(w, bsp) {
       const s = w.convex(verts, planes, { solid: true, noRay: false });
       if (s) {
         s.prop = true;
-        s.seeThrough = seeThrough; // cerca: a torreta enxerga através
+        if (seeThrough) s.seeThrough = s.noRay = true; // cerca: a torreta enxerga e o tiro passa
         hulls++;
       }
     }

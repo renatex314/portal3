@@ -515,8 +515,11 @@ export class Dissolver {
     return new THREE.PointsMaterial({ color: color.clone().multiplyScalar(3), size: 0.04, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   }
 
-  /** `color` da borda: azul na grade, laranja na fornalha/rocha fundida */
-  add(mesh, color = new THREE.Color(0.45, 0.8, 1.0)) {
+  /**
+   * `color` da borda: azul na grade, laranja na fornalha/rocha fundida. `appear`: ao
+   * contrário (o objeto se materializa — mudança vinda do passado)
+   */
+  add(mesh, color = new THREE.Color(0.45, 0.8, 1.0), { appear = false } = {}) {
     mesh.updateMatrixWorld(true);
     const mat = this.material(color);
     const ghost = mesh.clone(true);
@@ -540,15 +543,16 @@ export class Dissolver {
     const sparks = new THREE.Points(g, this.sparkMaterial(color));
     sparks.frustumCulled = false;
     this.scene.add(sparks);
-    this.list.push({ ghost, mat, sparks, vel, t: 0 });
+    if (appear) mat.uniforms.uT.value = 1;
+    this.list.push({ ghost, mat, sparks, vel, t: 0, appear });
   }
 
   update(dt) {
     for (const d of [...this.list]) {
       d.t += dt;
       const k = d.t / 1.2;
-      d.mat.uniforms.uT.value = Math.min(1, k);
-      d.ghost.position.y += dt * 0.25;
+      d.mat.uniforms.uT.value = d.appear ? Math.max(0, 1 - k) : Math.min(1, k);
+      if (!d.appear) d.ghost.position.y += dt * 0.25;
       const p = d.sparks.geometry.attributes.position;
       for (let i = 0; i < d.vel.length; i++) {
         d.vel[i].multiplyScalar(1 - dt * 1.5);

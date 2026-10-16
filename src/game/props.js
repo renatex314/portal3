@@ -114,7 +114,7 @@ export class Prop {
     this.pos.set(t.x, t.y, t.z);
     this.quat.set(r.x, r.y, r.z, r.w);
     this.vel.set(v.x, v.y, v.z);
-    this.mesh.visible = !this.gone;
+    this.mesh.visible = !this.gone && !(this.hideUntil > performance.now()); // escondido enquanto se materializa
     this.mesh.quaternion.copy(this.quat);
     this.mesh.position.copy(this.meshOffset).applyQuaternion(this.quat).add(this.pos);
   }

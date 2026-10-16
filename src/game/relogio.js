@@ -90,6 +90,9 @@ export class Chronos {
     if (this.frozenProps) this.setFreeze(false);
     for (const d of this.doubles ?? []) this.dropDouble(d);
     this.doubles = [];
+    this.ballDoubles = [];
+    this.pastEntries = [];
+    this.ballQueue = [];
     for (const c of this.clones ?? []) this.dropClone(c);
     this.paused = false;
     this.tw = 0;
@@ -888,6 +891,7 @@ export class Chronos {
     const vel = p.vel.clone();
     this.ballQueue ??= [];
     this.ballQueue.push({ tIn: this.tw, tOut: this.tw + O.delta, pos, vel, key: this.orangeKey(O), life: p.from?.life ?? p.life });
+    (this.pastEntries ??= []).push({ li: this.ctx.world.launchers.indexOf(p.from), tIn: this.tw });
     this.ctx.fx.fizzleBall?.(pos);
     return true;
   }
@@ -898,6 +902,8 @@ export class Chronos {
 
   /** solta pelo azul as bolas cuja hora de sair chegou (chamado a cada quadro) */
   pastPellets() {
+    // o tempo voltou (salto, paradoxo): as entradas no laranja depois de agora não aconteceram
+    if (this.pastEntries?.length) this.pastEntries = this.pastEntries.filter((e) => e.tIn <= this.tw + 1e-6);
     this.scanPastBalls();
     if (!this.ballQueue?.length) return;
     const { portals, energy } = this.ctx;
@@ -985,8 +991,12 @@ export class Chronos {
         // a mesma bola ainda existe agora? então ela some (foi para o portal lá atrás)
         for (const p of [...energy.pellets]) {
           const born = this.tw - ((p.from?.life ?? p.life) - p.life);
-          if (world.launchers.indexOf(p.from) === a.li && born <= tHit + 0.05) energy.kill(p);
+          if (world.launchers.indexOf(p.from) === a.li && born <= tHit + 0.05) {
+            this.ctx.fx.changed?.(p); // a bola de agora some: ela entrou no laranja lá atrás
+            energy.kill(p);
+          }
         }
+        (this.pastEntries ??= []).push({ li: a.li, tIn: tHit });
         const out = { tIn: tHit, tOut: tHit + O.delta, pos: at, vel: a.vel.clone(), key: this.orangeKey(O), life: world.launchers[a.li]?.life ?? a.life };
         (this.ballQueue ??= []).push(out);
       }
@@ -1016,17 +1026,22 @@ export class Chronos {
       this.ctx.fx.paradox?.(sim.paradox, sim.at ?? pos);
       return 'paradox';
     }
-    (this.ballDoubles ??= []).push({ from: Td, to: this.tw, track: sim.track, mesh: null });
+    // a bola do passado só existe enquanto voou de verdade: se entrou de novo no laranja,
+    // foi pega ou acabou, some ali (sem ficar "grudada" na vista do azul)
+    const end = sim.alive ? this.tw : Math.min(this.tw, (sim.track[sim.track.length - 1]?.t ?? Td) + RATE);
+    (this.ballDoubles ??= []).push({ from: Td, to: end, track: sim.track, mesh: null });
     for (const C of sim.caught) {
       if (C.active) continue;
       C.active = true;
       if (p.from && !p.from.free) p.from.done = true;
       this.ctx.fx.caught?.(C);
+      this.ctx.fx.changed?.(C.group, true); // o receptor de agora foi ligado lá atrás
     }
     for (const r of sim.reenter) (this.ballQueue ??= []).push(r);
     if (sim.alive) {
       const np = this.ctx.energy.spawnFree(sim.pos, sim.vel, sim.life);
       np.cooldown = 0.1;
+      this.ctx.fx.changed?.(np, true); // a bola aparece onde estaria agora
     }
     return true;
   }
@@ -1264,6 +1279,7 @@ export class Chronos {
     this.free.add(prop); // sai de qualquer trilho de gravação
     this.driven.delete(prop);
     prop.place(pos, quat, { x: vel.x, y: vel.y, z: vel.z });
+    this.ctx.fx.changed?.(prop, true); // o cubo aparece onde o passado o deixou
     this.ctx.fx.toPast?.(pos);
   }
 
@@ -1309,6 +1325,7 @@ export class Chronos {
       // no fim do intervalo, o objeto real reaparece onde o duplo chegou
       const younger = sample?.props?.[d.k];
       if (st && (!younger || younger.gone) && !d.prop.gone && !d.prop.held) {
+        this.ctx.fx.changed?.(d.prop);
         d.prop.vanish();
         d.hid = true;
       } else if (!st && d.hid && this.tw >= d.to) {
@@ -1317,6 +1334,7 @@ export class Chronos {
         d.prop.gone = false;
         d.prop.body?.setEnabled(true);
         d.prop.place(end.p, end.q);
+        this.ctx.fx.changed?.(d.prop, true);
       }
       const h = d.prop.half ?? new V3(0.3, 0.3, 0.3);
       if (st) {
@@ -1433,7 +1451,17 @@ export class Chronos {
       });
     }
     this.pastBalls ??= [];
-    snap.pellets.forEach((p, i) => {
+    // bolas que (na história nova) já tinham entrado no laranja nesse instante não aparecem
+    const T = snap === this._viewSnap ? this._viewT : null;
+    const entered = (p) => {
+      if (T == null || p.li < 0) return false;
+      const born = T - ((world.launchers[p.li]?.life ?? p.life) - p.life);
+      return (this.pastEntries ?? []).some((e) => e.li === p.li && e.tIn <= T + 1e-6 && born <= e.tIn + 0.05);
+    };
+    let shown = 0;
+    snap.pellets.forEach((p) => {
+      if (entered(p)) return;
+      const i = shown++;
       let b = this.pastBalls[i];
       if (!b) {
         b = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.8, 0.6), toneMapped: false }));
@@ -1443,7 +1471,7 @@ export class Chronos {
       b.visible = true;
       b.position.copy(p.pos);
     });
-    for (let i = snap.pellets.length; i < this.pastBalls.length; i++) this.pastBalls[i].visible = false;
+    for (let i = shown; i < this.pastBalls.length; i++) this.pastBalls[i].visible = false;
     undo.push(() => this.pastBalls.forEach((b) => (b.visible = false)));
     return () => undo.reverse().forEach((f) => f());
   }
@@ -1452,6 +1480,8 @@ export class Chronos {
   beginPast(delta) {
     const T = this.tw - delta;
     const s = this.samples[this.indexAt(T)];
+    this._viewSnap = s.w;
+    this._viewT = T;
     this._undoPast = this.applyVisual(s.w);
     this.ctx.beams?.pastView(true);
     // o marcador e o holograma da pausa são só para quem está no presente: dentro da vista do azul

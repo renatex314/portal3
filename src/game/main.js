@@ -326,9 +326,22 @@ function timeRing(pos, normal, color, life = 0.8, size = 1.6, ellipse = false) {
   timeRings.push({ m, t: 0, life, size, ellipse });
 }
 
+const TIME_FX = new THREE.Color(0.75, 0.45, 1.0);
 const chronosFx = {
   caught() {
     sfx.caught();
+  },
+  /** algo do presente mudou por causa do passado: some (desintegra) ou aparece (materializa) */
+  changed(obj, appear = false) {
+    const mesh = obj?.mesh ?? obj?.group ?? obj;
+    if (!mesh) return;
+    dissolver.add(mesh, TIME_FX, { appear });
+    if (appear && obj.mesh) obj.hideUntil = performance.now() + 1150;
+    if (appear && obj.group && !obj.mesh) {
+      // bola: escondida enquanto o fantasma se forma
+      obj.group.visible = false;
+      setTimeout(() => (obj.group.visible = true), 1150);
+    }
   },
   toast(m) {
     toast(m);
@@ -2016,6 +2029,48 @@ function recordRun(dt) {
   }
 }
 
+let crushT = 0;
+/** o jogador está sendo esmagado? (precisa continuar prensado por um instante) */
+function crushed(dt) {
+  const mn = player.pos.clone().sub(player.half).addScalar(0.12);
+  const mx = player.pos.clone().add(player.half).subScalar(0.12);
+  const near = (b, m) => b.max.x > mn.x - m && b.min.x < mx.x + m && b.max.y > mn.y - m && b.min.y < mx.y + m && b.max.z > mn.z - m && b.min.z < mx.z + m;
+  // alguma peça se mexendo encostada?
+  const pushing = world.doors.some((d) => d.delta.lengthSq() > 1e-8 && d.box && !d.box.disabled && near(d.box, 0.2));
+  let inside = false;
+  // entrando/saindo de um portal (ou logo depois de atravessar, ou no salto no tempo) não conta
+  const atPortal = portals.mouths(player.pos, true, 0.5).length > 0 || player.cooldown > -0.4 || relogio?.sweep;
+  if (atPortal) crushT = 0;
+  if (pushing && !atPortal) {
+    const pts = [player.pos.clone()];
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) pts.push(new THREE.Vector3(sx > 0 ? mx.x : mn.x, sy > 0 ? mx.y : mn.y, sz > 0 ? mx.z : mn.z));
+    for (const b of world.solids) {
+      if (b.disabled || b.solid === false || !near(b, 0)) continue;
+      if (b.obb) {
+        const inObb = (p) => {
+          const l = p.clone().sub(b.obb.c).applyQuaternion(b.obb.qi);
+          return Math.abs(l.x) < b.obb.half.x && Math.abs(l.y) < b.obb.half.y && Math.abs(l.z) < b.obb.half.z;
+        };
+        if (pts.some(inObb)) {
+          inside = true;
+          break;
+        }
+        continue;
+      }
+      if (!b.planes) {
+        inside = true;
+        break;
+      }
+      if (pts.some((p) => b.planes.every((pl) => pl.n.dot(p) < pl.d - 0.02))) {
+        inside = true;
+        break;
+      }
+    }
+  }
+  crushT = inside ? crushT + dt : 0;
+  return crushT > 0.12;
+}
+
 function update(dt, t) {
   if (testingMine && !completed) recordRun(dt);
   data?.campaign?.runtime?.update(dt);
@@ -2092,6 +2147,10 @@ function update(dt, t) {
     const center = (b.min[a] + b.max[a]) / 2;
     player.pos[a] += (player.pos[a] > center ? 1 : -1) * (pen[i] + 0.01);
   }
+  // esmagado: depois do empurrão, ainda prensado dentro de algo sólido enquanto uma peça
+  // em movimento encosta em você (plataforma subindo até o teto, porta fechando contra a
+  // parede…). Na boca de um portal não conta (lá você atravessa a parede de propósito)
+  if (crushed(dt)) die('esmagado');
   // aterrissagem e passos
   if (player.grounded && !lastGrounded && Math.abs(lastVy) > 3) {
     sfx.land(Math.abs(lastVy));
