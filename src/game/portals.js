@@ -56,17 +56,8 @@ const displayFS = /* glsl */ `
     vec2 e = pl / (vec2(uA, uB) * max(uOpen, 0.001));
     float r = length(e);
     if (r > 1.0) discard;
-    // laranja temporal com laser saindo dele: só estática (sem vista nenhuma por baixo)
-    vec3 view = uStatic > 0.0 ? vec3(0.04) : texture2D(map, gl_FragCoord.xy / uRes).rgb;
-    if (uStatic > 0.0) {
-      // muita estática (laser indo/vindo pelo tempo): chuvisco, faixas e rolagem
-      float sn = h(floor(gl_FragCoord.xy * 0.5) + floor(uTime * 30.0) * 17.31);
-      float band = step(0.9, fract(gl_FragCoord.y * 0.011 + uTime * 1.7)) * 0.7;
-      float roll = 0.5 + 0.5 * sin(gl_FragCoord.y * 0.09 + uTime * 47.0);
-      view = mix(view, vec3(sn), 0.75 * uStatic) + band * uColor * 0.6 * uStatic;
-      view *= 0.8 + 0.2 * roll;
-      view = mix(view, view * uColor * 1.5, 0.3 * uStatic);
-    }
+    // laranja temporal com laser saindo dele: fundo preto (sem vista nenhuma)
+    vec3 view = uStatic > 0.0 ? vec3(0.0) : texture2D(map, gl_FragCoord.xy / uRes).rgb;
     // portal temporal: a vista do passado sai só em tons de cinza, sem nada por cima
     float lum = dot(view, vec3(0.3, 0.59, 0.11));
     view = mix(view, vec3(lum), uPast);

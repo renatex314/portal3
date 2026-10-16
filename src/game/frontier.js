@@ -673,8 +673,8 @@ export class Frontier {
       }
     }
     this.checkLaserLoops(ctx, dt);
-    // laranjas de estática: onde o laser entra no passado agora e de onde sai o do futuro
-    this.portals.setStatics?.([...this.liveEntries.map((e) => e.frame), ...emitted.map((e) => e.frame)].filter(Boolean));
+    // laranja temporal de fundo preto: só onde sai de fato um laser (vindo do futuro)
+    this.portals.setStatics?.(emitted.map((e) => e.frame).filter(Boolean));
     for (const C of W.laserCatchers) {
       if (C.active && !C.wasActive) sfx.laserOn();
       const k = C.active ? 2.4 : 0.6 + Math.sin(ctx.t * 3) * 0.15;
