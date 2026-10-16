@@ -6,6 +6,9 @@
 import * as THREE from 'three';
 
 const EYE = 0.7; // altura do olho acima do centro do corpo
+const STAND = 0.9; // meia altura de pé (1,8 m)
+const CROUCH = 0.45; // meia altura agachado (0,9 m, como no Source)
+const EYE_CROUCH = 0.25; // olho agachado: 0,7 m acima dos pés
 const WALK = 4.6;
 const JUMP = 4.6;
 const MAX_FALL = 32;
@@ -28,6 +31,8 @@ export class Player {
     this.cooldown = 0;
     this.groundTime = 0;
     this.bob = 0;
+    this.crouched = false;
+    this.eyeOff = EYE; // altura do olho acima do centro (anda suave ao agachar)
     // depois de um portal, a câmera começa exatamente onde a vista do portal
     // estava e volta suavemente para a postura de pé (posição e giro)
     this.viewOffset = new THREE.Vector3();
@@ -35,6 +40,8 @@ export class Player {
   }
 
   spawn(x, y, z, yaw = 0) {
+    if (this.crouched) this.setCrouch(false, this.physics, true);
+    this.eyeOff = EYE;
     this.pos.set(x, y + this.half.y + 0.05, z);
     this.vel.set(0, 0, 0);
     this.yaw = yaw;
@@ -46,7 +53,28 @@ export class Player {
   }
 
   eye(target = new THREE.Vector3()) {
-    return target.copy(this.pos).add(new THREE.Vector3(0, EYE * this.upSign, 0));
+    return target.copy(this.pos).add(new THREE.Vector3(0, this.eyeOff * this.upSign, 0));
+  }
+
+  /**
+   * agacha / levanta. No chão os pés ficam onde estão; no ar a cabeça fica (as pernas
+   * sobem, como no Source). Só levanta se couber. `force`: sem testar (renascer).
+   */
+  setCrouch(on, physics, force = false) {
+    if (physics) this.physics = physics;
+    if (on === this.crouched) return true;
+    const d = (STAND - CROUCH) * this.upSign;
+    const shift = this.grounded ? (on ? -d : d) : on ? d : -d;
+    const center = this.pos.clone().add(new THREE.Vector3(0, shift, 0));
+    const half = new THREE.Vector3(this.half.x, on ? CROUCH : STAND, this.half.z);
+    if (!on && !force && physics && !physics.fits(center, half)) return false;
+    this.crouched = on;
+    this.half.y = half.y;
+    // o olho continua no mesmo lugar neste quadro e desliza até a altura nova
+    this.eyeOff -= shift;
+    this.pos.copy(center);
+    physics?.setPlayer(this.half);
+    return true;
   }
 
   quaternion() {
@@ -93,11 +121,15 @@ export class Player {
       .addScaledVector(right, (input.r ? 1 : 0) - (input.l ? 1 : 0));
     if (wish.lengthSq() > 0) wish.normalize();
 
+    // agachar (CTRL/C): segurando, fica agachado; ao soltar, levanta quando couber
+    if (!!input.crouch !== this.crouched) this.setCrouch(!!input.crouch, world.physics);
+    this.eyeOff += ((this.crouched ? EYE_CROUCH : EYE) - this.eyeOff) * (1 - Math.exp(-dt * 12));
+
     const horiz = this.vel.clone().projectOnPlane(up);
     const vert = this.vel.clone().sub(horiz);
     if (this.grounded) {
       // no chão: responde rápido, mas não "mata" velocidade de lançamento de uma vez
-      const target = wish.clone().multiplyScalar(WALK);
+      const target = wish.clone().multiplyScalar(this.crouched ? WALK * 0.5 : WALK);
       const k = horiz.length() > WALK * 1.5 ? 4 : 14;
       horiz.lerp(target, 1 - Math.exp(-k * dt));
       if (input.jump) {

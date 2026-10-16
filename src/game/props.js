@@ -76,7 +76,7 @@ export class Prop {
     const t = this.body.translation();
     this.pos.set(t.x, t.y, t.z);
     if (this.cooldown > 0) return;
-    let P = this.portals.crossing(this.prevCenter, this.pos);
+    let P = this.portals.crossing(this.prevCenter, this.pos, 'prop'); // também o azul temporal: o objeto vai para o laranja
     if (!P) P = this.portals.stuckIn(this.pos, _v.copy(this.pos).subScalar(0.3), this.pos.clone().addScalar(0.3));
     if (!P) return;
     const { Q } = this.physics.carry(this, P);

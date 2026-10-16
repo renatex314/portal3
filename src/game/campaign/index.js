@@ -7,9 +7,11 @@
 import { parseBSP } from './bsp.js';
 import { buildMap } from './convert.js';
 import { Dialogue } from './dialogue.js';
-import { ensureSource, readFile } from './source.js';
+import { ensureSource, readFile, packedContent } from './source.js';
 import { MAPS } from './maps.js';
 import { animatedModels, sequenceDurations } from './mdl.js';
+import { parseStaticProps, parseModel } from './staticprops.js';
+import { VPK } from './vpk.js';
 
 // falas e sons (um só para a campanha toda); a legenda é ligada pelo main.js
 export const dialogue = new Dialogue({ subtitle: (...a) => dialogue.onSubtitle?.(...a) });
@@ -24,9 +26,39 @@ export async function fetchMap(map) {
   if (got !== 'ok') throw new Error(NO_SOURCE);
   const bytes = await readFile(`portal/maps/${map}.bsp`);
   if (!bytes) throw new Error(`O mapa ${map} não está nesse pacote/instalação do Portal.`);
-  const bsp = parseBSP(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const bsp = parseBSP(buffer);
+  bsp.staticProps = parseStaticProps(buffer);
   cache.set(map, bsp);
   return bsp;
+}
+
+// modelos dos objetos estáticos (canos, tubos, corrimãos…), lidos uma vez só: do
+// pacote do Portal ou, na instalação, também do pacote do Half-Life 2 (props_c17…)
+const propModels = new Map();
+let hl2 = null;
+async function modelFile(pak, p) {
+  if (pak?.has(p)) return pak.read(p);
+  if (packedContent()) return null; // no .zip, tudo fica junto em pak/
+  hl2 ??= new VPK('hl2/hl2_misc').open().catch(() => null);
+  const v = await hl2;
+  return v?.has(p) ? v.read(p) : null;
+}
+async function loadPropModels(bsp, pak) {
+  const names = [...new Set(bsp.staticProps.map((p) => p.model))].filter((m) => !propModels.has(m));
+  await Promise.all(
+    names.map(async (name) => {
+      const base = name.replace(/\.mdl$/, '');
+      try {
+        const [mdl, vvd, vtx, phy] = await Promise.all(['.mdl', '.vvd', '.dx90.vtx', '.phy'].map((x) => modelFile(pak, base + x)));
+        propModels.set(name, mdl && vvd && vtx ? parseModel(mdl, vvd, vtx, phy) : null);
+      } catch (err) {
+        console.warn('modelo', name, err);
+        propModels.set(name, null);
+      }
+    }),
+  );
+  bsp.propModels = propModels;
 }
 
 export const CAMPAIGN = MAPS.map(([map, code], n) => ({
@@ -42,6 +74,7 @@ export const CAMPAIGN = MAPS.map(([map, code], n) => ({
   preload: async () => {
     const bsp = await fetchMap(map);
     await dialogue.init();
+    await loadPropModels(bsp, dialogue.pak);
     // duração das animações que a lógica do mapa espera terminar (OnAnimationDone)
     if (!bsp.animDurations) {
       bsp.animDurations = new Map();

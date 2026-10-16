@@ -14,20 +14,25 @@ const FOV = THREE.MathUtils.degToRad(55);
 const UP = new THREE.Vector3(0, 1, 0);
 
 export class Turret extends Prop {
-  constructor(scene, physics, portals, x, y, z, yaw) {
+  /** opts.scale: tamanho (1 = o padrão); opts.tippy: pés estreitos e corpo leve, que
+   *  tomba com um cubo (como as da campanha original) */
+  constructor(scene, physics, portals, x, y, z, yaw, { scale = 1, tippy = false } = {}) {
     super(physics, portals, turretModel());
     this.kind = 'turret';
     scene.add(this.mesh);
-    this.half = new THREE.Vector3(0.28, 0.6, 0.28);
-    this.meshOffset.set(0, -0.6, 0);
-    this.home = new THREE.Vector3(x, y + 0.62, z);
+    const k = scale;
+    this.mesh.scale.setScalar(k);
+    this.half = new THREE.Vector3(0.28, 0.6, 0.28).multiplyScalar(k);
+    this.meshOffset.set(0, -0.6 * k, 0);
+    this.home = new THREE.Vector3(x, y + 0.62 * k, z);
     this.homeQuat = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
+    const feet = tippy ? 0.2 : 0.34;
     physics.addProp(this, {
       shapes: [
-        { half: [0.21, 0.4, 0.17], at: [0, 0.2, 0] }, // corpo
-        { half: [0.34, 0.05, 0.34], at: [0, -0.55, -0.06] }, // pés do tripé
+        { half: [0.21 * k, 0.4 * k, 0.17 * k], at: [0, 0.2 * k, 0] }, // corpo
+        { half: [feet * k, 0.05 * k, feet * k], at: [0, -0.55 * k, -0.06 * k] }, // pés do tripé
       ],
-      mass: 35,
+      mass: tippy ? 14 : 35,
       friction: 0.9,
       restitution: 0.02,
       pos: this.home,

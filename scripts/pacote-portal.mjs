@@ -20,6 +20,7 @@ import { parseKV, kvGet } from '../src/game/campaign/kv.js';
 import { parseScenesImage, findScene, loadSoundScripts, cleanWave } from '../src/game/campaign/scenes.js';
 import { MAPS } from '../src/game/campaign/maps.js';
 import { animatedModels } from '../src/game/campaign/mdl.js';
+import { parseStaticProps } from '../src/game/campaign/staticprops.js';
 
 const DEFAULT_DIR = '/Volumes/SSD/crossover/bottles/Steam/drive_c/Program Files (x86)/Steam/steamapps/common/Portal';
 const ROOT = path.resolve(process.argv[2] || process.env.PORTAL_DIR || DEFAULT_DIR);
@@ -96,8 +97,8 @@ function openVPK(base) {
 }
 
 // ------------------------------------------------------------------ BSP
-// lumps lidos por src/game/campaign/bsp.js; o resto vira vazio
-const KEEP = new Set([0, 1, 2, 5, 6, 10, 14, 17, 18, 19, 43, 44]);
+// lumps lidos por src/game/campaign/bsp.js (e o 35, dos objetos estáticos); o resto vira vazio
+const KEEP = new Set([0, 1, 2, 5, 6, 10, 14, 17, 18, 19, 35, 43, 44]);
 function trimBSP(src) {
   const parts = [];
   const head = Buffer.alloc(1036);
@@ -113,7 +114,14 @@ function trimBSP(src) {
     const pad = (4 - (at % 4)) % 4;
     if (pad) parts.push(Buffer.alloc(pad));
     at += pad;
-    parts.push(src.subarray(ofs, ofs + len));
+    let data = src.subarray(ofs, ofs + len);
+    if (i === 35) {
+      // "game lump": as entradas apontam para posições absolutas no arquivo
+      data = Buffer.from(data);
+      const n = data.readInt32LE(0);
+      for (let k = 0; k < n; k++) data.writeInt32LE(data.readInt32LE(4 + k * 16 + 8) - ofs + at, 4 + k * 16 + 8);
+    }
+    parts.push(data);
     head.writeInt32LE(at, h);
     head.writeInt32LE(len, h + 4);
     at += len;
@@ -190,6 +198,8 @@ function writeZip(file, items) {
 // ------------------------------------------------------------------ monta
 console.log(`Portal em: ${ROOT}`);
 const pak = openVPK('portal/portal_pak');
+const hl2 = findFile('hl2/hl2_misc_dir.vpk') ? openVPK('hl2/hl2_misc') : null;
+const propModels = new Set(); // objetos estáticos (canos, tubos…) dos mapas
 const items = [];
 const add = (name, data) => items.push({ name, data });
 
@@ -211,6 +221,7 @@ for (const [map] of MAPS) {
     if (e.classname === 'ambient_generic' && e.kv.get('message')) soundNames.add(e.kv.get('message').toLowerCase());
   }
   for (const m of animatedModels(bsp.entities)) models.add(m);
+  for (const p of parseStaticProps(small.buffer.slice(small.byteOffset, small.byteOffset + small.byteLength))) propModels.add(p.model);
   add(`portal/maps/${map}.bsp`, small);
   console.log(`  ${map.padEnd(14)} ${(src.length / 1e6).toFixed(1).padStart(5)} MB → ${(small.length / 1e6).toFixed(1).padStart(4)} MB`);
 }
@@ -247,6 +258,22 @@ for (const w of [...waves].sort()) {
 }
 
 for (const m of models) if (pak.has(m)) add(`pak/${m}`, pak.read(m));
+
+// modelos dos objetos estáticos: forma (.mdl/.vvd/.dx90.vtx) e colisão (.phy); os do
+// Half-Life 2 (props_c17, props_pipes…) vêm do pacote dele e ficam junto, em pak/
+let propFiles = 0;
+for (const m of propModels) {
+  if (models.has(m)) continue;
+  for (const ext of ['.mdl', '.vvd', '.dx90.vtx', '.phy']) {
+    const p = m.replace(/\.mdl$/, ext);
+    const bytes = pak.has(p) ? pak.read(p) : hl2?.has(p) ? hl2.read(p) : null;
+    if (bytes) {
+      add(`pak/${p}`, bytes);
+      propFiles++;
+    }
+  }
+}
+console.log(`  ${propModels.size} modelos de objetos estáticos (${propFiles} arquivos)`);
 
 // créditos do final: o roteiro, a música e a letra (no arquivo de idioma)
 add('pak/scripts/credits.txt', pak.read('scripts/credits.txt'));

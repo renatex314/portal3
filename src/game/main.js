@@ -621,7 +621,7 @@ const sparkVel = Array.from({ length: SPARKS }, () => new THREE.Vector3());
 let sparkT = 9;
 
 // ------------------------------------------------------------------ estado
-const input = { f: false, b: false, l: false, r: false, jump: false };
+const input = { f: false, b: false, l: false, r: false, jump: false, crouch: false };
 // zoom: segure Z; a rodinha muda o aumento enquanto segura
 const ZOOM = { on: false, level: 3, k: 1 };
 let level = null; // definição
@@ -947,7 +947,7 @@ function loadLevel(i, silent = false) {
     m.rotation.set(f.rotX ?? 0, f.rotY ?? 0, f.rotZ ?? 0);
     dyn.add(m);
   }
-  for (const [tx, ty, tz, tyaw] of data.turrets ?? []) turrets.push(new Turret(dyn, physics, portals, tx, ty, tz, tyaw));
+  for (const [tx, ty, tz, tyaw, topts] of data.turrets ?? []) turrets.push(new Turret(dyn, physics, portals, tx, ty, tz, tyaw, topts));
   gunMode = data.gun ?? 'both';
   for (const f of data.portals ?? []) portals.placeFixed(f.which, f.c, f.n, f.u);
   relogio = data.relogio
@@ -1389,6 +1389,11 @@ window.addEventListener('keydown', (e) => {
     input.jump = true;
     e.preventDefault();
   }
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight' || e.code === 'KeyC') {
+    input.crouch = true;
+    e.preventDefault();
+  }
+  if (e.ctrlKey) e.preventDefault(); // agachado: sem atalhos do navegador (Ctrl+S, Ctrl+D…)
   if (e.code === 'KeyE') use();
   if (e.code === 'KeyR') loadLevel(levelIdx);
   if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
@@ -1398,6 +1403,14 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
   if (e.code === 'Space') input.jump = false;
+  if (e.code === 'ControlLeft' || e.code === 'ControlRight' || e.code === 'KeyC') input.crouch = false;
+});
+// Ctrl+W (agachar andando para a frente) fecharia a aba: durante o jogo, o navegador pergunta antes
+window.addEventListener('beforeunload', (e) => {
+  if (running && !paused && document.pointerLockElement) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
 });
 document.addEventListener('mousemove', (e) => {
   // com zoom, a mira fica mais fina (proporcional ao campo de visão)
@@ -2228,7 +2241,7 @@ function update(dt, t) {
   }
 
   // ---- grade de desintegração: passar por ela some com os seus portais
-  const nowIn = !!world.segmentFizzler(lastPlayerPos, player.pos);
+  const nowIn = !!world.segmentFizzler(lastPlayerPos, player.pos, player.half); // o corpo todo, não só o centro
   lastPlayerPos.copy(player.pos);
   if (nowIn && !inFizzler) {
     // onda no campo onde o jogador passou
@@ -2272,7 +2285,9 @@ function update(dt, t) {
     caught: () => sfx.caught(),
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
+    props: () => [...cubes, ...turrets],
   });
+  relogio?.pastPellets(); // bolas do passado que entraram no laranja temporal saem pelo azul
 
   fight?.update(dt, t);
 

@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { CONTENTS, SURF } from './bsp.js';
 import { portalGun } from '../models.js';
+import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 
 export const S = 0.025;
 export const toV = (x, y, z) => new THREE.Vector3(x * S, z * S, -y * S);
@@ -291,6 +292,41 @@ export function buildMap(w, bsp) {
     count += solids.length;
   }
 
+  // portas giratórias com peças presas (a cunha que inclina na câmara 18): além das
+  // peças na posição fechada, uma cópia invisível já girada, só para colisão, que vale
+  // com a porta aberta. O visual das peças gira de verdade no runtime.
+  const rotGroups = [];
+  for (const be of brushEnts) {
+    const e = be.e;
+    const sf = parseInt(e.kv.get('spawnflags') || '0', 10);
+    if (e.classname !== 'func_door_rotating' || sf & 256) continue;
+    const members = brushEnts.filter((x) => x === be || movingRoot(x.e) === e);
+    if (members.length < 2) continue;
+    const dist = parseFloat(e.kv.get('distance')) || 90;
+    // eixo do Source → daqui: rolagem = x, arfagem = −z; guinada = y, no sentido
+    // horário visto de cima (o mesmo da arma giratória do runtime)
+    const axis = sf & 64 ? new THREE.Vector3(1, 0, 0) : sf & 128 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+    const deg = (sf & (64 | 128) ? dist : -dist) * (sf & 2 ? -1 : 1);
+    const hinge = vecKV(e, 'origin');
+    const q = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(deg));
+    const rot = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+    const open = [];
+    for (const m of members) {
+      const off = vecKV(m.e, 'origin').sub(hinge).applyQuaternion(q).add(hinge);
+      const mi = parseInt(m.e.kv.get('model').slice(1), 10);
+      for (const bi of bsp.modelBrushes(mi)) {
+        const s = addBrush(w, bsp, bi, off, { kinematic: true, rot });
+        if (!s) continue;
+        w.setSolidEnabled(s, false);
+        open.push(s);
+      }
+    }
+    const closed = members.flatMap((m) => m.solids);
+    rotGroups.push({ e, hinge, q, deg, closed, open });
+    // as peças do grupo passam a ser movidas por ele (giro + o deslocamento da mãe)
+    for (let i = followers.length - 1; i >= 0; i--) if (followers[i].solids.some((s) => closed.includes(s))) followers.splice(i, 1);
+  }
+
   // luzes: as mais fortes viram luzes de verdade (o resto fica no brilho dos painéis)
   const lights = [];
   for (const e of ents) {
@@ -399,18 +435,40 @@ export function buildMap(w, bsp) {
   for (const e of ents) {
     if (e.classname !== 'npc_portal_turret_floor') continue;
     const p = vecKV(e, 'origin');
-    turrets.push([p.x, p.y, p.z, yawFromSource(parseVec(e.kv.get('angles'))[1] || 0)]);
+    // o modelo daqui olha para +z local (o contrário do jogador): meia-volta a mais.
+    // Menores e de pé estreito, como as originais: um cubo jogado as derruba
+    turrets.push([p.x, p.y, p.z, yawFromSource(parseVec(e.kv.get('angles'))[1] || 0) + Math.PI, { scale: 0.8, tippy: true }]);
   }
 
   // bolas de energia
   const launchers = new Map();
+  const launcherProps = ents.filter((e) => /^prop_dynamic/.test(e.classname) && (e.kv.get('model') ?? '').includes('combine_ball_launcher'));
   for (const e of ents) {
     if (e.classname !== 'point_energy_ball_launcher') continue;
     const p = vecKV(e, 'origin');
-    const [pt, yw] = parseVec(e.kv.get('angles'));
-    const n = forwardOf(pt || 0, yw || 0);
+    // a direção vem da carcaça (o modelo do lançador) quando há uma perto: há mapas
+    // em que o ângulo do ponto de lançamento aponta para a parede (câmara 15)
+    let housing = null;
+    for (const cp of launcherProps) {
+      const d = vecKV(cp, 'origin').distanceTo(p);
+      if (d < 3 && (!housing || d < housing.d)) housing = { e: cp, d };
+    }
+    const [pt, yw] = parseVec((housing?.e ?? e).kv.get('angles'));
+    const n = housing?.e._forward?.clone() ?? forwardOf(pt || 0, yw || 0);
+    // no original o ponto de lançamento fica na boca da carcaça, que sai da parede;
+    // o soquete daqui vai para a parede atrás dele (a carcaça vira um tubo até a boca)
+    const at = p.clone();
+    const solidWall = (b) => !b.noRay && [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z].filter((d) => d > 0.9).length >= 2;
+    const back = w.raycast(p.clone().addScaledVector(n, 0.05), n.clone().negate(), 3, solidWall);
+    if (back) at.copy(back.point);
+    for (let k = 0; k < 40 && w.pointInSolid(at.clone().addScaledVector(n, 0.05)); k++) {
+      if (w.pointInSolid(at.clone().addScaledVector(n, 0.05))?.noRay) break;
+      at.addScaledVector(n, 0.05);
+    }
+    const depth = Math.max(0, p.clone().sub(at).dot(n));
     // como no original: começa lançando sozinho e repõe a bola depois de `ballrespawntime`
-    const L = w.launcher(p.x, p.y, p.z, n.toArray(), {
+    const L = w.launcher(at.x, at.y, at.z, n.toArray(), {
+      depth,
       life: parseFloat(e.kv.get('balllifetime')) || 12,
       delay: parseFloat(e.kv.get('ballrespawntime')) || 2,
       speed: (parseFloat(e.kv.get('minspeed')) || 260) * S,
@@ -445,7 +503,108 @@ export function buildMap(w, bsp) {
         for (const sd of b.solids) w.setSolidEnabled(sd, false);
   }
 
+  // objetos estáticos (canos, tubos de vidro, corrimãos…): a forma do modelo do
+  // original e a colisão do .phy dele (peças convexas invisíveis)
+  const propStats = addStaticProps(w, bsp);
+
   // abaixo de tudo o que existe no mapa não há chão: quem cai ali morre logo
   const floor = Math.min(...w.solids.map((b) => b.min.y));
-  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, followers, movingRoot, stats: { solids: count, lights: picked.length } };
+  return { killY: (Number.isFinite(floor) ? floor : -400) - 15, spawn: [sp.x, sp.y, sp.z, yaw], gun, cubes, turrets, launchers, catchers, byName, brushEnts, followers, rotGroups, movingRoot, stats: { solids: count, lights: picked.length, props: propStats } };
+}
+
+// ---------------------------------------------------------------- objetos estáticos
+// fizzler e trilhos do original já têm o visual daqui
+const SKIP_PROP = /portal_cleanser|light_rail_wall_emitter/;
+const propGeo = new Map(); // modelo → [{ geo, mat }] (geometria já nas unidades daqui)
+const propMats = new Map();
+
+/** material pelo nome da textura do modelo (as texturas em si não são lidas) */
+function propMaterial(tex, model) {
+  const k = /glass/.test(tex) ? 'glass' : /clear_tube/.test(model) ? 'tubeframe' : /pipe/.test(tex + model) ? 'pipe' : /rail|fence|metal|grate|lever|light|spot/.test(tex + model) ? 'metal' : /concrete|debris|rock/.test(tex + model) ? 'concrete' : /desk|chair|stool|monitor|speaker/.test(tex + model) ? 'office' : 'default';
+  if (propMats.has(k)) return propMats.get(k);
+  const P = {
+    glass: { color: 0xc8ecff, metalness: 0.1, roughness: 0.05, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide, emissive: 0x16303c },
+    tubeframe: { color: 0xd5dade, metalness: 0.65, roughness: 0.32 },
+    pipe: { color: 0x737a80, metalness: 0.7, roughness: 0.45 },
+    metal: { color: 0x8a9096, metalness: 0.75, roughness: 0.4 },
+    concrete: { color: 0x8e8b85, metalness: 0, roughness: 0.92 },
+    office: { color: 0xb9bcbf, metalness: 0.25, roughness: 0.55 },
+    default: { color: 0x9da2a7, metalness: 0.35, roughness: 0.55 },
+  }[k];
+  const m = new THREE.MeshStandardMaterial(P);
+  propMats.set(k, m);
+  return m;
+}
+
+function propParts(name, model) {
+  if (propGeo.has(name)) return propGeo.get(name);
+  const parts = model.groups.map((g) => {
+    const n = g.positions.length / 3;
+    const pos = new Float32Array(n * 3);
+    const nor = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const [x, y, z] = [g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]];
+      pos.set([x * S, z * S, -y * S], i * 3);
+      const [a, b, c] = [g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]];
+      nor.set([a, c, -b], i * 3);
+    }
+    // o Source desenha a frente no sentido horário; aqui é o anti-horário
+    const idx = new Uint32Array(g.indices.length);
+    for (let t = 0; t < g.indices.length; t += 3) idx.set([g.indices[t], g.indices[t + 2], g.indices[t + 1]], t);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.computeBoundingSphere();
+    return { geo, mat: propMaterial(g.material, name) };
+  });
+  propGeo.set(name, parts);
+  return parts;
+}
+
+function addStaticProps(w, bsp) {
+  let shown = 0;
+  let hulls = 0;
+  for (const p of bsp.staticProps ?? []) {
+    if (SKIP_PROP.test(p.model)) continue;
+    const model = bsp.propModels?.get(p.model);
+    if (!model) continue;
+    const { f, u } = frameOf(p.angles[0], p.angles[1], p.angles[2]);
+    const left = new THREE.Vector3().crossVectors(u, f);
+    // eixos locais daqui: x = frente do Source, y = cima, z = −esquerda
+    const M = new THREE.Matrix4().makeBasis(f, u, left.clone().negate()).setPosition(toV(...p.origin));
+    for (const { geo, mat } of propParts(p.model, model)) {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.copy(M);
+      if (mat.transparent) mesh.renderOrder = 5;
+      w.group.add(mesh);
+    }
+    shown++;
+    if (!p.solid) continue;
+    for (const hull of model.hulls) {
+      const pts = hull.map(([x, y, z]) => new THREE.Vector3(x * S, z * S, -y * S).applyMatrix4(M));
+      let ch;
+      try {
+        ch = new ConvexHull().setFromPoints(pts);
+      } catch {
+        continue;
+      }
+      const planes = [];
+      for (const face of ch.faces) {
+        if (face.mark !== 0) continue;
+        const n = face.normal.clone();
+        if (planes.some((q) => q.n.dot(n) > 0.9999 && Math.abs(q.d - face.constant) < 1e-4)) continue;
+        planes.push({ n, d: face.constant, kind: null });
+      }
+      if (planes.length < 4) continue;
+      const verts = ch.vertices.map((v) => v.point.clone());
+      const s = w.convex(verts, planes, { solid: true, noRay: false });
+      if (s) {
+        s.prop = true;
+        hulls++;
+      }
+    }
+  }
+  return { shown, hulls };
 }

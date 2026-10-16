@@ -698,10 +698,12 @@ export class PortalSystem {
   mouths(center, wall = false, reach = 0) {
     const out = [];
     for (const P of this.list) {
-      if (!this.isLinked(P) || !P.box || P.delta > 0 || (P.partner.delta > 0 && !wall)) continue; // portal temporal: só o jogador passa
+      if (!this.isLinked(P) || !P.box || P.delta > 0) continue; // o laranja do passado não existe no presente (o azul temporal deixa passar)
       const l = P.local(center);
       if (l.z < -2.5 || l.z > 1.2 + reach) continue;
-      const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.72 : 0.25;
+      // parede: o corpo pode estar até ~0,45 m abaixo do centro ideal (portal um pouco
+      // acima do chão: dá para entrar andando, sem pular a beirada)
+      const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.45 : 0.25;
       if (Math.abs(l.x) <= PORTAL_A - 0.25 && Math.abs(l.y) <= PORTAL_B - mv) out.push(P);
     }
     return out;
@@ -748,7 +750,7 @@ export class PortalSystem {
     for (const P of this.list) {
       if (!this.isLinked(P)) continue;
       if (P.delta > 0) continue; // o laranja do passado não existe no presente
-      if (P.partner.delta > 0 && !player) continue; // o azul temporal só o jogador atravessa
+      if (P.partner.delta > 0 && !player) continue; // azul temporal: o jogador e os objetos ('prop') atravessam (as bolas, não)
       const sa = _v.subVectors(a, P.center).dot(P.normal);
       const sb = _v.subVectors(b, P.center).dot(P.normal);
       if (sa > 0 && sb <= 0) {

@@ -864,6 +864,52 @@ export class Chronos {
     this.blocked = this.destinationBlocked(s);
   }
 
+  // ------------------------------------------------------------------ bolas do passado
+  /**
+   * Como os lasers: a bola de energia que, Δ segundos atrás, entrou onde hoje está o
+   * laranja temporal sai agora pelo azul (com o tempo de vida cheio). Compara as fotos
+   * do passado, quadro a quadro, conforme o tempo do mundo anda.
+   */
+  pastPellets() {
+    const { portals, energy } = this.ctx;
+    const O = portals.orange;
+    const on = O.placed && O.delta > 0 && portals.isLinked(O) && !this.paused && !this.sweep;
+    const key = on ? `${O.delta}|${O.center.x},${O.center.y},${O.center.z}` : null;
+    const i1 = on ? this.indexAt(this.tw - O.delta) : -1;
+    if (key !== this.ppKey) {
+      // portal novo (ou mudou): conta a partir de agora
+      this.ppKey = key;
+      this.ppIdx = i1;
+      return;
+    }
+    if (!on || i1 <= this.ppIdx) return;
+    const life = this.ctx.world.launchers[0]?.life ?? 12;
+    for (let i = Math.max(1, this.ppIdx + 1); i <= i1; i++) {
+      const a = this.samples[i - 1].w.pellets;
+      const b = this.samples[i].w.pellets;
+      for (const q of b) {
+        // a mesma bola no quadro anterior: mesmo lançador e perto
+        const p = a.find((x) => x.li === q.li && x.pos.distanceTo(q.pos) < q.vel.length() * RATE * 2 + 0.3);
+        if (!p) continue;
+        const la = O.local(p.pos);
+        const lb = O.local(q.pos);
+        if (!(la.z > 0 && lb.z <= 0)) continue;
+        const k = la.z / (la.z - lb.z);
+        const lx = la.x + (lb.x - la.x) * k;
+        const ly = la.y + (lb.y - la.y) * k;
+        if ((lx / PORTAL_A) ** 2 + (ly / PORTAL_B) ** 2 > 1) continue;
+        const pos = p.pos.clone().lerp(q.pos, k);
+        const vel = q.vel.clone();
+        portals.carry(O, pos, vel);
+        pos.addScaledVector(vel.clone().normalize(), 0.05);
+        const np = energy.spawnFree(pos, vel, Math.max(life, q.life));
+        np.cooldown = 0.15;
+        this.ctx.fx.launch?.(pos);
+      }
+    }
+    this.ppIdx = i1;
+  }
+
   // ------------------------------------------------------------------ o passado visto pelo azul e mirado pelo laranja
   /** roda `fn` com as portas/plataformas nas posições do passado (colisores incluídos) */
   inPast(delta, fn) {

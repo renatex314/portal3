@@ -58,6 +58,9 @@ export class Physics {
     cc.setSlideEnabled(true);
     cc.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
     cc.setMinSlopeSlideAngle((55 * Math.PI) / 180);
+    // degraus baixos (até 0,45 m, o mesmo do Source) sobem sozinhos; descendo, gruda no chão
+    cc.enableAutostep(0.45, 0.12, false);
+    cc.enableSnapToGround(0.2);
     this.cc = cc;
     this.playerCol = null;
   }
@@ -155,9 +158,31 @@ export class Physics {
   // ------------------------------------------------------------------ jogador
   setPlayer(half) {
     if (!this.world) return;
+    if (this.playerCol) {
+      // troca de tamanho (agachar): o colisor velho sai
+      this.ents.delete(this.playerCol.handle);
+      this.world.removeCollider(this.playerCol, false);
+      this.playerCol = null;
+    }
     const col = this.world.createCollider(RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(0));
     this.ents.set(col.handle, { kind: 'player' });
     this.playerCol = col;
+  }
+
+  /** um corpo do tamanho `half` cabe em `center` sem tocar no cenário? (levantar) */
+  fits(center, half) {
+    if (!this.world) return true;
+    const shape = new RAPIER.Cuboid(half.x - 0.01, half.y - 0.01, half.z - 0.01);
+    let blocked = false;
+    this.world.intersectionsWithShape(center, { x: 0, y: 0, z: 0, w: 1 }, shape, (c) => {
+      const e = this.ents.get(c.handle);
+      if (e?.kind === 'static' && !e.box?.disabled) {
+        blocked = true;
+        return false;
+      }
+      return true;
+    });
+    return !blocked;
   }
 
   /**

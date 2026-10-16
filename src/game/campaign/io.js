@@ -97,9 +97,76 @@ export class CampaignRuntime {
    */
   setupFollowers(built) {
     const nodeOf = new Map(this.nodes.map((n) => [n.e, n]));
+    // peças que se movem presas a outras que se movem (porta num trem, plataforma numa
+    // porta): o deslocamento delas soma o da mãe (`carry`, atualizado a cada quadro)
+    if (built.movingRoot)
+      for (const n of this.nodes) {
+        if (!n.doors?.length || !n.e.kv.get('parentname')) continue;
+        const root = nodeOf.get(built.movingRoot(n.e));
+        if (!root || root === n) continue;
+        n.carry = new THREE.Vector3();
+        for (const d of n.doors) if (!d.drive) d.carry = n.carry;
+        n.carryRoot = root;
+      }
     const offsetOf = (root) => {
       const r = nodeOf.get(root);
-      return r?.doors?.[0]?.offset ?? r?.offset ?? null;
+      return r ? this.totalOffset(r) : null;
+    };
+    // portas giratórias com peças presas: o visual gira em volta da dobradiça; a colisão
+    // troca da posição fechada para a cópia girada (a da convert) passada a metade
+    const w = this.ctx.world;
+    for (const g of built.rotGroups ?? []) {
+      const n = nodeOf.get(g.e);
+      if (!n) continue;
+      n.rotGroup = g;
+      const root = nodeOf.get(built.movingRoot?.(g.e));
+      const base = (s) => (s._base ??= { min: s.min.clone(), max: s.max.clone() });
+      const collide = (s, on) => {
+        s.disabled = !on;
+        s.collider?.setEnabled(on);
+      };
+      const qk = new THREE.Quaternion();
+      const ID = new THREE.Quaternion();
+      g.k = 0;
+      let lastK = -1;
+      const d = { id: `rot-${g.e.kv.get('targetname') ?? ''}`, box: g.closed[0], plain: false, open: 0, target: 0, baseMin: new THREE.Vector3(), baseMax: new THREE.Vector3(), mesh: g.closed[0].mesh, delta: new THREE.Vector3(), offset: new THREE.Vector3() };
+      d.drive = (dt) => {
+        const off = root ? this.totalOffset(root) : ZERO;
+        const rate = Math.max(1, n.speed ?? num(g.e, 'speed', 100)) / Math.max(1, Math.abs(g.deg));
+        const target = n.isOpen ? 1 : 0;
+        g.k += Math.sign(target - g.k) * Math.min(Math.abs(target - g.k), rate * dt);
+        // portal num pedaço que vai girar some (como no original)
+        if (g.k !== lastK && lastK >= 0)
+          for (const P of this.ctx.portals.list ?? [])
+            if (P.placed && (g.closed.includes(P.box) || g.open.includes(P.box))) P.remove();
+        lastK = g.k;
+        qk.slerpQuaternions(ID, g.q, g.k);
+        const isOpen = g.k >= 0.5;
+        for (const s of g.closed) {
+          const b = base(s);
+          s.min.copy(b.min).add(off);
+          s.max.copy(b.max).add(off);
+          s.mesh.quaternion.copy(qk);
+          s.mesh.position.copy(g.hinge).sub(g.hinge.clone().applyQuaternion(qk)).add(off);
+          collide(s, !isOpen);
+          w.physics?.moveBox(s);
+        }
+        for (const s of g.open) {
+          const b = base(s);
+          s.min.copy(b.min).add(off);
+          s.max.copy(b.max).add(off);
+          s.mesh.position.copy(off);
+          s.mesh.visible = false; // só colisão: o visual é o das peças girando
+          collide(s, isOpen);
+          w.physics?.moveBox(s);
+        }
+      };
+      w.doors.push(d);
+    }
+    const tick0 = this.carryTick;
+    this.carryTick = () => {
+      for (const n of this.nodes) if (n.carry) n.carry.copy(this.totalOffset(n.carryRoot));
+      tick0?.();
     };
     for (const f of built.followers ?? []) {
       const prev = new THREE.Vector3();
@@ -234,7 +301,14 @@ export class CampaignRuntime {
     }
     const p = n.parentNode;
     if (!p) return ZERO;
-    return p.doors?.[0]?.offset ?? p.offset ?? ZERO;
+    return this.totalOffset(p);
+  }
+
+  /** deslocamento de uma peça móvel somado ao das peças-mãe que a carregam */
+  totalOffset(n, depth = 0) {
+    const own = n.doors?.[0]?.offset ?? n.offset ?? ZERO;
+    if (!n.carryRoot || depth > 8) return own;
+    return (n._total ??= new THREE.Vector3()).copy(own).add(this.totalOffset(n.carryRoot, depth + 1));
   }
 
   cubeNode(cube) {
@@ -333,6 +407,7 @@ export class CampaignRuntime {
     this.time += dt;
     let guard = 0;
     while (this.queue.length && this.queue[0].t <= this.time && guard++ < 2000) this.dispatch(this.queue.shift());
+    this.carryTick?.();
     for (const n of this.nodes) if (!n.dead) n.tick?.(dt);
     this.updateBoss(dt);
   }
@@ -515,6 +590,27 @@ const SETUP = {
   trigger_portal_cleanser(n) {
     if (!this.setupTrigger(n)) return;
     const w = this.ctx.world;
+    // a grade vai de parede a parede: se sobra um vão estreito (até 2 m) entre a borda
+    // do volume e o sólido mais próximo, o volume cresce até lá (câmara 15)
+    const size = new THREE.Vector3().subVectors(n.max, n.min);
+    const thin = size.y < Math.min(size.x, size.z) ? 'y' : size.x < size.z ? 'x' : 'z';
+    const mid = n.min.clone().add(n.max).multiplyScalar(0.5);
+    for (const ax of ['x', 'y', 'z']) {
+      if (ax === thin) continue;
+      for (const sgn of [-1, 1]) {
+        const edge = sgn > 0 ? n.max : n.min;
+        const q = mid.clone();
+        let reach = 0;
+        for (let d = 0.05; d <= 2; d += 0.05) {
+          q[ax] = edge[ax] + sgn * d;
+          if (w.pointInSolid(q)) {
+            reach = d - 0.05;
+            break;
+          }
+        }
+        if (reach > 0.1) edge[ax] += sgn * reach;
+      }
+    }
     n.fizz = w.fizzler(n.min.x, n.min.y, n.min.z, n.max.x, n.max.y, n.max.z);
     n.setOn = (on) => {
       n.enabled = on;
@@ -1165,7 +1261,8 @@ INPUTS.prop_glados_core = INPUTS.prop_physics;
 INPUTS.prop_dynamic_override = INPUTS.prop_dynamic;
 INPUTS.func_door_rotating = function (n, input, param) {
   // giro aproximado: aberta = sem colisão; as saídas saem no tempo do giro (distância ÷ velocidade).
-  // n.angle: graus girados (0 fechada, `distance` aberta; sentido contrário com a flag 2)
+  // n.angle: guinada em graus (0 fechada; aberta = `distance` no sentido horário visto de cima,
+  // como no original; anti-horário com a flag 2)
   const b = this.brushOf.get(n.e);
   if (input === 'setspeed') {
     n.speed = parseFloat(param) || n.speed;
@@ -1175,8 +1272,8 @@ INPUTS.func_door_rotating = function (n, input, param) {
   const go = (open) => {
     if (n.isOpen === open) return;
     n.isOpen = open;
-    n.angle = open ? num(n.e, 'distance', 90) * (flags(n.e) & 2 ? -1 : 1) : 0;
-    b?.solids.forEach((s) => this.ctx.world.setSolidEnabled(s, !open));
+    n.angle = open ? num(n.e, 'distance', 90) * (flags(n.e) & 2 ? 1 : -1) : 0;
+    if (!n.rotGroup) b?.solids.forEach((s) => this.ctx.world.setSolidEnabled(s, !open)); // com peças presas, quem gira é o grupo
     this.fire(n, open ? 'onopen' : 'onclose');
     this.queue = this.queue.filter((ev) => !(ev.caller === n && ev.input === 'FireFully'));
     this.schedule(t, '!self', 'FireFully', open ? 'open' : 'closed', null, n);

@@ -9,6 +9,7 @@ import * as TX from './textures.js';
 
 const TILE = 2; // metros por repetição de textura
 const _path = new THREE.Vector3();
+const _carry = new THREE.Vector3();
 const _c = new THREE.Color();
 const RED = new THREE.Color(2.6, 0.25, 0.12);
 const GREEN = new THREE.Color(0.3, 2.6, 0.7);
@@ -268,6 +269,25 @@ function rayObb(origin, dir, obb, maxDist) {
 }
 
 /** raio contra sólido convexo (interseção dos semiespaços n·p ≤ d) */
+/** o raio passa pela caixa min..max antes de `maxDist`? (só para descartar rápido) */
+function rayHitsBox(o, d, min, max, maxDist) {
+  let t0 = 0;
+  let t1 = maxDist + 1e-3;
+  for (const a of ['x', 'y', 'z']) {
+    if (Math.abs(d[a]) < 1e-12) {
+      if (o[a] < min[a] - 1e-3 || o[a] > max[a] + 1e-3) return false;
+      continue;
+    }
+    let ta = (min[a] - 1e-3 - o[a]) / d[a];
+    let tb = (max[a] + 1e-3 - o[a]) / d[a];
+    if (ta > tb) [ta, tb] = [tb, ta];
+    if (ta > t0) t0 = ta;
+    if (tb < t1) t1 = tb;
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
 function rayConvex(origin, dir, planes, maxDist) {
   let tmin = 0;
   let tmax = maxDist;
@@ -643,8 +663,9 @@ export class World {
       min,
       max,
       mat: planes.find((p) => p.kind)?.kind ?? 'metal',
-      planes: planes.map((p) => ({ n: p.n.clone(), d: p.d, portal: p.kind === 'white' })),
-      pts: pts.map((p) => p.clone()),
+      planes0: planes.map((p) => ({ n: p.n.clone(), d: p.d, portal: p.kind === 'white' })),
+      pts0: pts.map((p) => p.clone()),
+      min0: min.clone(),
       portalable: planes.some((p) => p.kind === 'white'),
       portalAt: (n) => b.planes.some((p) => p.portal && p.n.dot(n) > 0.999),
       surfaceFit: true,
@@ -653,6 +674,17 @@ export class World {
       solid,
       imported: true,
     };
+    // planos e cantos acompanham o sólido quando ele anda (peça móvel da campanha)
+    const live = { at: new THREE.Vector3(), off: new THREE.Vector3(), planes: b.planes0, pts: b.pts0 };
+    const refresh = () => {
+      const off = live.off.subVectors(b.min, b.min0);
+      if (off.equals(live.at)) return;
+      live.at.copy(off);
+      live.planes = b.planes0.map((p) => ({ n: p.n, d: p.d + p.n.dot(off), portal: p.portal }));
+      live.pts = b.pts0.map((p) => p.clone().add(off));
+    };
+    Object.defineProperty(b, 'planes', { get: () => (refresh(), live.planes) });
+    Object.defineProperty(b, 'pts', { get: () => (refresh(), live.pts) });
     if (solid) {
       this.solids.push(b);
       this.physics?.addConvex(b, kinematic);
@@ -868,25 +900,28 @@ export class World {
   }
 
   /** o segmento a→b passa por alguma grade? (quedas rápidas atravessam a grade fina num só quadro) */
-  segmentFizzler(a, b) {
+  segmentFizzler(a, b, pad = null) {
     const d = new THREE.Vector3().subVectors(b, a);
     const len = d.length();
-    if (len < 1e-6) return this.fizzlers.find((f) => a.x > f.min.x && a.x < f.max.x && a.y > f.min.y && a.y < f.max.y && a.z > f.min.z && a.z < f.max.z) ?? null;
-    return this.rayFizzler(a, d.divideScalar(len), len) ? true : null;
+    if (len < 1e-6) return this.fizzlers.find((f) => ['x', 'y', 'z'].every((k) => a[k] > f.min[k] - (pad?.[k] ?? 0) && a[k] < f.max[k] + (pad?.[k] ?? 0))) ?? null;
+    return this.rayFizzler(a, d.divideScalar(len), len, pad) ? true : null;
   }
 
-  /** o raio cruza uma grade de desintegração antes de `maxDist`? */
-  rayFizzler(origin, dir, maxDist) {
+  /** o raio cruza uma grade de desintegração antes de `maxDist`? (`pad`: folga em cada eixo,
+   *  para testar um corpo inteiro e não só o centro) */
+  rayFizzler(origin, dir, maxDist, pad = null) {
     for (const f of this.fizzlers) {
       let t0 = 0;
       let t1 = maxDist;
       for (const a of ['x', 'y', 'z']) {
+        const lo = f.min[a] - (pad?.[a] ?? 0);
+        const hi = f.max[a] + (pad?.[a] ?? 0);
         if (Math.abs(dir[a]) < 1e-9) {
-          if (origin[a] < f.min[a] || origin[a] > f.max[a]) t0 = Infinity;
+          if (origin[a] < lo || origin[a] > hi) t0 = Infinity;
           continue;
         }
-        let ta = (f.min[a] - origin[a]) / dir[a];
-        let tb = (f.max[a] - origin[a]) / dir[a];
+        let ta = (lo - origin[a]) / dir[a];
+        let tb = (hi - origin[a]) / dir[a];
         if (ta > tb) [ta, tb] = [tb, ta];
         t0 = Math.max(t0, ta);
         t1 = Math.min(t1, tb);
@@ -967,7 +1002,20 @@ export class World {
     const n = new THREE.Vector3(...normal);
     const g = this.socket(n, 0xffb347);
     g.position.set(x, y, z);
-    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(n, 0.35), dir: n, group: g, pellet: null, wait: opts.delay ?? 1, life: opts.life ?? 12, speed: opts.speed ?? 6.5, done: false };
+    // `depth`: a carcaça sai da parede até a boca (onde nasce a bola)
+    const depth = opts.depth ?? 0;
+    if (depth > 0.45) {
+      const metal = materials().metal.mat;
+      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, depth - 0.1, 32, 1, true), metal);
+      tube.position.y = (depth - 0.1) / 2;
+      const lip = new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.05, 8, 40).rotateX(Math.PI / 2), g.userData.glow);
+      lip.position.y = depth - 0.08;
+      const rim = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.6, 32).rotateX(-Math.PI / 2), metal);
+      rim.position.y = depth - 0.1;
+      g.add(tube, lip, rim);
+    }
+    const mouth = new THREE.Vector3(x, y, z).addScaledVector(n, Math.max(0.35, depth));
+    const L = { pos: mouth, dir: n, group: g, pellet: null, wait: opts.delay ?? 1, life: opts.life ?? 12, speed: opts.speed ?? 6.5, done: false };
     this.launchers.push(L);
     return L;
   }
@@ -1622,6 +1670,7 @@ export class World {
       if (filter && !filter(b)) continue;
       if (b.noRay || b.disabled) continue;
       if (b.planes) {
+        if (!rayHitsBox(origin, dir, b.min, b.max, best ? best.dist : maxDist)) continue; // corte rápido
         const h = rayConvex(origin, dir, b.planes, maxDist);
         if (h && (!best || h.dist < best.dist)) best = { box: b, ...h, axis: -1 };
         continue;
@@ -1680,6 +1729,7 @@ export class World {
     for (const b of this.solids) {
       if (b === except || b.disabled) continue;
       if (b.planes) {
+        if (p.x < b.min.x || p.x > b.max.x || p.y < b.min.y || p.y > b.max.y || p.z < b.min.z || p.z > b.max.z) continue;
         if (b.planes.every((pl) => pl.n.dot(p) < pl.d)) return b;
         continue;
       }
@@ -1712,9 +1762,15 @@ export class World {
       d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * sp);
       d.delta.copy(path).multiplyScalar(d.open - before);
       d.offset.copy(path).multiplyScalar(d.open);
-      d.box.min.copy(d.baseMin).add(d.offset);
-      d.box.max.copy(d.baseMax).add(d.offset);
-      d.mesh.position.copy(d.offset);
+      // `carry`: deslocamento da peça-mãe que se move (porta presa num trem etc.)
+      const at = d.carry ? _carry.copy(d.offset).add(d.carry) : d.offset;
+      if (d.carry) {
+        d.delta.add(d.carry).sub(d.carryPrev ?? d.carry);
+        (d.carryPrev ??= new THREE.Vector3()).copy(d.carry);
+      }
+      d.box.min.copy(d.baseMin).add(at);
+      d.box.max.copy(d.baseMax).add(at);
+      d.mesh.position.copy(at);
       this.physics?.moveBox(d.box);
       if (d.plain) this.doorLamps(d, t);
     }

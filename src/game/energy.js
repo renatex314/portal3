@@ -111,6 +111,15 @@ export class EnergySystem {
     return p;
   }
 
+  /** bola solta (sem lançador): a que veio do passado pelo par temporal */
+  spawnFree(pos, vel, life) {
+    const from = { pos: pos.clone(), dir: vel.clone().normalize(), speed: vel.length(), life, pellet: null, free: true };
+    const p = this.spawn(from);
+    from.pellet = null; // não segura um lançador
+    p.free = true;
+    return p;
+  }
+
   kill(p) {
     this.scene.remove(p.group, p.trail);
     if (p.light) {
@@ -123,6 +132,44 @@ export class EnergySystem {
       p.from.pellet = null;
       p.from.wait = 1.6;
     }
+  }
+
+  /** raio contra as caixas orientadas dos objetos físicos (cubos, torretas) */
+  rayProps(props, origin, dir, maxDist) {
+    let best = null;
+    for (const pr of props) {
+      if (pr.gone || !pr.half) continue;
+      const qi = pr.quat.clone().invert();
+      const o = origin.clone().sub(pr.pos).applyQuaternion(qi);
+      const d = dir.clone().applyQuaternion(qi);
+      let t0 = 0;
+      let t1 = maxDist;
+      let axis = -1;
+      let sign = 0;
+      for (let i = 0; i < 3; i++) {
+        const h = pr.half.getComponent(i) + R;
+        const oi = o.getComponent(i);
+        const di = d.getComponent(i);
+        if (Math.abs(di) < 1e-9) {
+          if (oi < -h || oi > h) t0 = Infinity;
+          continue;
+        }
+        let ta = (-h - oi) / di;
+        let tb = (h - oi) / di;
+        let s = -Math.sign(di);
+        if (ta > tb) [ta, tb] = [tb, ta];
+        if (ta > t0) {
+          t0 = ta;
+          axis = i;
+          sign = s;
+        }
+        t1 = Math.min(t1, tb);
+      }
+      if (axis < 0 || t0 > t1 || (best && t0 >= best.dist)) continue;
+      const n = new THREE.Vector3().setComponent(axis, sign).applyQuaternion(pr.quat);
+      best = { dist: t0, point: origin.clone().addScaledVector(dir, t0), normal: n, prop: pr }; // centro da bola no contato
+    }
+    return best;
   }
 
   /**
@@ -176,6 +223,21 @@ export class EnergySystem {
           p.pos.copy(next);
           portals.carry(P, p.pos, p.vel);
           p.cooldown = 0.1;
+          p.life = Math.max(p.life, p.from?.life ?? 0); // passou pelo portal: o tempo recomeça
+          continue;
+        }
+        // cubos e torretas desviam a bola (e levam um empurrão dela)
+        const ph = this.rayProps(on.props?.() ?? [], p.pos, dir, step + R);
+        if (ph) {
+          p.pos.copy(ph.point).addScaledVector(ph.normal, 0.002);
+          p.vel.addScaledVector(ph.normal, -2 * p.vel.dot(ph.normal));
+          const b = ph.prop.body;
+          if (b && !ph.prop.held) {
+            const imp = dir.clone().multiplyScalar(ph.prop.kind === 'turret' ? 9 : 4);
+            const at = ph.point.clone().addScaledVector(ph.normal, -R);
+            b.applyImpulseAtPoint({ x: imp.x, y: imp.y, z: imp.z }, { x: at.x, y: at.y, z: at.z }, true);
+          }
+          on.bounce?.(p.pos);
           continue;
         }
         const hit = world.raycast(p.pos, dir, step + R);
