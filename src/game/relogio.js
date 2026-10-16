@@ -1767,7 +1767,7 @@ export class Chronos {
   }
 
   makeCheckpoint(blue, orange) {
-    const frame = (P) => ({ c: P.center.clone(), n: P.normal.clone(), u: P.up.clone(), box: P.box });
+    const frame = (P) => ({ placed: !!P.placed, c: P.center.clone(), n: P.normal.clone(), u: P.up.clone(), box: P.box });
     return {
       samples: this.samples,
       clones: this.clones.slice(),
@@ -1777,7 +1777,9 @@ export class Chronos {
       arrival: this.arrival,
       w: this.snapshot(),
       player: this.pre,
-      // os SEUS portais (o salto pode ter sido pelo azul de uma versão passada)
+      // os SEUS portais (o salto pode ter sido pelo azul de uma versão passada, e aí os
+      // seus podem nem estar abertos); `entered`: o azul por onde você entrou
+      entered: frame(blue),
       blue: frame(this.ctx.portals.blue),
       orange: { ...frame(this.ctx.portals.orange), delta: this.ctx.portals.orange.delta },
     };
@@ -1890,15 +1892,22 @@ export class Chronos {
     this.next = cp.next;
     this.arrival = cp.arrival;
     this.restore(cp.w);
-    portals.blue.setFrame(cp.blue.c, cp.blue.n, cp.blue.u, cp.blue.box);
-    portals.orange.setFrame(cp.orange.c, cp.orange.n, cp.orange.u, cp.orange.box);
-    portals.orange.delta = cp.orange.delta;
+    // os seus portais como estavam (só os que estavam abertos: sem portal "fantasma" sem parede)
+    for (const [P, f] of [
+      [portals.blue, cp.blue],
+      [portals.orange, cp.orange],
+    ]) {
+      if (f.placed && f.box) P.setFrame(f.c, f.n, f.u, f.box);
+      else if (P.placed) P.remove();
+    }
+    portals.orange.delta = cp.orange.placed ? cp.orange.delta : 0;
     portals.blue.fixed = portals.orange.fixed = false;
     // você volta para onde estava logo antes de entrar no azul (um passo para trás, parado: sem re-entrar sozinho)
     player.pos.copy(cp.player.pos);
     player.vel.set(0, 0, 0);
-    const l = portals.blue.local(player.pos);
-    if (l.z < 0.8) player.pos.addScaledVector(portals.blue.normal, 0.8 - l.z);
+    const E = cp.entered ?? cp.blue;
+    const l = E.n.clone().dot(player.pos.clone().sub(E.c));
+    if (l < 0.8) player.pos.addScaledVector(E.n, 0.8 - l);
     player.yaw = cp.player.yaw;
     player.pitch = cp.player.pitch;
     player.viewOffset?.set(0, 0, 0);

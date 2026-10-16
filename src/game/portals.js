@@ -286,6 +286,11 @@ class Portal {
   }
 
   setFrame(center, normal, up, box) {
+    // sem parede não existe portal (evita um portal "fantasma" que nada sustenta)
+    if (!box) {
+      if (this.placed) this.remove();
+      return;
+    }
     this.center.copy(center);
     this.normal.copy(normal);
     this.up.copy(up);
