@@ -20,6 +20,7 @@ import { Turret, crystalMesh } from './turrets.js';
 import { SLOT_COLORS, SLOT_CSS } from './portals.js';
 import { initEnvironment, portalGun, sampleCube, drawGunHolo } from './models.js';
 import { Post, dust, ContactShadows, Dissolver } from './fx.js';
+import { makeCoreSphere, setCoreFade, setCoreContacts, coreUniforms } from './coreSphere.js';
 import { Frontier } from './frontier.js';
 import { Chronos } from './relogio.js';
 import './editor/editor.css';
@@ -1599,7 +1600,7 @@ function toggleSlowmo(force) {
 // Pode haver vários campos ao mesmo tempo (os seus e os que as suas versões do passado criaram);
 // a carga e a barra do HUD são só dos SEUS: o campo de uma versão passada não ocupa a sua "bateria".
 //   active: [{ center, left (s do mundo), own, ev? }]  ·  events: linha do tempo (com o relógio)
-const FIELD = { need: 5, rate: 10, R: 3.2, life: 20, charge: 0, armed: true, shake: 0, active: [], events: [], loop: 0, lastTw: 0 };
+const FIELD = { need: 5, rate: 10, R: 3.2, life: 20, charge: 0, armed: true, shake: 0, active: [], events: [], loop: 0, lastTw: 0, meshes: [] };
 const CHORD_MS = 90;
 const mouseHeld = { 0: false, 2: false };
 let pendingShot = null; // portal esperando um instante para ver se o outro botão vem junto
@@ -1655,6 +1656,48 @@ function syncFieldTimeline(dt) {
   if (!jumped) for (const f of FIELD.active) if (!before.has(f.ev) && !f.own) fieldBurst(f.center);
   if (jumped) for (const c of [...cubes, ...turrets]) c.dilated = inField(c.pos) && !c.held && !c.gone;
 }
+/**
+ * Cada campo é uma esfera 3D (coreSphere.js) na cena de cima do pós-processamento: nasce crescendo,
+ * a distorção enfraquece com o tempo e ela se esmaece nos últimos 60% da vida. `main`: a câmera do
+ * jogador (de dentro, a vista é o efeito de tela do fx.js); senão, a câmera de uma vista por portal.
+ */
+function poseFieldMeshes(list, camPos, main) {
+  list.forEach((f, i) => {
+    const m = (FIELD.meshes[i] ??= post.overlay.add(makeCoreSphere(FIELD.R)).children.at(-1));
+    const born = Math.min(1, (FIELD.life - f.left) * 2.5);
+    m.position.copy(f.center);
+    m.scale.setScalar(0.2 + 0.8 * (1 - (1 - born) ** 3));
+    const fade = Math.min(1, f.left / (FIELD.life * 0.6), born);
+    // de dentro a casca ficaria atrás das paredes da sala: para o jogador, a vista de dentro é o efeito de tela
+    const camIn = camPos.distanceTo(f.center) < FIELD.R * m.scale.x;
+    const age = Math.min(1, (FIELD.life - f.left) / FIELD.life);
+    setCoreFade(m, camIn ? 0 : fade, false, 0.7 * (1 - 0.7 * age));
+    if (camIn && main) post.lens.field = { center: f.center, R: FIELD.R, fade };
+    setCoreContacts(m, world.solids);
+  });
+  for (let i = list.length; i < FIELD.meshes.length; i++) FIELD.meshes[i].visible = false;
+}
+/** os campos que existiam no instante T (com o relógio, pela linha do tempo; sem ele, os de agora) */
+function fieldsAt(T) {
+  if (!relogio) return FIELD.active;
+  return FIELD.events.filter((ev) => T >= ev.t0 - 1e-6 && T < ev.t0 + ev.life).map((ev) => ({ center: ev.center, left: ev.t0 + ev.life - T }));
+}
+const _vcamPos = new THREE.Vector3();
+// as vistas pelos portais também mostram as esferas — as do instante que a vista mostra
+portals.overlay = (when, cam) => {
+  if (!FIELD.meshes.length && !FIELD.events.length && !FIELD.active.length) return null;
+  const T = when.T ?? (relogio ? relogio.tw - (when.delta ?? 0) : 0);
+  const list = when.T !== undefined || when.delta > 0 ? fieldsAt(T) : FIELD.active;
+  if (!list.length) return null;
+  poseFieldMeshes(list, _vcamPos.setFromMatrixPosition(cam.matrixWorld), false);
+  return post.overlay;
+};
+portals.overlayDone = () => {
+  const keep = post.lens.field;
+  poseFieldMeshes(FIELD.active, camera.position, true);
+  post.lens.field = keep;
+};
+
 /** carga (tempo real) e o efeito na tela; chamado uma vez por quadro */
 function updateField(realDt, live) {
   if (pendingShot && performance.now() - pendingShot.at > CHORD_MS) firePending();
@@ -1682,11 +1725,12 @@ function updateField(realDt, live) {
   const inside = inField(player.pos);
   sfx.dilateCharge(live && k > 0 ? 0.3 + 0.7 * k : 0, k);
   sfx.blackHole(live && inside ? 0.8 : FIELD.active.length ? 0.25 : 0);
-  post.dilate = Math.max(k * 0.6, inside ? 1 : 0);
-  // a lente (fx.js) mostra o campo mais perto da câmera: nasce rápido e se esmaece nos últimos 60% da vida
-  let near = null;
-  for (const f of FIELD.active) if (!near || camera.position.distanceTo(f.center) < camera.position.distanceTo(near.center)) near = f;
-  post.lens.field = near ? { center: near.center, R: FIELD.R, fade: Math.min(1, near.left / (FIELD.life * 0.6), (FIELD.life - near.left) * 2) } : null;
+  // perto do fim da carga a imagem pulsa (separação de cores batendo), como o aviso de limite do turbo
+  const pulse = k > 0.6 ? (k - 0.6) / 0.4 : 0;
+  post.dilate = Math.max(k * 0.6 + pulse * 0.6 * (0.5 + 0.5 * Math.sin(performance.now() / 1000 * (10 + 14 * pulse))), inside ? 0.35 : 0);
+  coreUniforms.uCoreTime.value += realDt;
+  post.lens.field = null;
+  poseFieldMeshes(FIELD.active, camera.position, true);
   document.body.classList.toggle('dilated', live && inside);
   // HUD: só o SEU campo (carga ou o tempo que resta dele)
   const own = ownField();
@@ -2733,8 +2777,9 @@ function update(dt, t) {
   setText('zoom-v', `${ZOOM.k.toFixed(1).replace('.', ',')}×`);
   camera.updateProjectionMatrix();
   // a visão treme: aos poucos durante a carga do campo e com um tranco quando a bolha nasce
+  // vibração do campo (estilo Nitronic Rush): cresce com a carga e dá um pico quando a bolha nasce
   const charging = FIELD.charge / FIELD.need;
-  player.applyCamera(pdt, Math.max(0.075 * charging ** 2, FIELD.shake > 0 ? 0.18 * (FIELD.shake / 0.7) ** 2 : 0));
+  player.applyCamera(pdt, 0, Math.min(1.25, Math.max(charging * 0.6, FIELD.shake > 0 ? 1.25 * (FIELD.shake / 0.7) : 0)));
   // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
   // apareceria colado na vista
   body.group.visible = !player.inTransit;

@@ -18,6 +18,9 @@ const _ID = new THREE.Quaternion();
 const _right = new THREE.Vector3();
 const _zAxis = new THREE.Vector3(0, 0, 1);
 const _rollQ = new THREE.Quaternion();
+const _rumbleQ = new THREE.Quaternion();
+const _rumbleE = new THREE.Euler();
+const _rumbleV = new THREE.Vector3();
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 
@@ -345,11 +348,27 @@ export class Player {
     this.grounded = false;
   }
 
-  applyCamera(dt, shakeAmt = 0) {
+  /**
+   * `shakeAmt`: sacolejo aleatório de posição (impactos). `rumble` (0..1): vibração contínua de alta
+   * frequência que gira a câmera nos três eixos, como o motor no limite do turbo do Nitronic Rush.
+   */
+  applyCamera(dt, shakeAmt = 0, rumble = 0) {
     const b = Math.sin(this.bob) * 0.035 * (this.grounded ? 1 : 0);
     const pos = this.eye().add(this.viewOffset).add(new THREE.Vector3(0, b * this.upSign, 0));
     if (shakeAmt > 0) pos.add(new THREE.Vector3((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt));
     const quat = this.viewQuaternion();
+    this.rumbleT = (this.rumbleT ?? 0) + Math.max(dt, 1 / 240);
+    if (rumble > 0.001) {
+      // senos em frequências que não se repetem juntas (soa "orgânico", sem padrão), mais um
+      // tremor rápido por cima; cresce com o quadrado para começar sutil e ficar violento no fim
+      const t = this.rumbleT;
+      const r = rumble * rumble;
+      const yaw = r * 0.016 * (Math.sin(t * 43.1) + 0.6 * Math.sin(t * 71.7 + 1.3) + 0.3 * Math.sin(t * 113 + 0.4));
+      const pitch = r * 0.013 * (Math.sin(t * 51.3 + 0.7) + 0.5 * Math.sin(t * 89.9 + 2.1) + 0.3 * Math.sin(t * 131 + 1.7));
+      const roll = r * 0.022 * (Math.sin(t * 29.7 + 2.0) + 0.4 * Math.sin(t * 61.1));
+      quat.multiply(_rumbleQ.setFromEuler(_rumbleE.set(pitch, yaw, roll, 'YXZ')));
+      pos.addScaledVector(_rumbleV.set(Math.sin(t * 37.3), Math.sin(t * 47.9 + 0.5), 0).applyQuaternion(quat), r * 0.025);
+    }
     // andando de lado a câmera inclina levemente para o lado do movimento (como no Half-Life/Black Mesa)
     const right = _right.set(1, 0, 0).applyQuaternion(quat);
     const side = THREE.MathUtils.clamp(this.vel.dot(right) / WALK, -1.5, 1.5);

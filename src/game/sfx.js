@@ -19,7 +19,7 @@ export const SAMPLES = {
   tick: ['tick.wav'], // roda do mouse com o tempo parado (gravação do jogador)
   turretFire: ['turret_fire.wav'], // rajada da torreta, em laço enquanto ela atira (gravação do jogador)
   slowHum: ['slow_mo_hum.wav'], // zumbido em laço durante o tempo lento (gravação do jogador)
-  thunder: ['thunder_clap.wav'], // trovão de verdade: o campo de dilatação nasce (CC BY 4.0, ver LEIA-ME)
+  fieldBlast: ['slow_time_blast.wav'], // o campo de dilatação nasce (gravação do jogador)
   open: seq('forceField', 5), // portal abrindo; pegar/soltar
   fail: seq('impactMetal', 5), // superfície que não aceita portal
   pass: ['spaceEngineLow_000.ogg', 'spaceEngineLow_003.ogg'], // atravessar um portal
@@ -508,10 +508,10 @@ export class Sfx {
     ).set(v);
   }
 
-  /** trovão curto (o campo de dilatação nasce): gravação real; sem ela, estalo + ronco + baque sintetizados */
+  /** o campo de dilatação nasce: gravação do jogador; sem ela, estalo + ronco + baque sintetizados */
   thunder(vol = 1) {
     if (!this.ok) return;
-    if (this.sample('thunder', { vol: 0.85 * vol, rate: 1, jitter: 0.03, dest: this.sound.master })) return;
+    if (this.sample('fieldBlast', { vol: 0.9 * vol, rate: 1, jitter: 0, dest: this.sound.master })) return;
     const t = this.t;
     const m = this.sound.master;
     this._noise(t, 0.09, 'highpass', 5200, 1800, 0.55 * vol, 0.7, m);

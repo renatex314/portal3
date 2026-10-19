@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { canvas } from './textures.js';
+import { coreUniforms } from './coreSphere.js';
 
 // ------------------------------------------------------------------ pós-processamento
 /**
@@ -390,56 +391,124 @@ class HazePass extends Pass {
  * volta da bolha é sugada para ela como perto de um buraco negro; a distorção vai sumindo aos poucos para fora. Com a câmera DENTRO da bolha,
  * são as bordas da tela que se curvam e giram (o mundo lá fora visto através da lente).
  */
+/*
+ * A esfera segue o "Core shader" do núcleo da Cidadela (Half-Life 2: Episode One), refeito em
+ * três etapas — sem as texturas da Valve (aqui tudo é ruído gerado no shader):
+ *  1) coordenadas circulares que pulsam: a textura do núcleo é lida em (fresnel, ângulo); o
+ *     fresnel ganha um seno × tempo, e daí saem os anéis concêntricos pulsando;
+ *  2) flow map: um mapa de normais animado por um campo de fluxo (duas fases que se alternam,
+ *     para o fluxo não esticar) dita para onde a energia corre;
+ *  3) refração em tela: a imagem de trás é deslocada pela normal da esfera + a do fluxo,
+ *     borrada e multiplicada pela cor do núcleo.
+ */
 const lensFS = /* glsl */ `
-  uniform sampler2D tDiffuse;
+  #include <packing>
+  uniform sampler2D tDiffuse, tDepth;
   uniform vec2 uCenter;
-  uniform float uR, uAspect, uFade, uTime, uInside;
+  uniform float uR, uAspect, uFade, uTime, uInside, uNear, uFar;
   varying vec2 vUv;
   vec2 toUv(vec2 d){ d.x /= uAspect; return uCenter + d; }
+  float hh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hh(i), hh(i + vec2(1, 0)), u.x), mix(hh(i + vec2(0, 1)), hh(i + vec2(1, 1)), u.x), u.y); }
+  float fbm(vec2 p){ return 0.55 * vn(p) + 0.3 * vn(p * 2.1 + 3.7) + 0.15 * vn(p * 4.3 + 9.1); }
+  // a arma (e o que estiver colado na câmera) não entra na lente
+  float gunAt(vec2 uv){ return 1.0 - smoothstep(0.9, 1.6, -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, uNear, uFar)); }
+
+  // 2) mapa de normais (gradiente de um ruído) lido em coordenadas que o fluxo arrasta
+  vec2 nrm(vec2 p){ float e = 0.04; return vec2(fbm(p + vec2(e, 0.0)) - fbm(p - vec2(e, 0.0)), fbm(p + vec2(0.0, e)) - fbm(p - vec2(0.0, e))) / (2.0 * e); }
+  vec2 flowNormal(vec2 e){
+    vec2 F = (vec2(vn(e * 1.4 + 11.0 + uTime * 0.05), vn(e * 1.4 + 23.0 - uTime * 0.04)) - 0.5) * 2.0; // campo de fluxo
+    float t = uTime * 0.22;
+    float p0 = fract(t), p1 = fract(t + 0.5);
+    vec2 a = nrm(e * 3.0 - F * p0 * 1.2);
+    vec2 b = nrm(e * 3.0 - F * p1 * 1.2 + 4.7);
+    return mix(a, b, abs(1.0 - 2.0 * p0));
+  }
+  // 1) textura do núcleo em coordenadas circulares (fresnel, ângulo), pulsando com seno × tempo
+  float corePattern(float fres, float ang){
+    float u = fres * 3.2 - uTime * 0.35 + 0.18 * sin(uTime * 1.7 + fres * 6.0);
+    float v = ang / 6.2831853;
+    float rings = 0.5 + 0.5 * sin(u * 6.2831853 * 1.5 + fbm(vec2(v * 6.0, u * 0.7)) * 3.0);
+    return mix(fbm(vec2(u * 2.0, v * 9.0)), rings, 0.55);
+  }
+  // 3) tela borrada (5 amostras), sem puxar a arma para dentro
+  vec3 blurAt(vec2 uv, float rad){
+    vec2 o = vec2(rad / uAspect, rad);
+    vec3 c = texture2D(tDiffuse, uv).rgb * 0.4;
+    c += texture2D(tDiffuse, uv + vec2(o.x, 0.0)).rgb * 0.15;
+    c += texture2D(tDiffuse, uv - vec2(o.x, 0.0)).rgb * 0.15;
+    c += texture2D(tDiffuse, uv + vec2(0.0, o.y)).rgb * 0.15;
+    c += texture2D(tDiffuse, uv - vec2(0.0, o.y)).rgb * 0.15;
+    return c;
+  }
+
   void main(){
     vec2 d = vUv - uCenter; d.x *= uAspect;
     float r = length(d) + 1e-5;
     float x = r / uR;
     vec2 dir = d / r;
-    vec2 q;
-    if (uInside > 0.5) {
-      // dentro: as bordas da tela são sugadas para dentro (contração), pulsando de leve
-      float e = smoothstep(0.3, 1.25, x);
-      q = d * (1.0 + e * e * (0.32 + 0.05 * sin(uTime * 3.0)));
-    } else if (x > 1.0) {
-      // fora: o que está em volta é sugado em linha reta para a bolha (~1/x), esmaecendo aos poucos
-      float k = (0.55 / x) * exp(-(x - 1.0) * 1.6);
-      q = d + dir * uR * k;
-    } else {
-      // miolo: contraído — o que está atrás aparece encolhido em direção ao centro
-      // (na borda vale 1,55: emenda com o lado de fora sem salto)
-      q = d * (1.55 + 1.6 * (1.0 - x) * (1.0 - x)) * (1.0 + 0.04 * sin(uTime * 2.0) * (1.0 - x));
-    }
-    q = mix(d, q, uFade);
-    float ca = (uInside > 0.5 ? 0.004 : 0.003 * exp(-abs(x - 1.0) * 4.0)) * uFade;
+    vec2 e = d / uR; // posição na esfera (raio 1)
+    float ang = atan(dir.y, dir.x);
+    vec3 orig = texture2D(tDiffuse, vUv).rgb;
+    float gun = gunAt(vUv);
     vec3 col;
-    col.r = texture2D(tDiffuse, toUv(q + dir * ca)).r;
-    col.g = texture2D(tDiffuse, toUv(q)).g;
-    col.b = texture2D(tDiffuse, toUv(q - dir * ca)).b;
-    if (uInside < 0.5 && x < 1.0) col *= mix(1.0, 0.82, (1.0 - x) * uFade); // miolo um pouco mais escuro
-    // arco roxo brilhante na borda: um fio forte (passa do limiar do bloom e brilha) e um halo largo e suave
-    if (uInside < 0.5) {
-      float g = x - 1.0;
-      float core = exp(-pow(g / 0.03, 2.0));
-      float halo = exp(-pow(g / 0.14, 2.0));
-      float flick = 0.9 + 0.1 * sin(uTime * 5.0 + atan(dir.y, dir.x) * 3.0);
-      col += (vec3(0.62, 0.32, 1.0) * core * 3.2 + vec3(0.42, 0.2, 1.0) * halo * 0.45) * flick * uFade;
+
+    if (uInside > 0.5) {
+      // dentro: a casca envolve a vista — refração do fluxo pela tela toda, mais forte nas bordas
+      // (onde se olha a casca de lado)
+      float side = smoothstep(0.2, 1.2, x);
+      vec2 fn = flowNormal(e * 0.9);
+      vec2 q = d + fn * uR * (0.03 + 0.06 * side);
+      q = mix(d, q, uFade * (1.0 - gun));
+      vec2 su = toUv(q);
+      if (gunAt(su) > 0.5) su = vUv;
+      vec3 refr = min(blurAt(su, 0.002 + 0.004 * side), vec3(1.4));
+      float pat = corePattern(clamp(x * 0.8, 0.0, 1.0), ang);
+      vec3 tint = mix(vec3(0.55, 0.85, 0.95), vec3(0.85, 1.0, 1.05), pat);
+      col = mix(refr, refr * tint + vec3(0.03, 0.09, 0.12) * pat * side, (0.4 + 0.5 * side) * uFade);
+    } else if (x > 1.0) {
+      // fora: a imagem fica como está, só com o halo ciano em volta da casca
+      col = orig + vec3(0.35, 0.85, 1.0) * exp(-(x - 1.0) * 5.0) * 0.45 * uFade;
+    } else {
+      // a esfera: normal da casca (z = profundidade da esfera) e fresnel
+      float z = sqrt(max(0.0, 1.0 - x * x));
+      float fres = 1.0 - z;
+      vec2 fn = flowNormal(e);
+      float pat = corePattern(fres, ang);
+      // 3) refração: normal do fluxo (some no fio da borda, sem salto com o lado de fora)
+      //    + o pulso dos anéis empurrando a imagem para fora e para dentro
+      vec2 q = d + fn * uR * 0.16 * (0.4 + 0.6 * z) * (1.0 - smoothstep(0.85, 1.0, x));
+      q += dir * uR * (pat - 0.5) * 0.1 * z;
+      q = mix(d, q, uFade * (1.0 - gun));
+      vec2 su = toUv(q);
+      if (gunAt(su) > 0.5) su = vUv;
+      vec3 refr = min(blurAt(su, 0.0035), vec3(1.0)); // (cena em HDR: o branco passaria de 1)
+      // cor do núcleo multiplicando a refração: vidro ciano escuro, mais claro onde a textura pulsa
+      vec3 coreCol = mix(vec3(0.16, 0.36, 0.46), vec3(0.42, 0.78, 0.9), pat);
+      float light = 0.6 + 0.4 * clamp(dot(normalize(vec3(e, z)), normalize(vec3(-0.45, 0.6, 0.7))), 0.0, 1.0);
+      vec3 sph = refr * coreCol * light + vec3(0.004, 0.018, 0.026);
+      // casca: ciano brilhante subindo para a borda (fresnel), reflexo de luz no alto
+      sph = mix(sph, vec3(0.35, 0.85, 1.0) * (0.7 + 0.5 * light), pow(x, 5.0) * 0.75);
+      vec2 hl = e - vec2(-0.32, 0.42);
+      sph += vec3(0.5, 0.85, 1.0) * exp(-dot(hl, hl) * 12.0) * 0.25;
+      col = mix(texture2D(tDiffuse, su).rgb, sph, uFade);
+      col += vec3(0.4, 0.9, 1.0) * exp(-(1.0 - x) * 30.0) * 0.6 * uFade;
     }
+    // a arma por cima de tudo, como estava
+    col = mix(col, orig, gun);
     gl_FragColor = vec4(col, 1.0);
   }`;
 
 class LensPass extends Pass {
-  constructor(camera) {
+  /** `source`: o alvo da cena (a profundidade diz onde está a arma, que não entra na lente) */
+  constructor(camera, source) {
     super();
     this.camera = camera;
+    this.source = source;
     this.field = null; // { center: Vector3, R, fade } vindo do jogo
     this.material = new THREE.ShaderMaterial({
-      uniforms: { tDiffuse: { value: null }, uCenter: { value: new THREE.Vector2(0.5, 0.5) }, uR: { value: 0.2 }, uAspect: { value: 1 }, uFade: { value: 0 }, uTime: { value: 0 }, uInside: { value: 0 } },
+      uniforms: { tDiffuse: { value: null }, tDepth: { value: null }, uNear: { value: 0.05 }, uFar: { value: 1000 }, uCenter: { value: new THREE.Vector2(0.5, 0.5) }, uR: { value: 0.2 }, uAspect: { value: 1 }, uFade: { value: 0 }, uTime: { value: 0 }, uInside: { value: 0 } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: lensFS,
       depthTest: false,
@@ -481,7 +550,11 @@ class LensPass extends Pass {
   }
 
   render(renderer, writeBuffer, readBuffer) {
-    this.material.uniforms.tDiffuse.value = readBuffer.texture;
+    const u = this.material.uniforms;
+    u.tDiffuse.value = readBuffer.texture;
+    u.tDepth.value = this.source.depthTexture;
+    u.uNear.value = this.camera.near;
+    u.uFar.value = this.camera.far;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
     this.quad.render(renderer);
   }
@@ -492,18 +565,57 @@ class LensPass extends Pass {
   }
 }
 
+/**
+ * A cena, e por cima o que refrata a própria cena ("grab pass"): a imagem pronta é copiada e
+ * os objetos de `overlay` (as esferas do campo de dilatação) a leem deslocada.
+ * Bem mais leve que a transmissão do three.js, que desenharia a cena inteira de novo.
+ */
 class ScenePass extends Pass {
-  constructor(scene, camera, target) {
+  constructor(scene, camera, target, overlay) {
     super();
     this.scene = scene;
     this.camera = camera;
     this.target = target;
+    this.overlay = overlay;
     this.needsSwap = false;
+    this.grab = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    // a cópia leva no alfa onde está a arma (pela profundidade: o que fica colado na câmera), para a
+    // esfera não refletir/refratar a arma que está na sua mão
+    this.copy = new FullScreenQuad(new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null }, tDepth: { value: null }, uNear: { value: 0.05 }, uFar: { value: 1000 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `#include <packing>
+        uniform sampler2D tSrc, tDepth; uniform float uNear, uFar; varying vec2 vUv;
+        void main(){
+          float dist = -perspectiveDepthToViewZ(texture2D(tDepth, vUv).x, uNear, uFar);
+          gl_FragColor = vec4(texture2D(tSrc, vUv).rgb, 1.0 - smoothstep(0.9, 1.6, dist));
+        }`,
+      depthTest: false,
+      depthWrite: false,
+    }));
   }
 
   render(renderer) {
     renderer.setRenderTarget(this.target);
     renderer.render(this.scene, this.camera);
+    if (!this.overlay.children.some((o) => o.visible)) return;
+    const w = this.target.width;
+    const h = this.target.height;
+    if (this.grab.width !== w || this.grab.height !== h) this.grab.setSize(w, h); // resolução cheia: é só uma cópia, barata
+    const cu = this.copy.material.uniforms;
+    cu.tSrc.value = this.target.texture;
+    cu.tDepth.value = this.target.depthTexture;
+    cu.uNear.value = this.camera.near;
+    cu.uFar.value = this.camera.far;
+    renderer.setRenderTarget(this.grab);
+    this.copy.render(renderer);
+    coreUniforms.tGrab.value = this.grab.texture;
+    coreUniforms.uScreen.value.set(w, h);
+    renderer.setRenderTarget(this.target);
+    const auto = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.render(this.overlay, this.camera);
+    renderer.autoClear = auto;
   }
 }
 
@@ -517,12 +629,13 @@ export class Post {
     this.sceneRT.depthTexture = new THREE.DepthTexture(1, 1);
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.composer = new EffectComposer(renderer, rt);
-    this.composer.addPass(new ScenePass(scene, camera, this.sceneRT));
+    this.overlay = new THREE.Scene(); // o que refrata a cena (esferas do campo de dilatação)
+    this.composer.addPass(new ScenePass(scene, camera, this.sceneRT, this.overlay));
     this.blur = new MotionBlurPass(camera, this.sceneRT);
     this.composer.addPass(this.blur);
     this.haze = new HazePass(camera, this.sceneRT); // névoa de calor sobre a rocha fundida
     this.composer.addPass(this.haze);
-    this.lens = new LensPass(camera); // lente do campo de dilatação temporal
+    this.lens = new LensPass(camera, this.sceneRT); // lente do campo de dilatação temporal
     this.composer.addPass(this.lens);
     this.shock = new ShaderPass(ShockShader);
     this.composer.addPass(this.shock);

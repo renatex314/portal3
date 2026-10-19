@@ -467,7 +467,8 @@ export function portalGunClassic() {
   holoTex.colorSpace = THREE.SRGBColorSpace;
   const holo = new THREE.Mesh(
     new THREE.PlaneGeometry(0.21, 0.105),
-    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+    // grava profundidade onde é visível: a lente do campo de dilatação (fx.js) reconhece pela profundidade o que é da arma e não o distorce
+    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: true, alphaTest: 0.04, side: THREE.DoubleSide, toneMapped: false }),
   );
   // virado para o olho do jogador (que fica atrás e à esquerda da arma)
   holo.position.set(-0.24, 0.07, 0.17);
@@ -989,7 +990,8 @@ export function portalGun() {
   holoTex.colorSpace = THREE.SRGBColorSpace;
   const holo = new THREE.Mesh(
     new THREE.PlaneGeometry(0.21, 0.105),
-    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+    // grava profundidade onde é visível: a lente do campo de dilatação (fx.js) reconhece pela profundidade o que é da arma e não o distorce
+    new THREE.MeshBasicMaterial({ map: holoTex, transparent: true, depthWrite: true, alphaTest: 0.04, side: THREE.DoubleSide, toneMapped: false }),
   );
   holo.position.set(-0.27, 0.08, 0.17);
   holo.rotation.set(-0.42, -0.42, 0, 'YXZ');

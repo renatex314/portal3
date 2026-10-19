@@ -10,6 +10,8 @@
 // o que produz o efeito de portal dentro de portal (recursão).
 
 import * as THREE from 'three';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { coreUniforms } from './coreSphere.js';
 import { aabbOverlap } from './world.js';
 
 export const PORTAL_A = 0.68; // meia largura (m)
@@ -1058,6 +1060,40 @@ export class PortalSystem {
     rt.scissorTest = true;
   }
 
+  /**
+   * As esferas do campo de dilatação também nas vistas pelos portais: o jogo (main.js) monta as
+   * do instante da vista (`when`: { delta } s no passado ou { T } absoluto) para esta câmera; a vista pronta é copiada e a
+   * esfera, desenhada por cima, a lê deslocada pela refração (como na tela, em fx.js).
+   */
+  drawOverlay(target, cam, when) {
+    const ov = this.overlay?.(when, cam);
+    if (!ov) return;
+    const r = this.renderer;
+    this._grab ??= new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    if (this._grab.width !== target.width || this._grab.height !== target.height) this._grab.setSize(target.width, target.height);
+    this._copy ??= new FullScreenQuad(new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'uniform sampler2D tSrc; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(tSrc, vUv).rgb, 0.0); }',
+      depthTest: false,
+      depthWrite: false,
+    }));
+    const clip = r.clippingPlanes;
+    r.clippingPlanes = [];
+    this._copy.material.uniforms.tSrc.value = target.texture;
+    r.setRenderTarget(this._grab);
+    this._copy.render(r);
+    coreUniforms.tGrab.value = this._grab.texture;
+    coreUniforms.uScreen.value.set(target.width, target.height);
+    r.clippingPlanes = clip;
+    r.setRenderTarget(target);
+    const auto = r.autoClear;
+    r.autoClear = false;
+    r.render(ov, cam);
+    r.autoClear = auto;
+    this.overlayDone?.();
+  }
+
   render() {
     if (!this.enabled) return;
     const r = this.renderer;
@@ -1104,6 +1140,7 @@ export class PortalSystem {
       r.setRenderTarget(P.rt[1 - P.read]);
       r.clear();
       r.render(this.scene, v);
+      this.drawOverlay(P.rt[1 - P.read], v, { delta: Q.delta });
       past?.end();
       if (past) v.layers.enable(1);
       if (past) [P.group.visible, P.light.intensity] = hidP;
@@ -1127,6 +1164,7 @@ export class PortalSystem {
       r.setRenderTarget(S.rt[1 - S.read]);
       r.clear();
       r.render(this.scene, v);
+      this.drawOverlay(S.rt[1 - S.read], v, { T: S.frame.view.T });
       v.layers.enable(1);
       this.futureView.end();
     }
