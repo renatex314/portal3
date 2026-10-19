@@ -995,11 +995,13 @@ function loadLevel(i, silent = false) {
         dtReal: () => realDt,
         fx: chronosFx,
         // campos de dilatação criados depois de um ponto de controle somem se o loop for desfeito
-        checkpointExtra: () => ({ fields: FIELD.events.length }),
+        checkpointExtra: () => ({ fields: FIELD.events.length, loop: FIELD.loop }),
         // simulações do relógio (bola/cubo mandados ao passado): passo de tempo num campo ativo no instante T
         timeScaleAt: (p, T) => (FIELD.events.some((ev) => T >= ev.t0 - 1e-6 && T < ev.t0 + ev.life && p.distanceTo(ev.center) < FIELD.R) ? 1 / FIELD.rate : 1),
         onRollback: (x) => {
-          if (x) FIELD.events.length = Math.min(FIELD.events.length, x.fields);
+          if (!x) return;
+          FIELD.events.length = Math.min(FIELD.events.length, x.fields);
+          FIELD.loop = x.loop; // você volta a ser o "você" de antes do salto
         },
       })
     : null;
@@ -1594,65 +1596,63 @@ function toggleSlowmo(force) {
 // tempo passa 10× mais devagar, como perto de um horizonte de eventos: 2 s de quem está dentro
 // são 20 s lá fora. Você (e o que estiver dentro: cubos, bolas de energia) anda no seu ritmo
 // enquanto o mundo corre. Não é para usar toda hora: a carga é longa de propósito.
-const FIELD = { need: 5, rate: 10, R: 3.2, life: 20, charge: 0, on: false, left: 0, center: new THREE.Vector3(), armed: true, shake: 0, events: [], ev: null, lastTw: 0 };
+// Pode haver vários campos ao mesmo tempo (os seus e os que as suas versões do passado criaram);
+// a carga e a barra do HUD são só dos SEUS: o campo de uma versão passada não ocupa a sua "bateria".
+//   active: [{ center, left (s do mundo), own, ev? }]  ·  events: linha do tempo (com o relógio)
+const FIELD = { need: 5, rate: 10, R: 3.2, life: 20, charge: 0, armed: true, shake: 0, active: [], events: [], loop: 0, lastTw: 0 };
 const CHORD_MS = 90;
 const mouseHeld = { 0: false, 2: false };
 let pendingShot = null; // portal esperando um instante para ver se o outro botão vem junto
-let pScale = 1; // passo do jogador em relação ao do mundo (1/5 dentro do campo)
+let pScale = 1; // passo do jogador em relação ao do mundo (1/rate dentro do campo)
 function firePending() {
   const ps = pendingShot;
   pendingShot = null;
   if (ps && running && !paused && !completed) shoot(ps.which);
 }
-const inField = (p) => FIELD.on && p.distanceTo(FIELD.center) < FIELD.R;
+const inField = (p) => FIELD.active.some((f) => p.distanceTo(f.center) < FIELD.R);
+const ownField = () => FIELD.active.find((f) => f.own) ?? null;
 /** a arma brilha como no tempo lento: cresce com a carga e fica cheia dentro do campo */
 const fieldGlow = () => (inField(player.pos) ? 1 : FIELD.charge / FIELD.need);
-/** desfaz o campo (fim natural ou troca de fase/morte/viagem no tempo: `instant` sem devolver velocidades) */
-function endField(instant = false) {
-  if (!FIELD.on) return;
-  FIELD.on = false;
+/** um campo nasce: trovão, tranco na visão (mais fracos de longe) */
+function fieldBurst(center) {
+  const d = player.pos.distanceTo(center);
+  sfx.thunder(Math.max(0.35, 1 - d / 20));
+  if (d < 12) FIELD.shake = Math.max(FIELD.shake, 0.7 * Math.max(0.3, 1 - d / 12));
+  post.warp = Math.max(post.warp ?? 0, d < FIELD.R ? 1 : 0.5);
+}
+/** some tudo sem devolver velocidades (pulo no tempo, morte, troca de fase): só as marcas são refeitas */
+function dropFields() {
+  FIELD.active = [];
   for (const c of [...cubes, ...turrets]) {
-    if (c.dilated && !instant) {
-      const v = c.body.linvel();
-      c.body.setLinvel({ x: v.x * FIELD.rate, y: v.y * FIELD.rate, z: v.z * FIELD.rate }, true);
-    }
     if (c.dilated) c.body.wakeUp();
     c.dilated = false;
   }
-  if (!instant) sfx.slowOut();
 }
 /** tudo do campo some (morte, troca de fase): inclusive o que estava gravado na linha do tempo */
 function resetField() {
-  endField(true);
+  dropFields();
   FIELD.events = [];
-  FIELD.ev = null;
+  FIELD.loop = 0;
   FIELD.lastTw = 0;
   FIELD.charge = 0;
 }
 /**
- * Com o relógio, o campo é parte da linha do tempo: existe enquanto o tempo do mundo estiver
- * dentro de uma criação gravada. Voltando no tempo, ele reaparece na hora e no lugar em que a
- * sua versão do passado o criou. Num pulo no tempo as velocidades vêm do retrato do relógio:
- * só as marcas de "dentro do campo" são refeitas.
+ * Com o relógio, os campos são parte da linha do tempo: cada um existe enquanto o tempo do
+ * mundo estiver dentro da criação gravada. Voltando no tempo, ele reaparece na hora e no lugar
+ * em que a sua versão do passado o criou (e é dela: `own` só para os desta volta). Num pulo no
+ * tempo as velocidades vêm do retrato do relógio: só as marcas de "dentro do campo" são refeitas.
  */
 function syncFieldTimeline(dt) {
   if (!relogio) return;
   const tw = relogio.tw;
   const jumped = tw < FIELD.lastTw - 1e-6 || tw - FIELD.lastTw > dt + 0.05;
   FIELD.lastTw = tw;
-  let e = null;
-  for (const ev of FIELD.events) if (tw >= ev.t0 - 1e-6 && tw < ev.t0 + ev.life) e = ev;
-  if (e) {
-    if (!FIELD.on && !jumped) {
-      // a versão do passado criando o campo agora (o trovão mais fraco quanto mais longe)
-      sfx.thunder(Math.max(0.35, 1 - player.pos.distanceTo(e.center) / 20));
-      if (player.pos.distanceTo(e.center) < 12) FIELD.shake = 0.7 * Math.max(0.3, 1 - player.pos.distanceTo(e.center) / 12);
-    }
-    FIELD.on = true;
-    FIELD.ev = e;
-    FIELD.center.copy(e.center);
-    FIELD.left = e.t0 + e.life - tw;
-  } else if (FIELD.on) endField(jumped);
+  const before = new Set(FIELD.active.map((f) => f.ev));
+  FIELD.active = FIELD.events
+    .filter((ev) => tw >= ev.t0 - 1e-6 && tw < ev.t0 + ev.life)
+    .map((ev) => ({ center: ev.center, left: ev.t0 + ev.life - tw, own: ev.loop === FIELD.loop, ev }));
+  // a versão do passado criando o campo agora
+  if (!jumped) for (const f of FIELD.active) if (!before.has(f.ev) && !f.own) fieldBurst(f.center);
   if (jumped) for (const c of [...cubes, ...turrets]) c.dilated = inField(c.pos) && !c.held && !c.gone;
 }
 /** carga (tempo real) e o efeito na tela; chamado uma vez por quadro */
@@ -1660,38 +1660,41 @@ function updateField(realDt, live) {
   if (pendingShot && performance.now() - pendingShot.at > CHORD_MS) firePending();
   const both = live && mouseHeld[0] && mouseHeld[2] && !held;
   if (!both) FIELD.armed = true; // precisa soltar antes de carregar de novo
-  if (both && FIELD.armed && !FIELD.on) {
+  if (both && FIELD.armed && !ownField()) {
     FIELD.charge += realDt;
     if (FIELD.charge >= FIELD.need) {
       FIELD.charge = 0;
       FIELD.armed = false;
-      FIELD.on = true;
-      FIELD.left = FIELD.life;
-      FIELD.center.copy(player.pos);
+      const f = { center: player.pos.clone(), left: FIELD.life, own: true };
       // com o relógio, a criação entra na linha do tempo: voltando, a sua versão do passado a cria de novo
       if (relogio) {
-        FIELD.ev = { t0: relogio.tw, center: player.pos.clone(), life: FIELD.life };
-        FIELD.events.push(FIELD.ev);
+        f.ev = { t0: relogio.tw, center: f.center, life: FIELD.life, loop: FIELD.loop };
+        FIELD.events.push(f.ev);
         FIELD.lastTw = relogio.tw;
       }
-      sfx.thunder();
-      post.warp = 1;
-      FIELD.shake = 0.7; // a visão treme quando a bolha nasce
+      FIELD.active.push(f);
+      fieldBurst(f.center);
+      FIELD.shake = 0.7;
     }
   } else FIELD.charge = Math.max(0, FIELD.charge - realDt * 3);
   FIELD.shake = Math.max(0, FIELD.shake - realDt);
   const k = FIELD.charge / FIELD.need;
+  const inside = inField(player.pos);
   sfx.dilateCharge(live && k > 0 ? 0.3 + 0.7 * k : 0, k);
-  sfx.blackHole(live && inField(player.pos) ? 0.8 : FIELD.on ? 0.25 : 0);
-  post.dilate = Math.max(k * 0.6, inField(player.pos) ? 1 : 0);
-  // a bolha é uma lente gravitacional (fx.js): nasce rápido e vai se esmaecendo nos últimos 60% da vida
-  post.lens.field = FIELD.on ? { center: FIELD.center, R: FIELD.R, fade: Math.min(1, FIELD.left / (FIELD.life * 0.6), (FIELD.life - FIELD.left) * 2) } : null;
-  document.body.classList.toggle('dilated', live && inField(player.pos));
+  sfx.blackHole(live && inside ? 0.8 : FIELD.active.length ? 0.25 : 0);
+  post.dilate = Math.max(k * 0.6, inside ? 1 : 0);
+  // a lente (fx.js) mostra o campo mais perto da câmera: nasce rápido e se esmaece nos últimos 60% da vida
+  let near = null;
+  for (const f of FIELD.active) if (!near || camera.position.distanceTo(f.center) < camera.position.distanceTo(near.center)) near = f;
+  post.lens.field = near ? { center: near.center, R: FIELD.R, fade: Math.min(1, near.left / (FIELD.life * 0.6), (FIELD.life - near.left) * 2) } : null;
+  document.body.classList.toggle('dilated', live && inside);
+  // HUD: só o SEU campo (carga ou o tempo que resta dele)
+  const own = ownField();
   const g = $('field');
-  g.hidden = !(k > 0 || FIELD.on);
-  $('field-v').textContent = FIELD.on ? `${(FIELD.left / FIELD.rate).toFixed(1).replace('.', ',')} s` : `${Math.round(k * 100)}%`;
-  $('field-fill').style.transform = `scaleX(${FIELD.on ? FIELD.left / FIELD.life : k})`;
-  g.classList.toggle('on', FIELD.on);
+  g.hidden = !(k > 0 || own);
+  $('field-v').textContent = own ? `${(own.left / FIELD.rate).toFixed(1).replace('.', ',')} s` : `${Math.round(k * 100)}%`;
+  $('field-fill').style.transform = `scaleX(${own ? own.left / FIELD.life : k})`;
+  g.classList.toggle('on', !!own);
 }
 
 /** um quadro de jogo: dentro do campo o mundo dá `rate` passos e o jogador anda 1/rate em cada */
@@ -2228,9 +2231,12 @@ function crushed(dt) {
 
 function update(dt, t) {
   const pdt = dt * pScale; // tempo do jogador (menor dentro do campo de dilatação)
-  if (FIELD.on && !relogio) {
-    FIELD.left -= dt;
-    if (FIELD.left <= 0) endField();
+  if (!relogio && FIELD.active.length) {
+    for (const f of FIELD.active) f.left -= dt;
+    if (FIELD.active.some((f) => f.left <= 0)) {
+      FIELD.active = FIELD.active.filter((f) => f.left > 0);
+      sfx.slowOut(); // (quem sai do campo volta ao normal no passo de física abaixo)
+    }
   }
   if (testingMine && !completed) recordRun(dt);
   data?.campaign?.runtime?.update(dt);
@@ -2279,7 +2285,8 @@ function update(dt, t) {
     player.update(pdt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
       // ciano temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
       if (relogio && P.partner.delta > 0) {
-        relogio.jump(P);
+        // deu certo: os campos que você criou até aqui passam a ser da sua versão do passado
+        if (relogio.jump(P)) FIELD.loop++;
         return;
       }
       sfx.whoosh();
