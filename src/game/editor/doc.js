@@ -8,18 +8,19 @@
 
 import { ELEMENTS } from './elements.js';
 import { buildChamber, autoLights, newChamber } from './chamber.js';
+import { tl } from '../i18n.js';
 
 export const DOC_V = 1;
 
 let seq = 0;
 export const uid = () => `${Date.now().toString(36)}${(seq++).toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
 
-export function newDoc(name = 'Novo nível') {
+export function newDoc(name = tl('Novo nível')) {
   const doc = {
     v: DOC_V,
     id: uid(),
     name,
-    cfg: { who: 'Você', lesson: 'Chegue ao elevador de saída.', music: 'lab', gun: 'both', relogio: false, gravity: 9.8, autoLight: true },
+    cfg: { who: tl('Você'), lesson: tl('Chegue ao elevador de saída.'), music: 'lab', gun: 'both', relogio: false, gravity: 9.8, autoLight: true },
     chamber: newChamber(),
     items: [],
   };
@@ -59,7 +60,7 @@ export function normalize(raw) {
   const doc = {
     v: DOC_V,
     id: typeof raw.id === 'string' ? raw.id : uid(),
-    name: String(raw.name ?? 'Nível importado').slice(0, 60),
+    name: String(raw.name ?? tl('Nível importado')).slice(0, 60),
     cfg: { who: 'Você', lesson: '', music: 'lab', gun: 'both', relogio: false, gravity: 9.8, autoLight: true, ...(raw.cfg ?? {}) },
     chamber: normChamber(raw.chamber),
     items: [],

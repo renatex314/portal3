@@ -10,12 +10,13 @@
 
 import { northWallWithExit } from './levels.js';
 import { lava } from './hard.js';
+import { tl } from './i18n.js';
 
 const E = (n, def) => ({ ...def, id: 600 + n, n, code: `E${String(n + 1).padStart(2, '0')}`, series: 'experiment', music: def.music ?? 'labTense', relogio: true, heat: false });
 
 function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`EXPERIMENTO ${code}`, 84, 150],
+    [tl('EXPERIMENTO {c}', { c: code }), 84, 150],
     [name, 66, 270, '#00838f'],
     [line2, 38, 380, '#55575c', 'Arial, sans-serif'],
     ['SÉRIE EXPERIMENTO · LABORATÓRIO ANTÍPODA', 28, 455, '#8a8c90', 'Arial, sans-serif'],

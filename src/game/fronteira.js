@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { lava, pillar, lamps, rampZ } from './hard.js';
+import { tl } from './i18n.js';
 
 const F = (n, def) => ({ ...def, id: 400 + n, n, code: `F${String(n + 1).padStart(2, '0')}`, series: 'frontier', music: def.music ?? 'labTense', heat: def.heat ?? false });
 
@@ -31,7 +32,7 @@ function marker(w, x, y, z, s = 0.65, color = 0xff5a3a) {
 
 function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`FRONTEIRA ${code}`, 100, 150],
+    [tl('FRONTEIRA {c}', { c: code }), 100, 150],
     [name, 76, 270, '#00838f'],
     [line2, 38, 380, '#55575c', 'Arial, sans-serif'],
     ['SÉRIE FRONTEIRA · LABORATÓRIO ANTÍPODA', 30, 455, '#8a8c90', 'Arial, sans-serif'],

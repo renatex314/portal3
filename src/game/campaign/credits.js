@@ -12,6 +12,7 @@
 import { parseKV, kvGet } from './kv.js';
 import { decodeText } from './scenes.js';
 import { readFile } from './source.js';
+import { isEN } from '../i18n.js';
 
 const SONG = 'music/portal_still_alive.mp3';
 
@@ -43,7 +44,7 @@ export async function loadCredits(dialogue) {
   const top = root[0]?.children ?? root;
   const block = (k) => top.find((c) => c.key.toLowerCase() === k.toLowerCase());
   const params = block('CreditsParams');
-  const tokens = await loadTokens(['brazilian', 'portuguese', 'english']);
+  const tokens = await loadTokens(isEN ? ['english', 'brazilian', 'portuguese'] : ['brazilian', 'portuguese', 'english']);
   const lyrics = (block('OutroSongLyrics')?.children ?? []).map((c) => {
     const m = /^\[([\d.]+)\](.*)$/s.exec(c.key);
     return m ? { t: parseFloat(m[1]), text: m[2] } : { t: 0.5, text: c.key };

@@ -2,6 +2,7 @@
 // "prova" de que ele tem solução. Aqui você a reproduz como um fantasma.
 
 import * as THREE from 'three';
+import { tl, num, isEN } from '../../i18n.js';
 
 /** impressão do conteúdo do nível (sem a gravação): a prova só vale enquanto ela não muda */
 export function docHash(doc) {
@@ -12,7 +13,7 @@ export function docHash(doc) {
 }
 export const proofState = (doc) => (!doc.recording ? 'none' : doc.recording.hash === docHash(doc) ? 'valid' : 'old');
 export const fmtTime = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-const fmt = (n, d = 1) => n.toFixed(d).replace('.', ',');
+const fmt = (n, d = 1) => num(n, d);
 const R2D = 180 / Math.PI;
 
 /** velocidade do robô no quadro n: a gravada; nas provas antigas, pela diferença entre quadros (sem pular portal) */
@@ -75,8 +76,8 @@ export function createBotTool(ctx) {
     for (const b of velRow.querySelectorAll('button')) b.disabled = st === 'none';
     const rec = d.recording;
     info.replaceChildren(
-      el('p', {}, st === 'none' ? 'Ainda não há prova gravada.' : st === 'valid' ? `✔ Prova válida: ${fmtTime(rec.time)} de jogo, ${rec.samples.length} quadros.` : `⚠ Prova desatualizada (o nível mudou depois dela): ${fmtTime(rec.time)}.`),
-      el('p', { class: 'note' }, `Velocidade ${S.speed}×`),
+      el('p', {}, st === 'none' ? 'Ainda não há prova gravada.' : st === 'valid' ? tl('✔ Prova válida: {time} de jogo, {n} quadros.', { time: fmtTime(rec.time), n: rec.samples.length }) : tl('⚠ Prova desatualizada (o nível mudou depois dela): {time}.', { time: fmtTime(rec.time) })),
+      el('p', { class: 'note' }, tl('Velocidade {v}×', { v: S.speed })),
     );
   }
   function clear() {
@@ -115,8 +116,8 @@ export function createBotTool(ctx) {
     const hz = Math.hypot(v.x, v.z);
     const yaw = Math.atan2(-v.x, -v.z) * R2D;
     velInfo.replaceChildren(
-      el('p', {}, `Em ${fmtTime(t)},${String(Math.floor((t % 1) * 10))} (quadro ${S.n}): ${fmt(v.length())} m/s`),
-      el('p', { class: 'note' }, `horizontal ${fmt(hz)} m/s${hz > 0.05 ? ` para ${fmt(yaw, 0)}°` : ''} · vertical ${fmt(v.y)} m/s · (${[v.x, v.y, v.z].map((x) => fmt(x)).join('; ')})`),
+      el('p', {}, tl('Em {time} (quadro {n}): {v} m/s', { time: `${fmtTime(t)}${isEN ? '.' : ','}${Math.floor((t % 1) * 10)}`, n: S.n, v: fmt(v.length()) })),
+      el('p', { class: 'note' }, `${tl('horizontal {v} m/s', { v: fmt(hz) })}${hz > 0.05 ? ` ${tl('para {a}°', { a: fmt(yaw, 0) })}` : ''} · ${tl('vertical {v} m/s', { v: fmt(v.y) })} · (${[v.x, v.y, v.z].map((x) => fmt(x)).join('; ')})`),
     );
     arrow.visible = v.length() > 0.05;
     if (arrow.visible) {

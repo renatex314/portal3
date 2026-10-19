@@ -72,7 +72,7 @@
         <a class="back" href="./index.html">← voltar à visita</a>
         <small>Túnel Gravitacional · Parte IV · ficção científica</small>
         <h1>Laboratório Antípoda</h1>
-        <p class="lead">
+        <p class="lead" data-i18n="lead">
           Embaixo de Nova Lima, a equipe do documentário montou um laboratório secreto. Em vez de furar a rocha, a
           nova "sonda" dobra o espaço: abre <b class="b">dois portais</b> ligados entre si. Passe pelas seis câmaras de
           teste — e, na última, atravesse a Terra. Ou encare a <b>bateria clássica</b>: doze testes que todo laboratório
@@ -95,6 +95,7 @@
           <button id="opt-voice" class="chip on">🗣 Narração</button>
           <button id="opt-blur" class="chip on" title="Desfoque de movimento">〰 Desfoque</button>
           <button id="open-editor" class="chip" title="Construa os seus próprios níveis">🛠 Editor de níveis</button>
+          <button id="opt-lang" class="chip" title="Idioma dos textos / Language of the texts">🌐 English</button>
         </div>
         <div class="controls">
           <div><kbd>W A S D</kbd> andar</div>
@@ -110,7 +111,7 @@
           <div><kbd>R</kbd> reiniciar câmara</div>
           <div><kbd>Esc</kbd> pausa</div>
         </div>
-        <p class="note">
+        <p class="note" data-i18n="rules">
           Portais só abrem em concreto claro (não em rocha, metal ou vidro). O que entra rápido sai rápido. O botão do
           meio liga o tempo lento, que gasta uma reserva de alguns segundos. Jogo
           original inspirado no gênero de quebra-cabeças com portais; sem nomes ou arquivos de outros jogos.
@@ -149,7 +150,7 @@
       <div class="box wide">
         <small>campanha original</small>
         <h2>Use a sua cópia do Portal</h2>
-        <p>
+        <p data-i18n="campaign-src">
           Os mapas, as falas e as legendas vêm do <b>Portal</b> (Valve) que você tem, e não do site. Escolha o pacote
           gerado com <code>npm run pacote</code> (um arquivo <code>portal-campanha.zip</code>) ou a pasta do Portal
           instalado (a que tem as pastas <code>portal</code> e <code>hl2</code>).
@@ -184,11 +185,11 @@
       <div class="box wide">
         <small>câmara 06 · antípoda</small>
         <h2>Você atravessou a Terra</h2>
-        <p>
+        <p data-i18n="final-1">
           Caiu, passou pelo centro sem peso nenhum, foi freando e chegou parado do outro lado — de cabeça para baixo
           em relação a quem ficou em Minas. Tempo da câmara: <b id="final-time"></b>.
         </p>
-        <p class="muted">
+        <p class="muted" data-i18n="final-2">
           No túnel de verdade, de 12.742 km, essa mesma queda levaria ~42 minutos e chegaria a ~28.000 km/h no centro —
           para você, para a Dona Cida e para um T-rex de 8 toneladas: no vácuo, todo mundo cai igual.
           A física está na Parte III da visita.

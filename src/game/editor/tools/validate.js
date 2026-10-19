@@ -2,6 +2,7 @@
 // Cada aviso: { level:'erro'|'aviso'|'ok', text, ids:[ids dos itens] }.
 
 import * as THREE from 'three';
+import { tl, num } from '../../i18n.js';
 import { ELEMENTS, minmax, obbOf } from '../elements.js';
 import { FACE_DIRS, cellKey, parseKey, OPP, DEFAULT_PAINT } from '../chamber.js';
 
@@ -39,7 +40,7 @@ export function validate(doc, env) {
     const down = world.raycast(new THREE.Vector3(s.p[0], s.p[1] + 0.5, s.p[2]), new THREE.Vector3(0, -1, 0), 60);
     if (!down) warn('Sob o ponto de partida não há chão: o jogador cai no vazio.', [s.id]);
     else if (down.box.isHazard) err('O ponto de partida está sobre rocha fundida.', [s.id]);
-    else if (s.p[1] - down.point.y > 1.5) warn(`O ponto de partida fica ${(s.p[1] - down.point.y).toFixed(1).replace('.', ',')} m acima do chão: o jogador começa caindo.`, [s.id]);
+    else if (s.p[1] - down.point.y > 1.5) warn(tl('O ponto de partida fica {h} m acima do chão: o jogador começa caindo.', { h: num(s.p[1] - down.point.y) }), [s.id]);
   }
   // elevador de saída sobre chão
   for (const e of exits) {
@@ -60,11 +61,11 @@ export function validate(doc, env) {
     if (['door', 'platform'].includes(it.type)) {
       if (!it.sig) {
         if (it.type === 'door') warn('Porta sem sinal: ela nunca abre.', [it.id]);
-      } else if (!sources.has(it.sig) && !(it.type === 'platform' && it.always)) warn(`A porta/plataforma do sinal “${it.sig}” não tem botão nem receptor que a ligue.`, [it.id]);
+      } else if (!sources.has(it.sig) && !(it.type === 'platform' && it.always)) warn(tl('A porta/plataforma do sinal “{s}” não tem botão nem receptor que a ligue.', { s: it.sig }), [it.id]);
     }
     if (['button', 'catcher', 'laserCatcher', 'incinerator'].includes(it.type)) {
-      if (!it.opens) warn(`${T.label} sem sinal: não liga nada.`, [it.id]);
-      else if (!sinks.has(it.opens)) warn(`${T.label} liga o sinal “${it.opens}”, mas nenhuma porta/plataforma/funil usa esse sinal.`, [it.id]);
+      if (!it.opens) warn(tl('{label} sem sinal: não liga nada.', { label: tl(T.label) }), [it.id]);
+      else if (!sinks.has(it.opens)) warn(tl('{label} liga o sinal “{s}”, mas nenhuma porta/plataforma/funil usa esse sinal.', { label: tl(T.label), s: it.opens }), [it.id]);
     }
   }
   // laser: receptor sem emissor, ou emissor sem nada para acertar
@@ -72,13 +73,13 @@ export function validate(doc, env) {
   for (const it of items.filter((i) => i.type === 'laserCatcher')) if (!lasers.length) warn('Receptor de laser sem nenhum emissor de laser no nível.', [it.id]);
   if (lasers.length && !items.some((i) => i.type === 'laserCatcher')) out.push({ level: 'aviso', text: 'Há emissor de laser, mas nenhum receptor: o feixe não liga nada.', ids: lasers.map((i) => i.id) });
   // sinal "ligado por vários": a porta só abre com TODOS ativos
-  for (const [name, list] of sources) if (list.length > 1 && sinks.has(name)) out.push({ level: 'aviso', text: `O sinal “${name}” tem ${list.length} ligadores: a porta só abre com todos ativos ao mesmo tempo.`, ids: list.map((i) => i.id) });
+  for (const [name, list] of sources) if (list.length > 1 && sinks.has(name)) out.push({ level: 'aviso', text: tl('O sinal “{s}” tem {n} ligadores: a porta só abre com todos ativos ao mesmo tempo.', { s: name, n: list.length }), ids: list.map((i) => i.id) });
 
   // peças de chão dentro da parede (fora da câmara)
   for (const it of items) {
     if (!['button', 'cube', 'turret', 'crystal', 'pedestal', 'plate', 'dino', 'exit', 'spawn'].includes(it.type)) continue;
     const c = new THREE.Vector3(it.p[0], it.p[1] + 0.4, it.p[2]);
-    if (world.pointInSolid(c)) warn(`${ELEMENTS[it.type].label} está dentro de uma parede ou bloco (fora da câmara?).`, [it.id]);
+    if (world.pointInSolid(c)) warn(tl('{label} está dentro de uma parede ou bloco (fora da câmara?).', { label: tl(ELEMENTS[it.type].label) }), [it.id]);
   }
 
   // coisas enterradas em blocos
@@ -91,7 +92,7 @@ export function validate(doc, env) {
       if (b.mat === 'glass' && b.type === 'block') continue;
       const [x0, y0, z0, x1, y1, z1] = minmax(b);
       if (c.x > x0 + 0.05 && c.x < x1 - 0.05 && c.y > y0 + 0.05 && c.y < y1 - 0.05 && c.z > z0 + 0.05 && c.z < z1 - 0.05) {
-        warn(`${T.label} está dentro de um bloco.`, [it.id, b.id]);
+        warn(tl('{label} está dentro de um bloco.', { label: tl(T.label) }), [it.id, b.id]);
         break;
       }
     }

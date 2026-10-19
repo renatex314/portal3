@@ -6,6 +6,7 @@
 // e viram também mapas de relevo.
 
 import * as THREE from 'three';
+import { tl } from './i18n.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -162,9 +163,9 @@ function gunShellMaps() {
       g.fillRect(-64, -16, 10, 32);
       g.fillStyle = '#e8e8e4';
       g.font = 'bold 16px Arial';
-      g.fillText('ANTÍPODA', -46, -1);
+      g.fillText(tl('ANTÍPODA'), -46, -1);
       g.font = '11px Arial';
-      g.fillText('DISP. DE PORTAIS', -46, 14);
+      g.fillText(tl('DISP. DE PORTAIS'), -46, 14);
       g.restore();
     },
     3,
@@ -568,9 +569,9 @@ function warningDecal(lines) {
   x.fillStyle = '#f5f5f5';
   x.textAlign = 'center';
   x.font = 'bold 34px Arial, sans-serif';
-  x.fillText(lines[0], 128, 44);
+  x.fillText(tl(lines[0]), 128, 44);
   x.font = 'bold 20px Arial, sans-serif';
-  x.fillText(lines[1] ?? '', 128, 76);
+  x.fillText(tl(lines[1] ?? ''), 128, 76);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -1109,7 +1110,7 @@ export function drawGunHolo(gun, s) {
     c.fillRect(x, y, 10, 3);
   c.font = 'bold 18px monospace';
   c.fillStyle = 'rgba(170,225,255,0.95)';
-  c.fillText(s.mode === 'none' ? 'SEM ARMA' : 'PORTAIS', 12, 24);
+  c.fillText(tl(s.mode === 'none' ? 'SEM ARMA' : 'PORTAIS'), 12, 24);
   // indicadores dos portais
   const dot = (x, on, col, label) => {
     c.beginPath();
@@ -1121,7 +1122,7 @@ export function drawGunHolo(gun, s) {
     c.stroke();
     c.fillStyle = 'rgba(200,230,255,0.9)';
     c.font = 'bold 14px monospace';
-    c.fillText(label, x + 19, 55);
+    c.fillText(tl(label), x + 19, 55);
   };
   dot(26, s.blue, s.color[0], s.blue ? 'ON' : '--');
   if (s.mode === 'both') dot(140, s.orange, s.color[1], s.orange ? 'ON' : '--');
@@ -1143,7 +1144,7 @@ export function drawGunHolo(gun, s) {
   c.fillRect(12, 104, (W - 24) * s.slow, 10);
   c.font = '10px monospace';
   c.fillStyle = 'rgba(200,230,255,0.7)';
-  c.fillText(s.holding ? 'CAMPO DE FORÇA' : 'TEMPO', W - 112, 100);
+  c.fillText(tl(s.holding ? 'CAMPO DE FORÇA' : 'TEMPO'), W - 112, 100);
   tex.needsUpdate = true;
 }
 
@@ -1261,7 +1262,7 @@ function cubeParts() {
       g.fillStyle = 'rgba(240,240,236,0.75)';
       g.font = 'bold 26px Arial';
       g.textAlign = 'center';
-      g.fillText(heart ? 'AMOSTRA ESPECIAL' : 'AMOSTRA', c, S - 118);
+      g.fillText(tl(heart ? 'AMOSTRA ESPECIAL' : 'AMOSTRA'), c, S - 118);
       // pegada de terópode (três dedos) carimbada no alto da face
       g.fillStyle = 'rgba(213,138,42,0.85)';
       g.beginPath();
@@ -1513,7 +1514,7 @@ function turretShellMaps() {
       g.fillStyle = 'rgba(60,62,66,0.8)';
       g.font = 'bold 15px Arial';
       g.textAlign = 'center';
-      g.fillText('SEGURANÇA', W / 2, H * 0.22);
+      g.fillText(tl('SEGURANÇA'), W / 2, H * 0.22);
     },
     2.5,
     '#f4f4f0',

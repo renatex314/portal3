@@ -2,6 +2,7 @@
 // (pelo servidor local ou direto da pasta escolhida — ver source.js).
 
 import { readFile, readRange, packedContent } from './source.js';
+import { tl } from '../i18n.js';
 
 const fetchRange = readRange;
 export const fetchFile = readFile;
@@ -23,7 +24,7 @@ export class VPK {
 
   async open() {
     const d = await fetchFile(`${this.base}_dir.vpk`);
-    if (!d) throw new Error(`pacote ${this.base} não encontrado`);
+    if (!d) throw new Error(tl('pacote {p} não encontrado', { p: this.base }));
     const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
     const version = dv.getUint32(4, true);
     const header = version === 1 ? 12 : 28;

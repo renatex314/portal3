@@ -3,6 +3,7 @@
 // gatilhos, portas, botões, cubos e o elevador de saída.
 
 import * as THREE from 'three';
+import { tl } from './i18n.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { floorButton, envMap } from './models.js';
 import * as TX from './textures.js';
@@ -1249,7 +1250,7 @@ export class World {
     lines.forEach(([txt, size, yy, color = '#1d1d1f', font = 'Arial Black, Impact, sans-serif']) => {
       g.fillStyle = color;
       g.font = `bold ${size}px ${font}`;
-      g.fillText(txt, 60, yy);
+      g.fillText(tl(txt), 60, yy);
     });
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;

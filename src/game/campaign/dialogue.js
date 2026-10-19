@@ -7,6 +7,7 @@ import { readFile } from './source.js';
 import { openContent } from './vpk.js';
 import { parseKV, kvGet } from './kv.js';
 import { parseScenesImage, findScene, loadSoundScripts, cleanWave, decodeText } from './scenes.js';
+import { isEN } from '../i18n.js';
 
 /** legenda: tira as marcações de formatação (<clr:…>, <I>, <len:…> etc.) */
 const cleanCaption = (s) => s.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
@@ -38,8 +39,8 @@ export class Dialogue {
     ({ sounds: this.sounds } = await loadSoundScripts(this.pak, parseKV, kvGet));
     // cenas compiladas: para cada cena, duração e a lista de sons, em ordem
     this.scenes = parseScenesImage(await this.pak.read('scenes/scenes.image'));
-    // legendas: português do Brasil, se a instalação tiver; senão inglês
-    for (const lang of ['brazilian', 'portuguese', 'english']) {
+    // legendas: no idioma do jogo (português do Brasil ou inglês), se a instalação tiver; senão a outra
+    for (const lang of isEN ? ['english', 'brazilian', 'portuguese'] : ['brazilian', 'portuguese', 'english']) {
       const bytes = await readFile(`portal/resource/closecaption_${lang}.txt`);
       if (!bytes) continue;
       const tokens = kvGet(parseKV(decodeText(bytes))[0] ?? {}, 'Tokens');

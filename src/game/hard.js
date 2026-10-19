@@ -6,6 +6,7 @@
 // Coordenadas em metros; o norte (saída) fica em −z.
 
 import { portalGun } from './models.js';
+import { tl } from './i18n.js';
 
 const H = (n, def) => ({ ...def, id: 200 + n, n, code: `H${String(n + 1).padStart(2, '0')}`, series: 'hard', music: def.music ?? 'labTense', heat: def.heat ?? true });
 
@@ -71,7 +72,7 @@ function slopeCrusher(w, id, x0, x1, zc, depth, surfAt, opts) {
 
 function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`DESAFIO ${code}`, 104, 150],
+    [tl('DESAFIO {c}', { c: code }), 104, 150],
     [name, 76, 270, '#c0392b'],
     [line2, 40, 380, '#55575c', 'Arial, sans-serif'],
     ['HARDCORE · LABORATÓRIO ANTÍPODA', 30, 455, '#8a8c90', 'Arial, sans-serif'],

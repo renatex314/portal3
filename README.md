@@ -211,6 +211,10 @@ Os quatro também foram resolvidos de ponta a ponta pelo robô de teste.
 
 Todas foram resolvidas de ponta a ponta pelo robô de teste, que também provou cada tipo de paradoxo (cubo sobre o clone, bola de energia no caminho dele, destino ocupado e salto para antes da chegada).
 
+### Idioma (português / inglês)
+
+O botão **🌐 English** do menu troca os textos do jogo para inglês (e **🌐 Português** volta); a escolha fica guardada no navegador. Muda tudo o que é texto — menus, HUD, legendas das falas, avisos, placas 3D, editor — e, na campanha original, as legendas e os créditos passam a vir do arquivo em inglês do próprio Portal. As vozes continuam em português. Os textos ficam escritos em português no código; `src/game/i18n.js` traduz pelo próprio texto, com o dicionário em `src/game/i18n.en.js` (texto novo sem tradução aparece em português e fica listado em `window.__i18nMissing` no modo inglês).
+
 ### Editor de níveis (estilo Portal 2)
 
 No menu, **🛠 Editor de níveis** (ou **＋ Novo nível** em *Meus níveis*). Os níveis ficam no navegador (`localStorage`); **Exportar** baixa um `.nivel.json` e **Importar** o lê de volta. Eles aparecem em *Meus níveis* e rodam como qualquer fase. `F5` testa e volta.
@@ -363,7 +367,7 @@ src/
   mine.js      canteiro de mineração 3D (máquinas, pessoas articuladas, poço, explosão)
   audio.js     trilha sonora procedural e efeitos
   narrator.js  narração por voz (Web Speech API)
-  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), experimento.js e relogio.js (série Experimento: o relógio do tempo, clones e paradoxos), editor/ (editor de níveis: câmara em células, itens, trajetória, alcance, validação e robô gravado), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
+  game/        Parte IV: world.js (cenário), physics.js (Rapier), portals.js (portais), player.js (jogador), props.js (cubos), turrets.js, energy.js (bolas de energia), models.js (modelos), textures.js (texturas), fx.js (pós-processamento e efeitos), levels.js (câmaras), classic.js (bateria clássica), hard.js (desafios hardcore), momentum.js (série Momento), fronteira.js (série Fronteira), chefe.js e chefeSala.js (série Chefes: o crânio e a câmara do B01), experimento.js e relogio.js (série Experimento: o relógio do tempo, clones e paradoxos), editor/ (editor de níveis: câmara em células, itens, trajetória, alcance, validação e robô gravado), i18n.js e i18n.en.js (textos em inglês), frontier.js (lasers, funis, placas, gravidade, tempo, Lua), sfx.js, main.js
   space.js     Terra com corte em cunha (shaders), túnel, cápsula, satélite, Lua, estrelas
   ground.js    cena do deserto com o buraco (terreno procedural)
   physics.js   modelos de gravidade e simulação

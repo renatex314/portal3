@@ -2,6 +2,7 @@
 // com arma de portais, ligado ao documentário dos mineiros.
 
 import * as THREE from 'three';
+import { tl, num, watch, isEN, setLang } from './i18n.js';
 import { World } from './world.js';
 import { PortalSystem } from './portals.js';
 import { Player } from './player.js';
@@ -34,6 +35,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // só escreve no DOM quando o texto muda (escrever o mesmo texto todo quadro refaz o layout)
 const textCache = new Map();
 function setText(id, text) {
+  text = tl(text);
   if (textCache.get(id) === text) return;
   textCache.set(id, text);
   $(id).textContent = text;
@@ -141,7 +143,7 @@ function renderPlayers() {
     return;
   }
   el.hidden = false;
-  const rows = [`<b>Sala “${net.room}”</b>`, `<span style="--c:${slotHex(net.slot, 0)}">● ${$('mp-name').value || 'você'} (você)</span>`];
+  const rows = [`<b>${tl('Sala “{room}”', { room: net.room })}</b>`, `<span style="--c:${slotHex(net.slot, 0)}">● ${$('mp-name').value || tl('você')} ${tl('(você)')}</span>`];
   for (const p of net.peers.values()) rows.push(`<span style="--c:${slotHex(p.slot, 0)}">● ${p.name}</span>`);
   el.innerHTML = rows.join('');
 }
@@ -154,11 +156,11 @@ function setLocalSlot(slot) {
 }
 
 net.on('joined', (m) => {
-  toast(`${m.name} entrou na sala`);
+  toast(tl('{name} entrou na sala', { name: m.name }));
   renderPlayers();
 });
 net.on('left', (m) => {
-  toast(`${m.name ?? 'Alguém'} saiu da sala`);
+  toast(tl('{name} saiu da sala', { name: m.name ?? tl('Alguém') }));
   removeAvatar(m.id);
   renderPlayers();
 });
@@ -205,7 +207,7 @@ function applyRoomFlags(flags) {
 
 function fillMapSelect() {
   const sel = $('room-map');
-  sel.innerHTML = LEVELS.map((L, i) => L.editor ? '' : `<option value="${i}">${L.free ? 'Mapa livre' : L.series === 'campaign' ? `Campanha original` : L.code ? L.code : `Câmara ${String(L.id).padStart(2, '0')}`} · ${L.name}</option>`).join('');
+  sel.innerHTML = LEVELS.map((L, i) => L.editor ? '' : `<option value="${i}">${L.free ? tl('Mapa livre') : L.series === 'campaign' ? tl('Campanha original') : L.code ? L.code : tl('Câmara {n}', { n: String(L.id).padStart(2, '0') })} · ${tl(L.name)}</option>`).join('');
   sel.value = String(levelIdx);
 }
 $('room-map').addEventListener('change', (e) => {
@@ -227,9 +229,9 @@ net.on('level', (m) => {
   running = true;
   if (!first && m.by) {
     sfx.win();
-    toast(`${m.by} chegou ao elevador — câmara ${String(m.level + 1).padStart(2, '0')}!`);
+    toast(tl('{who} chegou ao elevador — câmara {n}!', { who: m.by, n: String(m.level + 1).padStart(2, '0') }));
   }
-  if (!first && !m.by) toast(`Mapa da sala trocado: ${LEVELS[m.level].name}`);
+  if (!first && !m.by) toast(tl('Mapa da sala trocado: {name}', { name: tl(LEVELS[m.level].name) }));
   $('next').hidden = false;
   setTimeout(() => {
     loadLevel(Math.min(m.level, LEVELS.length - 1));
@@ -366,7 +368,7 @@ const chronosFx = {
     post.blur.reset();
     fxState.jump = 0.8;
     timeRing(camera.position.clone().addScaledVector(camForward(), 1.2), camForward().negate(), new THREE.Color(0.8, 2.0, 3.0), 0.9, 5);
-    toast(`Você voltou ${delta.toFixed(1).replace('.', ',')} s no tempo.`);
+    toast(tl('Você voltou {d} s no tempo.', { d: num(delta) }));
   },
   paradox(why, at) {
     sfx.paradox();
@@ -427,10 +429,10 @@ function updateClockHud() {
   const showBlocked = h.paused && h.blocked && portals.orange.placed && portals.orange.delta > 0;
   $('clock').classList.toggle('blocked', showBlocked);
   setText('clock-state', h.paused ? 'tempo parado' : relogio.sweep ? 'saltando no tempo' : 'tempo normal');
-  setText('clock-d', h.paused ? `−${h.delta.toFixed(1).replace('.', ',')} s` : fmt(h.tw));
+  setText('clock-d', h.paused ? `−${num(h.delta)} s` : fmt(h.tw));
   $('clock-fill').style.width = h.paused ? `${Math.min(100, (h.delta / Math.max(h.max, 0.5)) * 100)}%` : '0%';
   setText('clock-hint', h.paused ? 'roda do mouse: voltar mais/menos · vermelho = passado · ciano = presente · 2: continuar' : '2 — parar o tempo');
-  setText('clock-extra', [h.clones ? `${h.clones} clone${h.clones > 1 ? 's' : ''} do passado` : '', h.paradoxes ? `${h.paradoxes} paradoxo${h.paradoxes > 1 ? 's' : ''}` : '', showBlocked ? '⚠ destino ocupado' : ''].filter(Boolean).join(' · '));
+  setText('clock-extra', [h.clones ? tl(h.clones > 1 ? '{n} clones do passado' : '{n} clone do passado', { n: h.clones }) : '', h.paradoxes ? tl(h.paradoxes > 1 ? '{n} paradoxos' : '{n} paradoxo', { n: h.paradoxes }) : '', showBlocked ? tl('⚠ destino ocupado') : ''].filter(Boolean).join(' · '));
 }
 
 // ------------------------------------------------------------------ corpo do jogador (visível só pelos portais)
@@ -711,7 +713,7 @@ const saveProgress = () => {
 };
 
 const levelLabel = (L) =>
-  L.free ? 'Mapa livre' : L.series === 'mine' ? `Meu nível ${L.code}` : L.series === 'campaign' ? L.name : L.series === 'hard' ? `Desafio ${L.code}` : L.series === 'momentum' ? `Momento ${L.code}` : L.series === 'boss' ? `Chefe ${L.code}` : L.series === 'experiment' ? `Experimento ${L.code}` : L.code ? `Teste ${L.code}` : `Câmara ${String(L.id).padStart(2, '0')}`;
+  L.free ? tl('Mapa livre') : L.series === 'mine' ? tl('Meu nível {c}', { c: L.code }) : L.series === 'campaign' ? tl(L.name) : L.series === 'hard' ? tl('Desafio {c}', { c: L.code }) : L.series === 'momentum' ? tl('Momento {c}', { c: L.code }) : L.series === 'boss' ? tl('Chefe {c}', { c: L.code }) : L.series === 'experiment' ? tl('Experimento {c}', { c: L.code }) : L.code ? tl('Teste {c}', { c: L.code }) : tl('Câmara {n}', { n: String(L.id).padStart(2, '0') });
 const cycleSpot = (i) => {
   const sp = cycle.spots[i];
   return [sp.c, sp.n, sp.u ?? [0, 1, 0]];
@@ -819,7 +821,7 @@ function completeCampaign() {
   progress.campaign = 99;
   saveProgress();
   $('done-title').textContent = 'Campanha original concluída';
-  $('done-time').textContent = `Tempo na última fase: ${fmt(levelTime)} · mortes no total: ${deaths}`;
+  $('done-time').textContent = tl('Tempo na última fase: {time} · mortes no total: {n}', { time: fmt(levelTime), n: deaths });
   $('next').hidden = true;
   $('done').hidden = false;
 }
@@ -1149,7 +1151,7 @@ function landShot(which, origin, dir, allowed) {
       : temporal
         ? relogio.placeOrange(origin, dir, relogio.delta)
         : portals.tryPlace(which, origin, dir);
-  if (res.ok && temporal) toast(`Portal aberto ${relogio.delta.toFixed(1).replace('.', ',')} s no passado: entre no ciano para voltar.`);
+  if (res.ok && temporal) toast(tl('Portal aberto {d} s no passado: entre no ciano para voltar.', { d: num(relogio.delta) }));
   if (res.why) toast(res.why);
   if (res.ok) {
     if (mp())
@@ -1312,7 +1314,7 @@ function takeGem(idx, who) {
       completed = true;
       document.exitPointerLock?.();
       $('done-title').textContent = 'Mina explorada!';
-      $('done-time').textContent = `Tempo: ${fmt(levelTime)}${ranking ? ` · ${ranking}` : ''}`;
+      $('done-time').textContent = `${tl('Tempo: {time}', { time: fmt(levelTime) })}${ranking ? ` · ${ranking}` : ''}`;
       $('next').hidden = true;
       $('done').hidden = false;
     }, 2500);
@@ -1361,8 +1363,8 @@ function complete(final) {
     return;
   }
   const ending = level.series === 'campaign' ? (level.name.startsWith('Câmaras') ? 'as' : 'a') : level.code ? 'o' : 'a';
-  $('done-title').textContent = `${levelLabel(level)} concluíd${ending}`;
-  $('done-time').textContent = `Tempo: ${fmt(t)}${prev && prev <= t ? ` · recorde ${fmt(prev)}` : ' · novo recorde!'}`;
+  $('done-title').textContent = isEN ? tl('{label} concluído', { label: levelLabel(level) }) : `${levelLabel(level)} concluíd${ending}`;
+  $('done-time').textContent = `${tl('Tempo: {time}', { time: fmt(t) })}${prev && prev <= t ? ` · ${tl('recorde {time}', { time: fmt(prev) })}` : ` · ${tl('novo recorde!')}`}`;
   $('done').hidden = false;
   $('done-editor').hidden = !testingMine;
 }
@@ -1798,7 +1800,7 @@ document.addEventListener('pointerlockchange', () => {
   paused = !locked;
   $('pause').hidden = locked || !running || completed;
   if (!$('pause').hidden) fillMapSelect();
-  if (level) $('pause-info').textContent = `${levelLabel(level)} · ${level.name} · ${fmt(levelTime)}`;
+  if (level) $('pause-info').textContent = `${levelLabel(level)} · ${tl(level.name)} · ${fmt(levelTime)}`;
   $('back-editor').hidden = !testingMine;
   $('room-map-label').textContent = mp() ? 'Mapa da sala (muda para todos):' : 'Mapa:';
   document.body.classList.toggle('playing', locked);
@@ -1954,7 +1956,7 @@ function renderMine(grid) {
     const L = mineLevel(doc, k);
     const b = document.createElement('button');
     b.className = 'lvl mine';
-    b.innerHTML = `<span class="n">${L.code}</span><b>${doc.name.replace(/</g, '&lt;')}</b><small>${doc.items.length} itens</small>${progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''}`;
+    b.innerHTML = `<span class="n">${L.code}</span><b>${doc.name.replace(/</g, '&lt;')}</b><small>${tl('{n} itens', { n: doc.items.length })}</small>${progress.best[L.id] ? `<em>${fmt(progress.best[L.id])}</em>` : ''}`;
     b.addEventListener('click', () => startLevel(slotOf(L)));
     const e = document.createElement('span');
     e.className = 'edit';
@@ -2045,7 +2047,7 @@ try {
   $('mp-room').value = localStorage.getItem('tunel-sala') || 'mina';
 } catch {}
 $('mp-join').addEventListener('click', async () => {
-  const name = $('mp-name').value.trim() || `Mineiro ${Math.floor(Math.random() * 90 + 10)}`;
+  const name = $('mp-name').value.trim() || tl('Mineiro {n}', { n: Math.floor(Math.random() * 90 + 10) });
   const room = $('mp-room').value.trim() || 'mina';
   $('mp-name').value = name;
   try {
@@ -2060,7 +2062,7 @@ $('mp-join').addEventListener('click', async () => {
   try {
     const w = await net.connect(room, name);
     setLocalSlot(w.slot);
-    $('mp-status').textContent = `Na sala “${w.room}” com ${w.players.length} pessoa(s). Endereço para os colegas: ${location.host}`;
+    $('mp-status').textContent = tl('Na sala “{room}” com {n} pessoa(s). Endereço para os colegas: {host}', { room: w.room, n: w.players.length, host: location.host });
     $('mp-join').hidden = true;
     $('mp-leave').hidden = false;
     renderPlayers();
@@ -2070,7 +2072,7 @@ $('mp-join').addEventListener('click', async () => {
     loadLevel(Math.min(w.level, LEVELS.length - 1));
     fillMapSelect();
     applyRoomFlags(w.flags);
-    toast(`Mapa da sala: ${LEVELS[w.level].name} — para trocar, aperte Esc`);
+    toast(tl('Mapa da sala: {name} — para trocar, aperte Esc', { name: tl(LEVELS[w.level].name) }));
     for (const m of w.portals) {
       const peer = net.peers.get(m.id);
       if (peer) portals.placeRemote(m.id, peer.slot, m.which, m.c, m.n, m.u, m.b);
@@ -2083,8 +2085,8 @@ $('mp-join').addEventListener('click', async () => {
       : e.message === 'timeout'
         ? 'O servidor demorou para responder. Clique em “Entrar na sala” de novo.'
         : e.message === 'sem servidor'
-          ? `Não consegui falar com o servidor em ${location.host}. Ele pode ter sido desligado — tente recarregar a página.`
-          : `Não deu para entrar: ${e.message}.`;
+          ? tl('Não consegui falar com o servidor em {host}. Ele pode ter sido desligado — tente recarregar a página.', { host: location.host })
+          : tl('Não deu para entrar: {msg}.', { msg: e.message });
   } finally {
     $('mp-join').disabled = false;
   }
@@ -2100,6 +2102,10 @@ $('mp-leave').addEventListener('click', () => {
 });
 
 $('play').addEventListener('click', () => startLevel(Math.min(progress.last ?? 0, progress.unlocked - 1)));
+// idioma dos textos (as vozes continuam em português)
+$('opt-lang').textContent = isEN ? '🌐 Português' : '🌐 English';
+$('opt-lang').addEventListener('click', () => setLang(isEN ? 'pt' : 'en'));
+watch();
 $('opt-music').addEventListener('click', (e) => e.currentTarget.classList.toggle('on'));
 $('opt-voice').addEventListener('click', (e) => e.currentTarget.classList.toggle('on'));
 $('resume').addEventListener('click', () => lock());
@@ -2666,7 +2672,7 @@ function update(dt, t) {
     g.m.rotation.y += dt * 0.8;
     g.m.position.y = g.pos.y - 0.4 + Math.sin(t * 2 + i) * 0.08;
     if (g.pos.distanceTo(player.pos) < 1.4) {
-      const me = mp() ? $('mp-name').value || 'você' : 'você';
+      const me = mp() ? $('mp-name').value || tl('você') : tl('você');
       takeGem(i, me);
       sfx.gem();
       gemsMine++;
@@ -2790,7 +2796,7 @@ function update(dt, t) {
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
   $('use-hint').hidden = !(look && !held) && !held;
-  $('use-hint').textContent = held ? 'E — soltar · botão esquerdo — arremessar' : 'E — pegar';
+  setText('use-hint', held ? 'E — soltar · botão esquerdo — arremessar' : 'E — pegar');
 }
 
 let realDt = 1 / 60;

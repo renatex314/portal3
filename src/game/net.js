@@ -1,6 +1,8 @@
 // Cliente do multiplayer em rede local: conecta no WebSocket do mesmo
 // servidor que entrega a página (server.js) e troca mensagens JSON.
 
+import { tl } from './i18n.js';
+
 export class Net {
   constructor() {
     this.ws = null;
@@ -82,7 +84,7 @@ export class Net {
         } else if (m.t === 'full') {
           clearTimeout(timer);
           settled = true;
-          reject(new Error(`sala cheia (máximo ${m.max})`));
+          reject(new Error(tl('sala cheia (máximo {n})', { n: m.max })));
           ws.close();
         } else if (m.t === 'joined') {
           this.peers.set(m.id, { id: m.id, name: m.name, slot: m.slot });

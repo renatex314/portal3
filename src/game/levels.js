@@ -13,6 +13,7 @@ import { MOMENTUM2 } from './momentum2.js';
 import { FRONTIER } from './fronteira.js';
 import { CHEFES } from './chefe.js';
 import { EXPERIMENTO } from './experimento.js';
+import { tl } from './i18n.js';
 
 const G = 9.8;
 const DIRS = {
@@ -63,7 +64,7 @@ export function northWallWithExit(w, x0, x1, top, zIn, doorId, yBase = 0) {
 
 export function chamberSign(w, x, y, z, rotY, num, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`CÂMARA ${String(num).padStart(2, '0')}`, 110, 150],
+    [tl('CÂMARA {n}', { n: String(num).padStart(2, '0') }), 110, 150],
     [name, 76, 270, '#c0392b'],
     [line2, 40, 380, '#55575c', 'Arial, sans-serif'],
     ['LABORATÓRIO ANTÍPODA · NOVA LIMA (MG)', 30, 455, '#8a8c90', 'Arial, sans-serif'],

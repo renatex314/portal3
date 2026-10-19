@@ -2,6 +2,7 @@
 // bolas de energia dos lançadores e um lançamento livre que você ajusta).
 
 import * as THREE from 'three';
+import { tl, num } from '../../i18n.js';
 import { flight, pellet, PLAYER_HALF } from './trajectory.js';
 
 const COLORS = [0x66d9ff, 0xffb347, 0xff6a9a, 0x9aff6a, 0xb06cff, 0xffee66];
@@ -17,7 +18,7 @@ const END_TEXT = {
   vida: 'some depois de viver o tempo todo',
   rebates: 'quica sem parar',
 };
-const fmt = (n, d = 1) => n.toFixed(d).replace('.', ',');
+const fmt = (n, d = 1) => num(n, d);
 
 export function createTrajTool(ctx) {
   const { el, group } = ctx;
@@ -53,7 +54,7 @@ export function createTrajTool(ctx) {
   );
 
   function sync() {
-    pickBtn.textContent = S.picking ? 'Clique no cenário para escolher a origem…' : S.origin ? `Origem: ${S.origin.toArray().map((v) => fmt(v)).join(', ')} (trocar)` : 'Escolher origem no cenário';
+    pickBtn.textContent = S.picking ? 'Clique no cenário para escolher a origem…' : S.origin ? tl('Origem: {p} (trocar)', { p: S.origin.toArray().map((v) => fmt(v)).join(', ') }) : 'Escolher origem no cenário';
     pickBtn.classList.toggle('on', S.picking);
     for (const [k, [num, range]] of Object.entries(inputs)) num.value = range.value = S[k];
   }
@@ -134,8 +135,8 @@ export function createTrajTool(ctx) {
       const st = r.stats;
       const line =
         kind === 'bola'
-          ? `${title}: ${END_TEXT[r.end.kind]}; ${st.bounces} rebate(s), ${st.portals} portal(is), ${fmt(st.time)} s`
-          : `${title}: ${END_TEXT[r.end.kind]}. Sobe ${fmt(st.maxHeight)} m · alcance ${fmt(st.range)} m · ${fmt(st.time)} s · chega a ${fmt(st.speed)} m/s${r.passes.length ? ` · ${r.passes.length} portal(is)` : ''}`;
+          ? tl('{title}: {end}; {b} rebate(s), {p} portal(is), {t} s', { title, end: tl(END_TEXT[r.end.kind]), b: st.bounces, p: st.portals, t: fmt(st.time) })
+          : tl('{title}: {end}. Sobe {h} m · alcance {r} m · {t} s · chega a {v} m/s', { title, end: tl(END_TEXT[r.end.kind]), h: fmt(st.maxHeight), r: fmt(st.range), t: fmt(st.time), v: fmt(st.speed) }) + (r.passes.length ? ` · ${tl('{n} portal(is)', { n: r.passes.length })}` : '');
       S.report.push(line);
       S.ends.push(r.end.pos.clone());
       report.append(el('p', {}, line));
@@ -143,11 +144,11 @@ export function createTrajTool(ctx) {
     if (S.plates)
       ctx.world.plates.forEach((P, n) => {
         const r = flight(env, { pos: P.pos.clone().add(new THREE.Vector3(0, 0.2 + PLAYER_HALF.y + 0.05, 0)), vel: P.vel.clone(), ghost: S.ghost });
-        add(`Placa ${n + 1}`, r, 'voo');
+        add(tl('Placa {n}', { n: n + 1 }), r, 'voo');
       });
     if (S.pellets)
       ctx.world.launchers.forEach((L, n) => {
-        add(`Bola ${n + 1}`, pellet(env, { pos: L.pos.clone(), dir: L.dir.clone(), speed: L.speed, life: L.life }), 'bola');
+        add(tl('Bola {n}', { n: n + 1 }), pellet(env, { pos: L.pos.clone(), dir: L.dir.clone(), speed: L.speed, life: L.life }), 'bola');
       });
     if (S.origin) {
       const r = flight(env, { pos: S.origin.clone(), vel: velOf(), ghost: S.ghost });

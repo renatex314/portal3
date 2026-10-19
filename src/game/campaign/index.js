@@ -15,6 +15,7 @@ import { parseAnimatedModel } from './mdlmodel.js';
 import { buildModel, placeModel, playSeq } from './model3d.js';
 import * as THREE from 'three';
 import { VPK } from './vpk.js';
+import { tl } from '../i18n.js';
 
 // falas e sons (um só para a campanha toda); a legenda é ligada pelo main.js
 export const dialogue = new Dialogue({ subtitle: (...a) => dialogue.onSubtitle?.(...a) });
@@ -28,7 +29,7 @@ export async function fetchMap(map) {
   const got = await ensureSource();
   if (got !== 'ok') throw new Error(NO_SOURCE);
   const bytes = await readFile(`portal/maps/${map}.bsp`);
-  if (!bytes) throw new Error(`O mapa ${map} não está nesse pacote/instalação do Portal.`);
+  if (!bytes) throw new Error(tl('O mapa {map} não está nesse pacote/instalação do Portal.', { map }));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   const bsp = parseBSP(buffer);
   bsp.staticProps = parseStaticProps(buffer);
@@ -118,7 +119,7 @@ export const CAMPAIGN = MAPS.map(([map, code], n) => ({
   n,
   code,
   map,
-  name: map.startsWith('escape') ? (map === 'escape_02' ? 'Fuga 3 · o final' : `Fuga ${n - 14}`) : code.includes('–') ? `Câmaras ${code}` : `Câmara ${code}`,
+  name: map.startsWith('escape') ? (map === 'escape_02' ? tl('Fuga 3 · o final') : tl('Fuga {n}', { n: n - 14 })) : code.includes('–') ? tl('Câmaras {c}', { c: code }) : tl('Câmara {c}', { c: code }),
   who: 'GLaDOS',
   music: map.startsWith('escape') ? 'labTense' : 'lab',
   lesson: 'Campanha original, lida da sua instalação',

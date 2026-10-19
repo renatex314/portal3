@@ -23,6 +23,7 @@
 //    do salto, com os portais como estavam.
 
 import * as THREE from 'three';
+import { tl, num } from './i18n.js';
 import { PORTAL_A, PORTAL_B } from './portals.js';
 
 const RATE = 1 / 30; // intervalo entre os quadros guardados (tempo do mundo)
@@ -852,7 +853,7 @@ export class Chronos {
       g.fillStyle = this.blocked ? '#ff6a5a' : '#9fe8ff';
       g.shadowColor = this.blocked ? '#ff3020' : '#20c8ff';
       g.shadowBlur = 12;
-      g.fillText(`−${O.delta.toFixed(1).replace('.', ',')} s`, 128, 62);
+      g.fillText(`−${num(O.delta)} s`, 128, 62);
       e.tex.needsUpdate = true;
     }
   }
@@ -2119,7 +2120,7 @@ export class Chronos {
     this.setFreeze(false);
     this.setHolo(false);
     this.paradoxes++;
-    this.ctx.fx.toast?.(`Paradoxo: ${why}. O loop se desfez.`);
+    this.ctx.fx.toast?.(tl('Paradoxo: {why}. O loop se desfez.', { why: tl(why) }));
   }
 
   /** dados para o HUD */

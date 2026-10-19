@@ -1,6 +1,8 @@
 // Leitor de mapas BSP v20 (Source). Código próprio, a partir do formato
 // documentado; os mapas vêm da instalação do jogador, nunca do repositório.
 
+import { tl } from '../i18n.js';
+
 const LUMP = {
   ENTITIES: 0, PLANES: 1, TEXDATA: 2, TEXINFO: 6, NODES: 5, LEAFS: 10, MODELS: 14,
   LEAFBRUSHES: 17, BRUSHES: 18, BRUSHSIDES: 19, TEXDATA_STRING_DATA: 43, TEXDATA_STRING_TABLE: 44,
@@ -71,7 +73,7 @@ export function parseBSP(buffer) {
   const lump = (i) => {
     const ofs = dv.getInt32(8 + i * 16, true);
     const len = dv.getInt32(12 + i * 16, true);
-    if (dv.getUint32(20 + i * 16, true) !== 0) throw new Error(`lump ${i} comprimido (não suportado)`);
+    if (dv.getUint32(20 + i * 16, true) !== 0) throw new Error(tl('lump {i} comprimido (não suportado)', { i }));
     return { ofs, len };
   };
 

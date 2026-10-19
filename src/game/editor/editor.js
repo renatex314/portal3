@@ -8,6 +8,7 @@
 
 import './editor.css';
 import * as THREE from 'three';
+import { tl, num, isEN } from '../i18n.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { ELEMENTS, typesByGroup, obbOf, dirVec } from './elements.js';
 export { obbOf };
@@ -342,7 +343,7 @@ export function createEditor(host) {
     edge.moved = true; // (como no arrasto de mover: o mundo se refaz ao soltar)
     refreshMarks();
     fillProps(true);
-    setStatus(`${['largura (x)', 'altura (y)', 'profundidade (z)'][a]}: ${r2(size)} m${sym ? ' · Shift: dos dois lados' : ''}`);
+    setStatus(`${tl(['largura (x)', 'altura (y)', 'profundidade (z)'][a])}: ${r2(size)} m${sym ? tl(' · Shift: dos dois lados') : ''}`);
   }
   function syncGizmo() {
     if (!selected.length || armed || testing || !gizmo || tab !== 'items') {
@@ -452,7 +453,7 @@ export function createEditor(host) {
     selected = news.map((i) => i.id);
     changed();
   }
-  const copy = () => ((clipboard = selected.map((id) => clone(itemOf(id)))), setStatus(`${clipboard.length} copiado(s)`));
+  const copy = () => ((clipboard = selected.map((id) => clone(itemOf(id)))), setStatus(tl('{n} copiado(s)', { n: clipboard.length })));
   function paste() {
     const list = (clipboard ?? []).filter((i) => !ELEMENTS[i.type].unique);
     if (!list.length) return;
@@ -609,7 +610,7 @@ export function createEditor(host) {
     o.add(new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: T.color, transparent: true, opacity: 0.25, depthWrite: false })));
     ghost.add(o);
     setLayer(ghost);
-    setStatus(`${T.label} em ${p.map((v) => r2(v)).join(', ')} — clique para pôr · R gira · Esc cancela`);
+    setStatus(tl('{label} em {p} — clique para pôr · R gira · Esc cancela', { label: tl(T.label), p: p.map((v) => r2(v)).join(', ') }));
   }
 
   // ------------------------------------------------------------------ construção da câmara
@@ -730,7 +731,7 @@ export function createEditor(host) {
     useVelocity(v) {
       if (toolId !== 'traj') setToolId('traj');
       tools.traj.setLaunch(v);
-      host.toast(tools.traj.picking ? `Velocidade do robô: ${v.length().toFixed(1).replace('.', ',')} m/s. Clique na plataforma de onde ele vai sair.` : 'Velocidade do robô no lançamento livre.');
+      host.toast(tools.traj.picking ? tl('Velocidade do robô: {v} m/s. Clique na plataforma de onde ele vai sair.', { v: num(v.length()) }) : 'Velocidade do robô no lançamento livre.');
     },
     clearProof() {
       pushUndo();
@@ -756,7 +757,7 @@ export function createEditor(host) {
     const out = validate(doc, { world, portals: host.portals });
     const box = el('div', { class: 'tool' }, el('h3', {}, 'Validação'));
     for (const m of out) {
-      const row = el('button', { class: `issue ${m.level}`, onclick: () => (m.ids.length ? (select(m.ids), focus()) : null) }, `${m.level === 'erro' ? '✖' : m.level === 'aviso' ? '⚠' : '✔'} ${m.text}`);
+      const row = el('button', { class: `issue ${m.level}`, onclick: () => (m.ids.length ? (select(m.ids), focus()) : null) }, `${m.level === 'erro' ? '✖' : m.level === 'aviso' ? '⚠' : '✔'} ${tl(m.text)}`);
       box.append(row);
     }
     box.append(el('button', { class: 'ed-btn', onclick: () => fillTool() }, 'Revalidar'));
@@ -853,7 +854,7 @@ export function createEditor(host) {
     layerLabel.textContent = String(layer + 1);
     $hint.textContent =
       tab === 'chamber'
-        ? 'clique/arraste: ' + (buildTool === 'paint' ? 'pinta (Shift = toda a parede)' : buildTool === 'add' ? 'abre células' : 'fecha células') + ' · A adiciona · X remove · P pinta · PgUp/PgDn muda de andar'
+        ? tl('clique/arraste: ') + tl(buildTool === 'paint' ? 'pinta (Shift = toda a parede)' : buildTool === 'add' ? 'abre células' : 'fecha células') + tl(' · A adiciona · X remove · P pinta · PgUp/PgDn muda de andar')
         : 'arraste para mover · arraste as alças coloridas para mexer só uma borda (Shift: as duas) · R gira 90° · Del apaga · Ctrl+D duplica · botão direito + WASD voa · F foca';
     syncPalette();
   }
@@ -897,7 +898,7 @@ export function createEditor(host) {
             select([]);
             syncPalette();
             updateGhost();
-            setStatus(armed ? `${T.label}: clique no cenário para colocar` : '');
+            setStatus(armed ? tl('{label}: clique no cenário para colocar', { label: tl(T.label) }) : '');
           },
         }, el('i', { style: `background:#${T.color.toString(16).padStart(6, '0')}` }), T.label);
         palBtns.set(key, b);
@@ -954,15 +955,15 @@ export function createEditor(host) {
     m.renderOrder = 12;
     hoverG.add(m);
     setLayer(hoverG);
-    setStatus(`Pouso em ${p.map((v) => String(v).replace('.', ',')).join('; ')}`);
+    setStatus(tl('Pouso em {p}', { p: p.map((v) => (isEN ? String(v) : String(v).replace('.', ','))).join('; ') }));
     return p;
   }
   function connectionsBox(it) {
     const sinks = isSource(it) && it.opens ? doc.items.filter((o) => o !== it && sinkKey(o) && o[sinkKey(o)] === it.opens) : [];
     const sources = sinkKey(it) && it[sinkKey(it)] ? doc.items.filter((o) => o !== it && isSource(o) && o.opens === it[sinkKey(it)]) : [];
     const rows = [];
-    for (const o of sinks) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `→ ${ELEMENTS[o.type].label}`), btn('✕', 'Desligar', () => unlink(it, o), 'danger sm')));
-    for (const o of sources) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `← ${ELEMENTS[o.type].label}`), btn('✕', 'Desligar', () => unlink(o, it), 'danger sm')));
+    for (const o of sinks) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `→ ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(it, o), 'danger sm')));
+    for (const o of sources) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `← ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(o, it), 'danger sm')));
     const can = isSource(it) || sinkKey(it);
     if (!can) return null;
     return el('div', { class: 'f' },
@@ -999,7 +1000,7 @@ export function createEditor(host) {
     propBox.replaceChildren();
     if (!selected.length) return void propBox.append(...levelPanel());
     if (selected.length > 1) {
-      propBox.append(el('h3', {}, `${selected.length} itens`), btn('Duplicar (Ctrl+D)', '', () => duplicate()), btn('Apagar (Del)', '', () => removeItems(), 'danger'));
+      propBox.append(el('h3', {}, tl('{n} itens', { n: selected.length })), btn('Duplicar (Ctrl+D)', '', () => duplicate()), btn('Apagar (Del)', '', () => removeItems(), 'danger'));
       return;
     }
     const it = itemOf(selected[0]);
@@ -1014,7 +1015,7 @@ export function createEditor(host) {
         } }))));
     propBox.append(el('h3', {}, T.label));
     propBox.append(el('div', { class: 'row gz' },
-      ...[['translate', '✥'], ['rotate', '⟳'], ['scale', '⤢']].map(([m, l]) => btn(l, `Alça de ${m === 'translate' ? 'mover' : m === 'rotate' ? 'girar' : 'esticar'} (avançado)`, () => ((gizmo = gizmo === m ? null : m), syncGizmo(), fillProps()), `sm${gizmo === m ? ' on' : ''}`))));
+      ...[['translate', '✥'], ['rotate', '⟳'], ['scale', '⤢']].map(([m, l]) => btn(l, tl(m === 'translate' ? 'Alça de mover (avançado)' : m === 'rotate' ? 'Alça de girar (avançado)' : 'Alça de esticar (avançado)'), () => ((gizmo = gizmo === m ? null : m), syncGizmo(), fillProps()), `sm${gizmo === m ? ' on' : ''}`))));
     propBox.append(vec('Posição', it.p, 'p'));
     if (it.s) propBox.append(vec('Tamanho', it.s, 's'));
     if (it.r) propBox.append(vec('Rotação (°)', it.r, 'r', 5));
@@ -1045,11 +1046,11 @@ export function createEditor(host) {
       el('label', { class: 'f' }, el('span', {}, 'Música'), el('select', { onchange: (e) => set('music', e.target.value) }, [['lab', 'Laboratório'], ['labTense', 'Tensa']].map(([v, l]) => el('option', { value: v, selected: v === c.music }, l)))),
       el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: c.autoLight !== false, onchange: (e) => set('autoLight', e.target.checked) }), 'Luzes de teto automáticas'),
       el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: !!c.relogio, onchange: (e) => set('relogio', e.target.checked) }), 'Relógio do tempo (tecla 2, portal temporal)'),
-      el('p', { class: 'note' }, `${doc.chamber.open.length} células · ${doc.items.length} itens · prova: ${st === 'none' ? 'nenhuma' : st === 'valid' ? 'válida ✔' : 'desatualizada ⚠'}`),
+      el('p', { class: 'note' }, tl('{c} células · {n} itens · prova: {p}', { c: doc.chamber.open.length, n: doc.items.length, p: tl(st === 'none' ? 'nenhuma' : st === 'valid' ? 'válida ✔' : 'desatualizada ⚠') })),
       el('div', { class: 'row' },
         btn('Importar .json', '', () => importDialog()),
         btn('Apagar nível', 'Remove do navegador', () => {
-          if (confirm(`Apagar “${doc.name}” de vez?`)) {
+          if (confirm(tl('Apagar “{name}” de vez?', { name: doc.name }))) {
             store.remove(doc.id);
             exit(true);
           }
@@ -1062,10 +1063,10 @@ export function createEditor(host) {
       try {
         const d = await store.importFile(inp.files[0]);
         store.save(d);
-        host.toast(`“${d.name}” importado: aparece em Meus níveis.`);
+        host.toast(tl('“{name}” importado: aparece em Meus níveis.', { name: d.name }));
         open(d.id);
       } catch (err) {
-        host.toast(`Não deu para importar: ${err.message}`);
+        host.toast(tl('Não deu para importar: {msg}', { msg: err.message }));
       }
     });
     inp.click();
@@ -1323,7 +1324,7 @@ export function createEditor(host) {
       hover = chamberTarget(mouseRay(e));
       drawHover(hover);
       const t = hover;
-      setStatus(t ? (buildTool === 'paint' ? `Face ${['leste', 'oeste', 'teto', 'chão', 'sul', 'norte'][t.face]} da célula ${t.cell.join(', ')}` : `Célula ${t.cell.join(', ')} (andar ${t.cell[1] + 1})`) : '');
+      setStatus(t ? (buildTool === 'paint' ? tl('Face {f} da célula {c}', { f: tl(['leste', 'oeste', 'teto', 'chão', 'sul', 'norte'][t.face]), c: t.cell.join(', ') }) : tl('Célula {c} (andar {n})', { c: t.cell.join(', '), n: t.cell[1] + 1 })) : '');
     } else if (armed) updateGhost(e);
   }
   function onWheel(e) {
@@ -1331,7 +1332,7 @@ export function createEditor(host) {
     e.preventDefault();
     if (mouse.rmb) {
       cam.speed = Math.max(1, Math.min(80, cam.speed * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
-      setStatus(`velocidade de voo ${cam.speed.toFixed(0)} m/s`);
+      setStatus(tl('velocidade de voo {v} m/s', { v: cam.speed.toFixed(0) }));
       return;
     }
     const d = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(cam.pitch, cam.yaw, 0, 'YXZ'));

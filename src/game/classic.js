@@ -10,10 +10,11 @@
 
 import { northWallWithExit } from './levels.js';
 import { portalGun } from './models.js';
+import { tl } from './i18n.js';
 
 function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`TESTE ${code}`, 110, 150],
+    [tl('TESTE {c}', { c: code }), 110, 150],
     [name, 76, 270, '#1565c0'],
     [line2, 40, 380, '#55575c', 'Arial, sans-serif'],
     ['BATERIA CLÁSSICA · LABORATÓRIO ANTÍPODA', 30, 455, '#8a8c90', 'Arial, sans-serif'],

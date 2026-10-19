@@ -2,6 +2,7 @@
 // de partida (ou de um ponto escolhido) e diz se o elevador de saída entra.
 
 import * as THREE from 'three';
+import { tl, num } from '../../i18n.js';
 import { reach, reached } from './reach.js';
 
 const fmt = (n) => String(n);
@@ -28,7 +29,7 @@ export function createReachTool(ctx) {
     info,
   );
   function sync() {
-    pickBtn.textContent = S.picking ? 'Clique no cenário…' : S.start ? `Ponto de partida: ${S.start.toArray().map((v) => v.toFixed(1)).join(', ')} (trocar)` : 'Partir do ponto de partida do nível (trocar…)';
+    pickBtn.textContent = S.picking ? 'Clique no cenário…' : S.start ? tl('Ponto de partida: {p} (trocar)', { p: S.start.toArray().map((v) => v.toFixed(1)).join(', ') }) : 'Partir do ponto de partida do nível (trocar…)';
     pickBtn.classList.toggle('on', S.picking);
   }
   function clear() {
@@ -65,13 +66,13 @@ export function createReachTool(ctx) {
     last = r;
     draw(r);
     const exits = doc.items.filter((i) => i.type === 'exit');
-    const lines = [`${r.cells.length} posições alcançáveis${r.truncated ? ' (busca cortada: o nível é grande demais)' : ''}.`];
+    const lines = [tl(r.truncated ? '{n} posições alcançáveis (busca cortada: o nível é grande demais).' : '{n} posições alcançáveis.', { n: r.cells.length })];
     for (const e of exits) {
       const ok = reached(r.cells, new THREE.Vector3(...e.p), 1.6, 1.4);
       lines.push(ok ? '✔ O elevador de saída é alcançável.' : '✖ O elevador de saída NÃO é alcançável com o que o jogador tem aqui (talvez falte um portal, uma porta aberta por botão ou um cubo).');
     }
     const unreach = doc.items.filter((i) => ['button', 'pedestal', 'cube'].includes(i.type) && !reached(r.cells, new THREE.Vector3(...i.p), 1.6, 1.4));
-    if (unreach.length) lines.push(`Fora do alcance: ${unreach.map((i) => `${i.type === 'button' ? 'botão' : i.type === 'cube' ? 'cubo' : 'pedestal'} em ${i.p.map((v) => v.toFixed(0)).join(', ')}`).join('; ')}.`);
+    if (unreach.length) lines.push(tl('Fora do alcance: {list}.', { list: unreach.map((i) => tl('{what} em {p}', { what: tl(i.type === 'button' ? 'botão' : i.type === 'cube' ? 'cubo' : 'pedestal'), p: i.p.map((v) => v.toFixed(0)).join(', ') })).join('; ') }));
     info.replaceChildren(...lines.map((t) => el('p', {}, t)));
   }
   function draw(r) {

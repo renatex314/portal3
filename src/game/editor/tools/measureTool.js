@@ -2,8 +2,9 @@
 // distância horizontal e diferença de altura (e quantos pulos/alturas de jogador isso é).
 
 import * as THREE from 'three';
+import { tl, num } from '../../i18n.js';
 
-const fmt = (n) => n.toFixed(2).replace('.', ',');
+const fmt = (n) => num(n, 2);
 
 export function createMeasureTool(ctx) {
   const { el, group } = ctx;
@@ -51,7 +52,7 @@ export function createMeasureTool(ctx) {
       group.add(l2);
       dot(a);
       dot(b);
-      list.append(el('p', {}, `${n + 1}: ${fmt(d.length())} m (horizontal ${fmt(h)} m · altura ${d.y >= 0 ? '+' : '−'}${fmt(Math.abs(d.y))} m · ${fmt(Math.abs(d.y) / 1.8)} jogadores de altura · ${fmt(h / 4.6)} s andando)`));
+      list.append(el('p', {}, tl('{n}: {d} m (horizontal {h} m · altura {y} m · {p} jogadores de altura · {s} s andando)', { n: n + 1, d: fmt(d.length()), h: fmt(h), y: (d.y >= 0 ? '+' : '−') + fmt(Math.abs(d.y)), p: fmt(Math.abs(d.y) / 1.8), s: fmt(h / 4.6) })));
     });
     if (pending) dot(pending, 0x66ff99);
     ctx.layer(group);

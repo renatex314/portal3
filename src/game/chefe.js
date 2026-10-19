@@ -15,6 +15,7 @@ import { northWallWithExit } from './levels.js';
 import { canvas, heightToNormal } from './textures.js';
 import { dressHall, PANEL_Z, PANEL_X } from './chefeSala.js';
 import { RocketTurret, Rocket, explosion, coreModel } from './campaign/boss.js';
+import { tl } from './i18n.js';
 
 const SK = new THREE.Vector3(0, 26, -55); // centro do crânio
 const CRANIUM = { c: new THREE.Vector3(0, 1.2, -0.8), r: new THREE.Vector3(6.05, 5.65, 6.65) }; // elipsoide (local)
@@ -653,7 +654,7 @@ function createFight(ctx, S) {
 // ------------------------------------------------------------------ fase
 function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`CHEFE ${code}`, 110, 150],
+    [tl('CHEFE {c}', { c: code }), 110, 150],
     [name, 70, 270, '#b71c1c'],
     [line2, 40, 380, '#55575c', 'Arial, sans-serif'],
     ['SÉRIE CHEFES · LABORATÓRIO ANTÍPODA', 30, 455, '#8a8c90', 'Arial, sans-serif'],

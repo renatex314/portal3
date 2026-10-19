@@ -10,6 +10,7 @@
 // em y = −4. Ângulos dos painéis: a normal da face é para onde eles atiram.
 
 import { lava, pillar, lamps } from './hard.js';
+import { tl } from './i18n.js';
 
 export const M = (n, def) => ({ ...def, id: 300 + n, n, code: `M${String(n + 1).padStart(2, '0')}`, series: 'momentum', music: def.music ?? 'labEpic', heat: def.heat ?? false });
 
@@ -17,7 +18,7 @@ export const D = Math.SQRT1_2;
 
 export function sign(w, x, y, z, rotY, code, name, line2) {
   w.sign(x, y, z, rotY, [
-    [`MOMENTO ${code}`, 104, 150],
+    [tl('MOMENTO {c}', { c: code }), 104, 150],
     [name, 76, 270, '#7b1fa2'],
     [line2, 40, 380, '#55575c', 'Arial, sans-serif'],
     ['SÉRIE MOMENTO · LABORATÓRIO ANTÍPODA', 30, 455, '#8a8c90', 'Arial, sans-serif'],

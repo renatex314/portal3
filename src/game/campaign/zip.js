@@ -2,6 +2,8 @@
 // central e, sob demanda, cada arquivo — guardado ou comprimido (deflate),
 // descomprimido pelo próprio navegador (DecompressionStream).
 
+import { tl } from '../i18n.js';
+
 const SIG_END = 0x06054b50;
 const SIG_CENTRAL = 0x02014b50;
 const SIG_LOCAL = 0x04034b50;
@@ -59,7 +61,7 @@ export async function openZip(blob) {
       const raw = await slice(blob, start, e.csize);
       if (e.method === 0) return raw;
       if (e.method === 8) return inflateRaw(raw);
-      throw new Error(`compressão ${e.method} não suportada no .zip`);
+      throw new Error(tl('compressão {m} não suportada no .zip', { m: e.method }));
     },
   };
 }

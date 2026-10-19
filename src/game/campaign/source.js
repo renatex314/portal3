@@ -5,6 +5,7 @@
 // nenhum e nada da Valve vem junto com o site.
 
 import { openZip } from './zip.js';
+import { tl } from '../i18n.js';
 
 let backend = null;
 
@@ -318,6 +319,6 @@ export async function readFile(path) {
 export async function readRange(path, start, len) {
   if (!len) return new Uint8Array(0);
   const b = backend ? await backend.range(path, start, len) : null;
-  if (!b) throw new Error(`não consegui ler ${path}`);
+  if (!b) throw new Error(tl('não consegui ler {path}', { path }));
   return b;
 }
