@@ -1104,6 +1104,7 @@ export class Chronos {
         const a = d.track[0].p;
         const v = d.v0.clone();
         const np = this.ctx.energy.spawnFree(a.clone(), v, d.life ?? 10);
+        d.liveFrom = Math.min(d.liveFrom ?? Infinity, d.from);
         np.cooldown = 0.15;
         if (d.uid) np.uid = d.uid;
         this.ctx.fx.launch?.(a.clone());
@@ -1287,10 +1288,13 @@ export class Chronos {
     let t = 0;
     for (; t <= dur + 1e-9; t += dt) {
       if (t >= next - 1e-9) {
-        track.push({ t: t0 + t, p: pos.clone() });
+        // `v` e `life` próprios da bola (fora da dilatação): é com eles que ela renasce no meio do voo
+        track.push({ t: t0 + t, p: pos.clone(), v: vel.clone(), life });
         next += RATE;
       }
-      life -= dt;
+      // campo de dilatação ativo ali naquele instante: a bola anda e envelhece no tempo dele
+      const ks = this.ctx.timeScaleAt?.(pos, t0 + t) ?? 1;
+      life -= dt * ks;
       if (life <= 0) return { track, caught, reenter, alive: false };
       // você estava ali naquele instante?
       const S = this.samples[this.indexAt(t0 + t)];
@@ -1300,7 +1304,7 @@ export class Chronos {
         if (Math.abs(d.x) < half.x + R && Math.abs(d.y) < half.y + R && Math.abs(d.z) < half.z + R)
           return { track, caught, reenter, paradox: 'a bola mandada ao passado teria acertado você', at: pos.clone() };
       }
-      let rest = vel.length() * dt;
+      let rest = vel.length() * dt * ks;
       while (rest > 1e-5) {
         const step = Math.min(rest, 0.12);
         rest -= step;
@@ -1434,6 +1438,8 @@ export class Chronos {
     let n = 0;
     for (const d of this.ballDoubles ?? []) {
       if (T < d.from - 1e-6 || T >= d.to) continue;
+      // a partir de `liveFrom` ela já é uma bola de verdade na gravação (aparece sozinha): sem desenho duplicado
+      if (T >= (d.liveFrom ?? Infinity) - 1e-6) continue;
       const i = Math.max(0, Math.min(d.track.length - 1, Math.floor((T - d.from) / RATE)));
       let m = this.ballMeshes[n];
       if (!m) {
@@ -1481,8 +1487,10 @@ export class Chronos {
         track.push({ t: Td + t, p: pos.clone(), q: quat.clone() });
         next += RATE;
       }
-      vel.addScaledVector(g, dt);
-      const move = vel.length() * dt;
+      // dentro de um campo de dilatação ativo naquele instante, o cubo vive no tempo do campo
+      const ks = this.ctx.timeScaleAt?.(pos, Td + t) ?? 1;
+      vel.addScaledVector(g, dt * ks);
+      const move = vel.length() * dt * ks;
       if (move > 1e-6) {
         const dir = vel.clone().normalize();
         const hit = world.raycast(pos, dir, move + h);
@@ -1503,7 +1511,17 @@ export class Chronos {
       }
     }
     this.doubles ??= [];
-    this.doubles.push({ k, prop, from: Td, to: this.tw, track, mesh: null, box: null });
+    // desde quando este objeto existe na história: antes disso não há o "mais novo" dele, só o duplo
+    // (anotado agora — nas voltas seguintes a gravação daquele trecho é refeita e já o incluiria)
+    let born = Infinity;
+    for (const s of this.samples) {
+      const pr = s.w?.props?.[k];
+      if (pr && !pr.gone) {
+        born = s.t;
+        break;
+      }
+    }
+    this.doubles.push({ k, prop, from: Td, to: this.tw, born, track, mesh: null, box: null });
     this.free.add(prop); // sai de qualquer trilho de gravação
     this.driven.delete(prop);
     prop.place(pos, quat, { x: vel.x, y: vel.y, z: vel.z });
@@ -1552,7 +1570,9 @@ export class Chronos {
       // o objeto ainda não existia nessa parte da história (veio depois): só o duplo existe;
       // no fim do intervalo, o objeto real reaparece onde o duplo chegou
       const younger = sample?.props?.[d.k];
-      if (st && (!younger || younger.gone) && !d.prop.gone && !d.prop.held) {
+      const youngerHere = d.born !== undefined ? this.tw >= d.born - 1e-6 : younger && !younger.gone;
+      // (antes de o duplo sair do vermelho também: o objeto ainda nem existe nessa parte da história)
+      if ((st || this.tw < d.from) && !youngerHere && !d.prop.gone && !d.prop.held) {
         this.ctx.fx.changed?.(d.prop);
         d.prop.vanish();
         d.hid = true;
@@ -1890,13 +1910,17 @@ export class Chronos {
     this.pendingBalls = [];
     for (const d of this.ballDoubles ?? []) {
       if (this.tw < d.from - 1e-6 || this.tw >= d.to) continue;
-      const k = Math.max(0, Math.min(d.track.length - 2, Math.floor((this.tw - d.from) / RATE)));
-      const a = d.track[k].p;
-      const b = d.track[k + 1]?.p ?? a;
-      const v = b.clone().sub(a).divideScalar(RATE);
-      if (v.lengthSq() > 0.01) this.pendingBalls.push({ pos: a.clone(), vel: v, life: Math.max(1, (d.life ?? 10) - (this.tw - d.from)), uid: d.uid });
+      const k = Math.max(0, Math.min(d.track.length - 1, Math.round((this.tw - d.from) / RATE)));
+      const s = d.track[k];
+      // velocidade e vida gravadas na simulação (a diferença entre dois quadros erra num quique e,
+      // dentro de um campo de dilatação, daria a velocidade lenta como se fosse a de verdade)
+      const v = s.v?.clone() ?? (d.track[k + 1] ?? s).p.clone().sub(d.track[Math.max(0, k - 1)].p).divideScalar(RATE * 2);
+      if (v.lengthSq() > 1e-4) {
+        this.pendingBalls.push({ pos: s.p.clone(), vel: v, life: Math.max(1, s.life ?? (d.life ?? 10) - (this.tw - d.from)), uid: d.uid });
+        d.liveFrom = Math.min(d.liveFrom ?? Infinity, this.tw);
+      }
     }
-    this.ballDoubles = (this.ballDoubles ?? []).filter((d) => d.from > this.tw);
+    // (o registro fica: voltando de novo, a mesma bola sai do vermelho de novo — é história, vale em todas as voltas)
     // 5) os portais se desfazem; o mundo "rebobina" ao seu redor
     portals.fizzle();
     this.paused = false;
@@ -1917,6 +1941,7 @@ export class Chronos {
       next: this.next,
       arrival: this.arrival,
       w: this.snapshot(),
+      extra: this.ctx.checkpointExtra?.(), // estado do jogo fora do relógio (campos de dilatação)
       player: this.pre,
       // os SEUS portais (o salto pode ter sido pelo azul de uma versão passada, e aí os
       // seus podem nem estar abertos); `entered`: o azul por onde você entrou
@@ -2033,7 +2058,15 @@ export class Chronos {
       if (pose.grounded && pose.up > 0) {
         const feet = pose.p.clone().add(new V3(0, -half.y + 0.25, 0));
         const hit = world.raycast(feet, new V3(0, -1, 0), 0.75);
-        const onProp = this.props().some((p) => !p.gone && Math.abs(p.pos.x - pose.p.x) < 0.5 && Math.abs(p.pos.z - pose.p.z) < 0.5 && Math.abs(p.pos.y + 0.3 - (pose.p.y - half.y)) < 0.5);
+        const under = (q, top) => Math.abs(q.x - pose.p.x) < 0.5 && Math.abs(q.z - pose.p.z) < 0.5 && Math.abs(q.y + top - (pose.p.y - half.y)) < 0.5;
+        // em cima de um cubo — real ou o duplo de um cubo mandado ao passado (enquanto ele existe na história,
+        // o real fica escondido e quem sustenta é o duplo)
+        const onProp =
+          this.props().some((p) => !p.gone && under(p.pos, 0.3)) ||
+          (this.doubles ?? []).some((d) => {
+            const st = this.doubleAt(d, this.tw);
+            return st && under(st.p, d.prop.half?.y ?? 0.3);
+          });
         why ??= test('floor', !hit && !onProp, 0.35, 'o chão do seu passado sumiu');
       }
       if (why) {
@@ -2060,6 +2093,7 @@ export class Chronos {
     this.next = cp.next;
     this.arrival = cp.arrival;
     this.restore(cp.w);
+    this.ctx.onRollback?.(cp.extra);
     // os seus portais como estavam (só os que estavam abertos: sem portal "fantasma" sem parede)
     for (const [P, f] of [
       [portals.blue, cp.blue],

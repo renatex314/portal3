@@ -12,8 +12,12 @@ const EYE_CROUCH = 0.25; // olho agachado: 0,7 m acima dos pés
 const WALK = 4.6;
 const JUMP = 4.6;
 const MAX_FALL = 32;
+const ROLL_MAX = (1.6 * Math.PI) / 180; // inclinação lateral andando de lado na velocidade normal
 
 const _ID = new THREE.Quaternion();
+const _right = new THREE.Vector3();
+const _zAxis = new THREE.Vector3(0, 0, 1);
+const _rollQ = new THREE.Quaternion();
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 
@@ -31,6 +35,7 @@ export class Player {
     this.cooldown = 0;
     this.groundTime = 0;
     this.bob = 0;
+    this.roll = 0; // inclinação lateral da câmera ao andar de lado (rad)
     this.crouched = false;
     this.eyeOff = EYE; // altura do olho acima do centro (anda suave ao agachar)
     // depois de um portal, a câmera começa exatamente onde a vista do portal
@@ -345,6 +350,11 @@ export class Player {
     const pos = this.eye().add(this.viewOffset).add(new THREE.Vector3(0, b * this.upSign, 0));
     if (shakeAmt > 0) pos.add(new THREE.Vector3((Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt, (Math.random() - 0.5) * shakeAmt));
     const quat = this.viewQuaternion();
+    // andando de lado a câmera inclina levemente para o lado do movimento (como no Half-Life/Black Mesa)
+    const right = _right.set(1, 0, 0).applyQuaternion(quat);
+    const side = THREE.MathUtils.clamp(this.vel.dot(right) / WALK, -1.5, 1.5);
+    if (dt > 0) this.roll += (-side * ROLL_MAX - this.roll) * (1 - Math.exp(-dt * 9));
+    if (Math.abs(this.roll) > 1e-5) quat.multiply(_rollQ.setFromAxisAngle(_zAxis, this.roll));
     // câmera atrás da boca de um portal (cabeça entrou antes do corpo, ou logo
     // depois da passagem): desenha do ponto equivalente do outro lado
     const P = this.portals?.behind(pos);

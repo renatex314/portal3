@@ -19,6 +19,7 @@ export const SAMPLES = {
   tick: ['tick.wav'], // roda do mouse com o tempo parado (gravação do jogador)
   turretFire: ['turret_fire.wav'], // rajada da torreta, em laço enquanto ela atira (gravação do jogador)
   slowHum: ['slow_mo_hum.wav'], // zumbido em laço durante o tempo lento (gravação do jogador)
+  thunder: ['thunder_clap.wav'], // trovão de verdade: o campo de dilatação nasce (CC BY 4.0, ver LEIA-ME)
   open: seq('forceField', 5), // portal abrindo; pegar/soltar
   fail: seq('impactMetal', 5), // superfície que não aceita portal
   pass: ['spaceEngineLow_000.ogg', 'spaceEngineLow_003.ogg'], // atravessar um portal
@@ -505,6 +506,59 @@ export class Sfx {
       },
       0.5,
     ).set(v);
+  }
+
+  /** trovão curto (o campo de dilatação nasce): gravação real; sem ela, estalo + ronco + baque sintetizados */
+  thunder(vol = 1) {
+    if (!this.ok) return;
+    if (this.sample('thunder', { vol: 0.85 * vol, rate: 1, jitter: 0.03, dest: this.sound.master })) return;
+    const t = this.t;
+    const m = this.sound.master;
+    this._noise(t, 0.09, 'highpass', 5200, 1800, 0.55 * vol, 0.7, m);
+    this._noise(t + 0.03, 0.16, 'bandpass', 3200, 600, 0.45 * vol, 0.9, m);
+    this._noise(t + 0.05, 1.3, 'lowpass', 1100, 70, 0.6 * vol, 1.2, m);
+    this._noise(t + 0.32, 0.8, 'lowpass', 500, 60, 0.35 * vol, 1.4, m);
+    this._osc('sine', 75, 30, t + 0.02, 1.1, 0.45 * vol, 0.004, m);
+    this.sample('boom', { vol: 0.45 * vol, rate: 0.7, delay: 0.03, dest: m });
+  }
+
+  /**
+   * carga do campo de dilatação temporal (k de 0 a 1): o mesmo zumbido do tempo lento, num laço
+   * próprio, começando abafado e abrindo com a carga (sintetizado enquanto a gravação não carrega)
+   */
+  dilateCharge(v, k = 0) {
+    if (!this.ok) return;
+    const open = (f, k, t) => {
+      if (f && Number.isFinite(k)) f.frequency.setTargetAtTime(350 + 7600 * k * k, t, 0.12);
+    };
+    if (this.ready && this._sloop('dilChargeL', 'slowHum', v, { max: 0.95, boost: 1.1, fade: 0.4, dest: this.sound.master, filter: { type: 'lowpass', freq: 350, q: 1.4 }, tune: open, extra: k })) return;
+    this.loop(
+      'dilCharge',
+      (ctx, out) => {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = 40;
+        const f = ctx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = 300;
+        f.Q.value = 6;
+        const o2 = ctx.createOscillator();
+        o2.frequency.value = 80;
+        o.connect(f).connect(out);
+        o2.connect(out);
+        o.start();
+        o2.start();
+        return {
+          tune: (k, t) => {
+            if (!Number.isFinite(k)) return; // silenceLoops só baixa o volume
+            o.frequency.setTargetAtTime(40 + 120 * k, t, 0.1);
+            o2.frequency.setTargetAtTime(80 + 400 * k * k, t, 0.1);
+            f.frequency.setTargetAtTime(300 + 2400 * k, t, 0.1);
+          },
+        };
+      },
+      0.35,
+    ).set(v, k);
   }
 
   /** vento forte (vácuo do portal para a Lua) */

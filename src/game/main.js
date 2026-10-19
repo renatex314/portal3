@@ -512,7 +512,7 @@ function animateGun(dt, t) {
   u.tipGlow.material.color.copy(u.base).multiplyScalar(0.35);
   u.tipGlow.scale.setScalar(0.05 + Math.random() * 0.012 + recoil * 0.14 + GUN.open * 0.03);
   // efeitos da Mark III (plasma, arcos entre as garras, anel holográfico, onda de choque)
-  u.animate?.(dt, t, { recoil, open: GUN.open, heat: GUN.heat, base: u.base, slow: clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), conduitColor: u.conduit.uniforms.uColor.value, leds: u.leds });
+  u.animate?.(dt, t, { recoil, open: GUN.open, heat: GUN.heat, base: u.base, slow: Math.max(clamp((1 - SLOW.k) / (1 - SLOW.scale), 0, 1), fieldGlow()), conduitColor: u.conduit.uniforms.uColor.value, leds: u.leds });
   // painel holográfico (redesenha ~12 vezes por segundo)
   GUN.holoT -= dt;
   if (GUN.holoT <= 0) {
@@ -907,6 +907,7 @@ function loadLevel(i, silent = false) {
     startLevel(i);
     return;
   }
+  resetField();
   clearLevel();
   levelIdx = i;
   level = LEVELS[i];
@@ -993,6 +994,13 @@ function loadLevel(i, silent = false) {
         t: () => clock.elapsedTime,
         dtReal: () => realDt,
         fx: chronosFx,
+        // campos de dilatação criados depois de um ponto de controle somem se o loop for desfeito
+        checkpointExtra: () => ({ fields: FIELD.events.length }),
+        // simulações do relógio (bola/cubo mandados ao passado): passo de tempo num campo ativo no instante T
+        timeScaleAt: (p, T) => (FIELD.events.some((ev) => T >= ev.t0 - 1e-6 && T < ev.t0 + ev.life && p.distanceTo(ev.center) < FIELD.R) ? 1 / FIELD.rate : 1),
+        onRollback: (x) => {
+          if (x) FIELD.events.length = Math.min(FIELD.events.length, x.fields);
+        },
       })
     : null;
   portals.pastView = relogio ? { begin: (d) => relogio.beginPast(d), end: () => relogio.endPast() } : null;
@@ -1316,6 +1324,7 @@ function updateGems() {
 let deaths = 0;
 function die() {
   deaths++;
+  resetField();
   relogio?.clear();
   health = 100;
   sfx.death();
@@ -1461,15 +1470,31 @@ canvas.addEventListener('mousedown', (e) => {
     if (running && !completed) lock();
     return;
   }
-  // segurando um objeto: o botão esquerdo arremessa (e não sai portal)
-  if (e.button === 0) held ? release(true) : shoot('blue');
-  if (e.button === 2 && !held) shoot('orange');
+  if (e.button === 0 || e.button === 2) {
+    mouseHeld[e.button] = true;
+    // segurando um objeto: o botão esquerdo arremessa (e não sai portal)
+    if (e.button === 0 && held) return release(true);
+    // os dois botões juntos: carga do campo de dilatação (o portal que esperava não sai)
+    if (mouseHeld[0] && mouseHeld[2]) {
+      pendingShot = null;
+      return;
+    }
+    if (e.button === 2 && held) return;
+    // o portal sai num instante (ou ao soltar): dá tempo de o outro botão chegar junto
+    pendingShot = { which: e.button === 0 ? 'blue' : 'orange', at: performance.now() };
+  }
   if (e.button === 1) {
     e.preventDefault();
     toggleSlowmo();
   }
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
+window.addEventListener('mouseup', (e) => {
+  if (e.button !== 0 && e.button !== 2) return;
+  mouseHeld[e.button] = false;
+  if (pendingShot && pendingShot.which === (e.button === 0 ? 'blue' : 'orange')) firePending();
+});
+window.addEventListener('blur', () => (mouseHeld[0] = mouseHeld[2] = false));
 // zoom pela rodinha: para cima liga e aproxima; para baixo afasta e, no mínimo, desliga.
 // A rolagem é somada até um "degrau" (o trackpad manda dezenas de eventos pequenos)
 let wheelSum = 0;
@@ -1564,6 +1589,120 @@ function toggleSlowmo(force) {
   ring.classList.add('pulse');
 }
 
+// ------------------------------------------------------------------ campo de dilatação temporal
+// Os dois botões do mouse seguros por 5 s criam um campo PARADO onde você está. Dentro dele o
+// tempo passa 10× mais devagar, como perto de um horizonte de eventos: 2 s de quem está dentro
+// são 20 s lá fora. Você (e o que estiver dentro: cubos, bolas de energia) anda no seu ritmo
+// enquanto o mundo corre. Não é para usar toda hora: a carga é longa de propósito.
+const FIELD = { need: 5, rate: 10, R: 3.2, life: 20, charge: 0, on: false, left: 0, center: new THREE.Vector3(), armed: true, shake: 0, events: [], ev: null, lastTw: 0 };
+const CHORD_MS = 90;
+const mouseHeld = { 0: false, 2: false };
+let pendingShot = null; // portal esperando um instante para ver se o outro botão vem junto
+let pScale = 1; // passo do jogador em relação ao do mundo (1/5 dentro do campo)
+function firePending() {
+  const ps = pendingShot;
+  pendingShot = null;
+  if (ps && running && !paused && !completed) shoot(ps.which);
+}
+const inField = (p) => FIELD.on && p.distanceTo(FIELD.center) < FIELD.R;
+/** a arma brilha como no tempo lento: cresce com a carga e fica cheia dentro do campo */
+const fieldGlow = () => (inField(player.pos) ? 1 : FIELD.charge / FIELD.need);
+/** desfaz o campo (fim natural ou troca de fase/morte/viagem no tempo: `instant` sem devolver velocidades) */
+function endField(instant = false) {
+  if (!FIELD.on) return;
+  FIELD.on = false;
+  for (const c of [...cubes, ...turrets]) {
+    if (c.dilated && !instant) {
+      const v = c.body.linvel();
+      c.body.setLinvel({ x: v.x * FIELD.rate, y: v.y * FIELD.rate, z: v.z * FIELD.rate }, true);
+    }
+    if (c.dilated) c.body.wakeUp();
+    c.dilated = false;
+  }
+  if (!instant) sfx.slowOut();
+}
+/** tudo do campo some (morte, troca de fase): inclusive o que estava gravado na linha do tempo */
+function resetField() {
+  endField(true);
+  FIELD.events = [];
+  FIELD.ev = null;
+  FIELD.lastTw = 0;
+  FIELD.charge = 0;
+}
+/**
+ * Com o relógio, o campo é parte da linha do tempo: existe enquanto o tempo do mundo estiver
+ * dentro de uma criação gravada. Voltando no tempo, ele reaparece na hora e no lugar em que a
+ * sua versão do passado o criou. Num pulo no tempo as velocidades vêm do retrato do relógio:
+ * só as marcas de "dentro do campo" são refeitas.
+ */
+function syncFieldTimeline(dt) {
+  if (!relogio) return;
+  const tw = relogio.tw;
+  const jumped = tw < FIELD.lastTw - 1e-6 || tw - FIELD.lastTw > dt + 0.05;
+  FIELD.lastTw = tw;
+  let e = null;
+  for (const ev of FIELD.events) if (tw >= ev.t0 - 1e-6 && tw < ev.t0 + ev.life) e = ev;
+  if (e) {
+    if (!FIELD.on && !jumped) {
+      // a versão do passado criando o campo agora (o trovão mais fraco quanto mais longe)
+      sfx.thunder(Math.max(0.35, 1 - player.pos.distanceTo(e.center) / 20));
+      if (player.pos.distanceTo(e.center) < 12) FIELD.shake = 0.7 * Math.max(0.3, 1 - player.pos.distanceTo(e.center) / 12);
+    }
+    FIELD.on = true;
+    FIELD.ev = e;
+    FIELD.center.copy(e.center);
+    FIELD.left = e.t0 + e.life - tw;
+  } else if (FIELD.on) endField(jumped);
+  if (jumped) for (const c of [...cubes, ...turrets]) c.dilated = inField(c.pos) && !c.held && !c.gone;
+}
+/** carga (tempo real) e o efeito na tela; chamado uma vez por quadro */
+function updateField(realDt, live) {
+  if (pendingShot && performance.now() - pendingShot.at > CHORD_MS) firePending();
+  const both = live && mouseHeld[0] && mouseHeld[2] && !held;
+  if (!both) FIELD.armed = true; // precisa soltar antes de carregar de novo
+  if (both && FIELD.armed && !FIELD.on) {
+    FIELD.charge += realDt;
+    if (FIELD.charge >= FIELD.need) {
+      FIELD.charge = 0;
+      FIELD.armed = false;
+      FIELD.on = true;
+      FIELD.left = FIELD.life;
+      FIELD.center.copy(player.pos);
+      // com o relógio, a criação entra na linha do tempo: voltando, a sua versão do passado a cria de novo
+      if (relogio) {
+        FIELD.ev = { t0: relogio.tw, center: player.pos.clone(), life: FIELD.life };
+        FIELD.events.push(FIELD.ev);
+        FIELD.lastTw = relogio.tw;
+      }
+      sfx.thunder();
+      post.warp = 1;
+      FIELD.shake = 0.7; // a visão treme quando a bolha nasce
+    }
+  } else FIELD.charge = Math.max(0, FIELD.charge - realDt * 3);
+  FIELD.shake = Math.max(0, FIELD.shake - realDt);
+  const k = FIELD.charge / FIELD.need;
+  sfx.dilateCharge(live && k > 0 ? 0.3 + 0.7 * k : 0, k);
+  sfx.blackHole(live && inField(player.pos) ? 0.8 : FIELD.on ? 0.25 : 0);
+  post.dilate = Math.max(k * 0.6, inField(player.pos) ? 1 : 0);
+  // a bolha é uma lente gravitacional (fx.js): nasce rápido e vai se esmaecendo nos últimos 60% da vida
+  post.lens.field = FIELD.on ? { center: FIELD.center, R: FIELD.R, fade: Math.min(1, FIELD.left / (FIELD.life * 0.6), (FIELD.life - FIELD.left) * 2) } : null;
+  document.body.classList.toggle('dilated', live && inField(player.pos));
+  const g = $('field');
+  g.hidden = !(k > 0 || FIELD.on);
+  $('field-v').textContent = FIELD.on ? `${(FIELD.left / FIELD.rate).toFixed(1).replace('.', ',')} s` : `${Math.round(k * 100)}%`;
+  $('field-fill').style.transform = `scaleX(${FIELD.on ? FIELD.left / FIELD.life : k})`;
+  g.classList.toggle('on', FIELD.on);
+}
+
+/** um quadro de jogo: dentro do campo o mundo dá `rate` passos e o jogador anda 1/rate em cada */
+function tick(realDt, dt, t) {
+  updateField(realDt, true);
+  if (!inField(player.pos)) return update(dt, t);
+  pScale = 1 / FIELD.rate;
+  for (let i = 0; i < FIELD.rate && inField(player.pos); i++) update(dt, t);
+  pScale = 1;
+}
+
 function updateSlowmo(realDt) {
   if (SLOW.on) {
     SLOW.left -= realDt;
@@ -1612,6 +1751,7 @@ document.addEventListener('pointerlockchange', () => {
   paused = !locked;
   $('pause').hidden = locked || !running || completed;
   if (!$('pause').hidden) fillMapSelect();
+  if (level) $('pause-info').textContent = `${levelLabel(level)} · ${level.name} · ${fmt(levelTime)}`;
   $('back-editor').hidden = !testingMine;
   $('room-map-label').textContent = mp() ? 'Mapa da sala (muda para todos):' : 'Mapa:';
   document.body.classList.toggle('playing', locked);
@@ -1633,6 +1773,8 @@ function setAudio(music, voice) {
   if (!narrator.enabled) narrator.cancel();
   $('opt-music').classList.toggle('on', music);
   $('opt-voice').classList.toggle('on', narrator.enabled);
+  $('p-music').classList.toggle('on', music);
+  $('p-voice').classList.toggle('on', narrator.enabled);
 }
 
 // ------------------------------------------------------------------ editor de níveis
@@ -2085,6 +2227,11 @@ function crushed(dt) {
 }
 
 function update(dt, t) {
+  const pdt = dt * pScale; // tempo do jogador (menor dentro do campo de dilatação)
+  if (FIELD.on && !relogio) {
+    FIELD.left -= dt;
+    if (FIELD.left <= 0) endField();
+  }
   if (testingMine && !completed) recordRun(dt);
   data?.campaign?.runtime?.update(dt);
   updateBolts(dt, t);
@@ -2092,6 +2239,7 @@ function update(dt, t) {
   levelTime += dt;
   // relógio do tempo: 0 enquanto o mundo está parado ou voltando
   const wdt = relogio ? relogio.frame(dt) : dt;
+  syncFieldTimeline(wdt);
   const tv = relogio ? relogio.vt : t; // tempo visual do mundo (para quando ele para)
   world.update(tv, wdt);
   portals.update(t, dt);
@@ -2109,7 +2257,7 @@ function update(dt, t) {
 
   // ---- jogador
   if (assist) {
-    assist.t += dt / 0.5;
+    assist.t += pdt / 0.5;
     const k = Math.min(assist.t, 1);
     player.pos.lerpVectors(assist.from, assist.to, k * k * (3 - 2 * k));
     player.vel.set(0, 0, 0);
@@ -2125,10 +2273,10 @@ function update(dt, t) {
       const wish = new THREE.Vector3().addScaledVector(look, (input.f ? 1 : 0) - (input.b ? 1 : 0)).addScaledVector(right, (input.r ? 1 : 0) - (input.l ? 1 : 0));
       wish.addScaledVector(axis, -wish.dot(axis));
       if (wish.lengthSq() > 1e-4) flow.addScaledVector(wish.normalize(), 4.5);
-      player.vel.lerp(flow, 1 - Math.exp(-dt * 5));
+      player.vel.lerp(flow, 1 - Math.exp(-pdt * 5));
     }
     // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
-    player.update(dt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
+    player.update(pdt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
       // ciano temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
       if (relogio && P.partner.delta > 0) {
         relogio.jump(P);
@@ -2174,7 +2322,7 @@ function update(dt, t) {
   // passos: cadência pela velocidade de verdade (empurrado contra a parede, não pisa)
   const walkSpeed = player.vel.clone().projectOnPlane(UP).length();
   if (player.grounded && walkSpeed > 0.6) {
-    stepAcc += (dt * walkSpeed) / 4.6;
+    stepAcc += (pdt * walkSpeed) / 4.6;
     if (stepAcc > 0.42) {
       stepAcc = 0;
       sfx.step(player.ground?.mat, walkSpeed / 4.6);
@@ -2190,10 +2338,22 @@ function update(dt, t) {
     held.holdLocal = eye.clone().addScaledVector(fwd, holdDistance(eye, fwd));
     held.holdQuatLocal = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw).multiply(held.holdBase);
   }
+  for (const c of props) {
+    const inF = inField(c.pos) && !c.held && !c.gone;
+    // no tempo lento do campo a física acharia que está parado e o poria para dormir (e aí a gravidade some)
+    if (inF) c.body.wakeUp();
+    if (inF === !!c.dilated) continue;
+    const k = inF ? 1 / FIELD.rate : FIELD.rate;
+    const v = c.body.linvel();
+    const w = c.body.angvel();
+    c.body.setLinvel({ x: v.x * k, y: v.y * k, z: v.z * k }, true);
+    c.body.setAngvel({ x: w.x * k, y: w.y * k, z: w.z * k }, true);
+    c.dilated = inF;
+  }
   physics.step(
     dt,
     (p, h) => {
-      p.pre(h, gravityAt(p.prevCenter));
+      p.pre(h, p.dilated ? gravityAt(p.prevCenter).clone().multiplyScalar(1 / (FIELD.rate * FIELD.rate)) : gravityAt(p.prevCenter));
       if (p.held || !world.funnels.length) return;
       const f = frontier.flowAt(p.prevCenter);
       if (!f) return;
@@ -2248,6 +2408,7 @@ function update(dt, t) {
     relogio,
     sfx,
     hurt: (dps, h, dir) => {
+      h *= pScale; // o laser queima no tempo de quem está queimando
       health -= dps * h;
       hurtT = 0;
       hurtFlash = Math.min(1, hurtFlash + h * 3);
@@ -2365,6 +2526,7 @@ function update(dt, t) {
   tmpMax.copy(player.pos).add(player.half);
   energy.update(wdt, tv, world, portals, { min: tmpMin.clone(), max: tmpMax.clone() }, {
     launch: () => sfx.launch(),
+    timeScale: (p) => (inField(p) ? 1 / FIELD.rate : 1),
     caught: () => sfx.caught(),
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
@@ -2439,13 +2601,13 @@ function update(dt, t) {
       health -= shotsTaken * 6;
       hurtT = 0;
       hurtFlash = Math.min(1, hurtFlash + 0.25 * shotsTaken);
-    } else hurtT += dt;
-    if (hurtT > 2.5) health = Math.min(100, health + dt * 30);
+    } else hurtT += pdt;
+    if (hurtT > 2.5) health = Math.min(100, health + pdt * 30);
     if (health <= 0) die();
     $('health-bar').style.width = `${Math.max(health, 0)}%`;
     $('health').classList.toggle('low', health < 35);
   }
-  hurtFlash = Math.max(0, hurtFlash - dt * 1.8);
+  hurtFlash = Math.max(0, hurtFlash - pdt * 1.8);
   $('hurt').style.opacity = hurtFlash;
   // ---- cristais
   for (const [i, g] of crystals.entries()) {
@@ -2540,7 +2702,7 @@ function update(dt, t) {
 
   // ---- arma, rastro, faíscas
   gun.visible = gunMode !== 'none' && ZOOM.k < 1.3;
-  animateGun(dt, t);
+  animateGun(pdt, t);
 
   if (sparkT < 1) {
     sparkT += dt;
@@ -2558,16 +2720,18 @@ function update(dt, t) {
   // zoom com o tempo de verdade (o lento não deixa a lente lenta)
   ZOOM.k += ((ZOOM.on ? ZOOM.level : 1) - ZOOM.k) * (1 - Math.exp(-realDt * 14));
   const baseFov = 75 + clamp((speed - 8) / 22, 0, 1) * 16 - (SLOW.on ? 7 : 0);
-  ZOOM.fov = THREE.MathUtils.lerp(ZOOM.fov ?? 75, baseFov, 1 - Math.exp(-dt * (SLOW.on ? 10 : 4)));
+  ZOOM.fov = THREE.MathUtils.lerp(ZOOM.fov ?? 75, baseFov, 1 - Math.exp(-pdt * (SLOW.on ? 10 : 4)));
   camera.fov = ZOOM.fov / ZOOM.k;
   document.body.classList.toggle('zoomed', ZOOM.k > 1.15);
   setText('zoom-v', `${ZOOM.k.toFixed(1).replace('.', ',')}×`);
   camera.updateProjectionMatrix();
-  player.applyCamera(dt, 0);
+  // a visão treme: aos poucos durante a carga do campo e com um tranco quando a bolha nasce
+  const charging = FIELD.charge / FIELD.need;
+  player.applyCamera(pdt, Math.max(0.075 * charging ** 2, FIELD.shake > 0 ? 0.18 * (FIELD.shake / 0.7) ** 2 : 0));
   // logo depois de um portal a câmera ainda está "chegando": o próprio corpo
   // apareceria colado na vista
   body.group.visible = !player.inTransit;
-  deadFlash = Math.max(0, deadFlash - dt * 1.5);
+  deadFlash = Math.max(0, deadFlash - pdt * 1.5);
   $('flash').style.opacity = deadFlash;
   setText('timer', fmt(levelTime));
   if (relogio) updateClockHud();
@@ -2622,9 +2786,10 @@ function frame() {
       player.applyCamera(0);
     } else if (!paused && !completed) {
       updateSlowmo(dt);
-      update(dt * SLOW.k, t);
+      tick(dt, dt * SLOW.k, t);
     } else if (SLOW.on) toggleSlowmo(false);
     else {
+      updateField(0, false);
       // pausado: portas, plataformas e elevadores ficam parados (dt = 0)
       world.update(t, 0);
       portals.update(t, dt);
@@ -2701,6 +2866,6 @@ window.__jogo = {
   step(dt = 1 / 60) {
     if (!running || !level || completed) return;
     manualT += dt;
-    update(dt, manualT);
+    tick(dt, dt, manualT);
   },
-  get campaign() { return campaign; }, get editor() { return editor; }, openEditor, mineLevel, get editing() { return editing; }, get testingMine() { return testingMine; }, backToEditor, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, makeCube, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; } };
+  get campaign() { return campaign; }, get editor() { return editor; }, openEditor, mineLevel, get editing() { return editing; }, get testingMine() { return testingMine; }, backToEditor, get relogio() { return relogio; }, get chronos() { return relogio; }, get fight() { return fight; }, get levels() { return LEVELS; }, THREE, post, gun, GUN, dissolver, frontier, sfx, timeTravel, release, get deaths() { return deaths; }, get data() { return data; }, get health() { return health; }, player, portals, world, physics, energy, SLOW, toggleSlowmo, get turrets() { return turrets; }, get held() { return held; }, get gunMode() { return gunMode; }, loadLevel, get cubes() { return cubes; }, makeCube, startLevel, sound, shoot, use, input, camera, set paused(v) { paused = v; }, get state() { return { running, paused, completed, levelIdx, levelTime }; }, FIELD, mouseHeld, inField };

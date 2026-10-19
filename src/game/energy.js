@@ -250,8 +250,10 @@ export class EnergySystem {
     }
     for (const L of world.launchers) L.group.userData.spin.rotation.y -= dt * (L.pellet ? 1.5 : 0.4 + Math.max(0, 2 - L.wait) * 3);
     for (const p of [...this.pellets]) {
-      p.life -= dt;
-      p.cooldown -= dt;
+      // dentro do campo de dilatação temporal o tempo da bola anda mais devagar
+      const pdt = dt * (on.timeScale?.(p.pos) ?? 1);
+      p.life -= pdt;
+      p.cooldown -= pdt;
       // buraco negro: a trajetória curva (a velocidade não muda); no horizonte, some
       let swallowed = false;
       for (const B of world.blackHoles ?? []) {
@@ -260,7 +262,7 @@ export class EnergySystem {
         if (r < B.horizon * 1.2) swallowed = true;
         if (r > B.reach) continue;
         const sp = p.vel.length();
-        p.vel.addScaledVector(d.divideScalar(r), Math.min(B.strength / Math.max(r * r, 1), 60) * dt);
+        p.vel.addScaledVector(d.divideScalar(r), Math.min(B.strength / Math.max(r * r, 1), 60) * pdt);
         p.vel.setLength(sp);
       }
       if (swallowed) {
@@ -269,7 +271,7 @@ export class EnergySystem {
         continue;
       }
       // passos curtos: a bola nunca atravessa uma parede fina
-      let rest = p.vel.length() * dt;
+      let rest = p.vel.length() * pdt;
       let entered = false;
       while (rest > 1e-4) {
         const step = Math.min(rest, 0.12);

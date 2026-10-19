@@ -15,7 +15,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d11; col
 button, a { font: inherit; color: inherit; }
 button { cursor: pointer; }
 
-#vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55)); }
+#vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,0.3)); }
 #flash { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, rgba(255,80,20,0.35), rgba(160,20,0,0.85)); opacity: 0; }
 
 /* ------------------------------------------------ HUD */
@@ -226,3 +226,138 @@ body[data-relogio='pause'] #rewind { opacity: 1; background: radial-gradient(ell
 body[data-relogio='jump'] #rewind { opacity: 1; transition: opacity 0.05s; background: radial-gradient(circle at center, rgba(255, 255, 255, 0.95), rgba(90, 200, 255, 0.55) 45%, rgba(20, 60, 160, 0.25) 100%); animation: jump-fade 0.75s ease-out forwards; }
 @keyframes jump-fade { to { opacity: 0; } }
 body[data-relogio='paradox'] #rewind { opacity: 1; transition: opacity 0.05s; background: radial-gradient(circle at center, rgba(255, 40, 100, 0.0) 30%, rgba(255, 30, 90, 0.55) 100%), repeating-linear-gradient(0deg, rgba(255, 40, 120, 0.18) 0 2px, transparent 2px 6px); animation: jump-fade 1.1s ease-out forwards; }
+
+/* ================================================ visual "Clínico"
+   linhas finas, rótulos em monoespaçada, muito espaço vazio, ciano de destaque.
+   HUD, mira (colchetes curvos) e menus. */
+:root { --hud-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace; --hud-sans: 'IBM Plex Sans', 'Inter', system-ui, sans-serif; --hud-ink: #f4f7fa; --hud-dim: rgba(244, 247, 250, 0.72); --hud-line: rgba(255, 255, 255, 0.14); --hud-shadow: 0 1px 8px rgba(0, 0, 0, 0.7); }
+#hud, #subs, #toast, #menu, .overlay { font-family: var(--hud-sans); color: var(--hud-ink); }
+
+/* ---- nome da câmara: fio ciano + rótulo + nome fino; tempo à direita */
+#lvl { left: 40px; top: 36px; padding-left: 17px; border-left: 1px solid var(--blue); gap: 4px; text-shadow: var(--hud-shadow); }
+#lvl small { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.3em; color: var(--blue); }
+#lvl b { font-family: var(--hud-sans); font-size: 26px; font-weight: 300; letter-spacing: 0.02em; }
+#lvl span { font-size: 13px; color: var(--hud-dim); }
+#timer { right: 40px; top: 36px; display: grid; justify-items: end; gap: 4px; font-family: var(--hud-mono); font-size: 22px; color: var(--hud-ink); text-shadow: var(--hud-shadow); }
+#timer::before { content: 'TEMPO'; font-size: 11px; letter-spacing: 0.3em; color: rgba(244, 247, 250, 0.6); }
+
+/* ---- mira: colchetes curvos ( ) — .l ciano, .r vermelho; tracejado fraco = portal não colocado */
+#xh { width: 48px; height: 48px; }
+#xh span { transition: border-width 0.12s, border-color 0.12s, opacity 0.12s; }
+#xh .l, #xh .r { left: 50%; top: 50%; right: auto; bottom: auto; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 1.3px dashed transparent; }
+#xh .l { border-left-color: color-mix(in srgb, var(--pa, var(--blue)) 55%, transparent); }
+#xh .r { border-right-color: color-mix(in srgb, var(--pb, var(--orange)) 55%, transparent); }
+#xh.blue .l { border-width: 2.4px; border-style: solid; border-color: transparent; border-left-color: var(--pa, var(--blue)); filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6)); }
+#xh.orange .r { border-width: 2.4px; border-style: solid; border-color: transparent; border-right-color: var(--pb, var(--orange)); filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6)); }
+#xh i { width: 3.6px; height: 3.6px; margin: -1.8px; box-shadow: 0 0 0 0.8px rgba(0, 0, 0, 0.6); }
+/* superfície aceita portal: o ponto acende; não aceita: ponto vermelho e colchetes apagados */
+#xh::after { display: none; }
+#xh.aim-ok i { box-shadow: 0 0 0 0.8px rgba(0, 0, 0, 0.6), 0 0 6px 1px rgba(150, 220, 255, 0.9); transform: scale(1.25); }
+
+/* ---- medidores: vida e relógio empilhados à esquerda, tempo lento à direita; rótulo + valor sobre um fio de 2 px */
+#gauges { position: absolute; left: 40px; bottom: 40px; width: 240px; display: flex; flex-direction: column; gap: 14px; text-shadow: var(--hud-shadow); }
+#gauges > div { position: static; }
+#health, #slow { display: grid; grid-template-columns: 1fr auto; row-gap: 6px; padding: 0; border-radius: 0; background: none; box-shadow: none; text-shadow: var(--hud-shadow); }
+#health { width: 240px; }
+#slow { left: auto; right: 40px; bottom: 40px; width: 200px; }
+#health span, #slow .lbl { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--hud-dim); }
+#health .bar, #slow .bar { grid-column: 1 / -1; grid-row: 2; height: 2px; border-radius: 0; background: rgba(255, 255, 255, 0.18); box-shadow: 0 0 4px rgba(0, 0, 0, 0.5); }
+#health-bar { background: var(--hud-ink); }
+#health.low #health-bar { background: #ff3b30; }
+#health.low span { color: #ffb3ad; }
+#slow b { grid-column: 2; grid-row: 1; font-family: var(--hud-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.08em; min-width: 0; color: var(--hud-dim); }
+#slow .bar i { background: #9fdcff; }
+#slow small { display: none; }
+#slow.full { opacity: 0.6; }
+#slow.on { background: none; box-shadow: none; opacity: 1; }
+#slow.on .lbl, #slow.on b { color: #9fdcff; }
+#slow.on .bar i { box-shadow: 0 0 6px #9fdcff; }
+#slow.low .bar i { background: #ff3b30; }
+#slow.low.on { animation: none; }
+#slow.low.on .bar i { animation: slow-blink-bar 0.5s steps(2) infinite; }
+@keyframes slow-blink-bar { 50% { opacity: 0.35; } }
+#clock { gap: 0; text-shadow: var(--hud-shadow); }
+#clock .face { display: none; }
+#clock .txt { min-width: 240px; grid-template-columns: 1fr auto; gap: 6px 0; }
+#clock .txt span { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.24em; color: var(--hud-dim); }
+#clock .txt b { grid-column: 2; grid-row: 1; font-family: var(--hud-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.08em; line-height: inherit; color: var(--hud-dim); }
+#clock .bar { grid-column: 1 / -1; height: 2px; border-radius: 0; margin: 0; background: rgba(255, 255, 255, 0.18); }
+#clock .bar i { background: var(--blue); }
+#clock .txt small, #clock .txt em { grid-column: 1 / -1; font-family: var(--hud-mono); font-size: 10px; letter-spacing: 0.06em; }
+#clock .txt em { color: #ffcf8f; min-height: 0; }
+body[data-relogio='pause'] #clock .txt span, body[data-relogio='pause'] #clock .txt b { color: var(--blue); }
+#clock.blocked .txt b { color: #ff7a6a; }
+
+/* ---- legenda: quem fala em monoespaçada ciano, texto sem caixa */
+#subs { bottom: 96px; width: min(700px, 90vw); font-size: clamp(16px, 1.55vw, 20px); font-weight: 400; line-height: 1.45; text-shadow: 0 2px 6px #000, 0 0 18px rgba(0, 0, 0, 0.9); }
+#subs .who { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.3em; color: var(--blue); margin-bottom: 6px; }
+
+/* ---- o resto do HUD no mesmo tom */
+#keys { bottom: 12px; font-family: var(--hud-mono); font-size: 10px; letter-spacing: 0.04em; color: rgba(244, 247, 250, 0.4); }
+#toast { border-radius: 0; background: rgba(8, 10, 14, 0.82); border-color: var(--hud-line); }
+#heat, #era { right: 40px; }
+#heat span, #era span, #gems span, #tube-hud span { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.24em; color: var(--hud-dim); }
+#heat b, #era b, #gems b, #tube-hud b { font-family: var(--hud-sans); font-weight: 300; }
+#gems { left: 40px; top: 120px; }
+#tube-hud { right: 40px; border-radius: 0; background: rgba(8, 10, 14, 0.6); }
+#zoom-ui b, #use-hint { font-family: var(--hud-mono); }
+#use-hint { border-radius: 0; }
+
+/* ================================================ menus "Clínico" */
+.menu-box > small, .overlay small { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--blue); }
+.menu-box h1 { font-family: var(--hud-sans); font-weight: 300; letter-spacing: -0.01em; }
+.lead { font-weight: 300; }
+.lead b { font-weight: 600; }
+.back { font-family: var(--hud-mono); font-size: 12px; letter-spacing: 0.06em; }
+.lvl-head b { font-family: var(--hud-mono); font-size: 12px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; }
+.lvl { border-radius: 0; border-color: var(--hud-line); background: rgba(255, 255, 255, 0.02); }
+.lvl:hover:not(:disabled) { border-color: var(--blue); background: rgba(38, 242, 255, 0.06); }
+.lvl .n { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.2em; color: var(--blue); }
+.lvl b { font-family: var(--hud-sans); font-weight: 400; }
+.lvl em { font-family: var(--hud-mono); }
+.big { border: 1px solid var(--blue); border-radius: 0; background: rgba(38, 242, 255, 0.08); color: var(--blue); box-shadow: none; font-family: var(--hud-sans); font-weight: 500; letter-spacing: 0.02em; }
+.big:hover { filter: none; background: rgba(38, 242, 255, 0.18); }
+.chip { border-radius: 0; border-color: rgba(255, 255, 255, 0.18); background: none; font-weight: 400; }
+.chip:hover { border-color: rgba(255, 255, 255, 0.4); }
+.chip.on { border-color: var(--blue); background: rgba(38, 242, 255, 0.08); color: var(--blue); }
+kbd { font-family: var(--hud-mono); border-radius: 0; border-bottom-width: 1px; background: rgba(255, 255, 255, 0.06); }
+.mp { border-radius: 0; border-color: var(--hud-line); background: rgba(255, 255, 255, 0.02); }
+.mp-row input, .map-pick select { border-radius: 0; font-family: var(--hud-sans); }
+
+/* janelas (fim de câmara, campanha, final): sem cartão arredondado, fio ciano à esquerda */
+.overlay { background: rgba(4, 6, 10, 0.72); backdrop-filter: blur(14px) brightness(0.8); }
+.overlay .box { border-radius: 0; border: none; border-left: 1px solid var(--blue); background: rgba(8, 10, 14, 0.55); padding: 28px 36px; gap: 14px; }
+.overlay h2 { font-family: var(--hud-sans); font-weight: 300; font-size: 40px; letter-spacing: -0.01em; }
+.overlay p { font-weight: 300; }
+
+/* pausa: tela inteira, lista à esquerda, opções à direita (como o conceito) */
+#pause .box { position: fixed; inset: 0; display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 360px); grid-template-rows: 1fr auto; justify-content: space-between; align-content: start; gap: 0 48px; padding: 120px 120px 48px 160px; border: none; background: none; min-width: 0; }
+#pause .box::before { content: ''; position: fixed; left: 120px; top: 0; bottom: 0; width: 1px; background: rgba(255, 255, 255, 0.16); }
+#pause .p-main, #pause .p-opts { display: flex; flex-direction: column; }
+#pause .p-main { gap: 8px; }
+#pause .p-main h2 { font-size: 56px; margin-bottom: 28px; }
+#pause .p-list, #pause .p-opts { display: flex; flex-direction: column; }
+#pause .p-opts small { color: rgba(244, 247, 250, 0.6); margin: 6px 0 10px; }
+#pause .p-foot { grid-column: 1 / -1; align-self: end; margin: 0; font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: rgba(244, 247, 250, 0.45); }
+.opt { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 52px; padding: 12px 0; border: none; border-bottom: 1px solid var(--hud-line); background: none; color: var(--hud-ink); font-family: var(--hud-sans); font-size: 20px; font-weight: 300; text-align: left; }
+.opt:hover { color: var(--blue); }
+.opt.main { color: var(--blue); font-weight: 400; }
+.opt kbd { background: none; border: none; padding: 0; font-size: 12px; color: rgba(244, 247, 250, 0.5); }
+.opt.map-pick { display: flex; font-size: 16px; color: var(--hud-dim); cursor: default; }
+.opt.map-pick:hover { color: var(--hud-dim); }
+.opt.map-pick select { flex: 0 1 220px; min-width: 0; padding: 6px 8px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--hud-line); color: var(--hud-ink); font-size: 14px; }
+.opt.toggle { font-size: 16px; font-weight: 400; min-height: 48px; }
+.opt.toggle::after { content: 'DESLIGADO'; font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.2em; color: rgba(244, 247, 250, 0.45); }
+.opt.toggle.on::after { content: 'LIGADO'; color: var(--blue); }
+
+/* ---- campo de dilatação temporal (os dois botões por 5 s) */
+#field { width: 240px; display: grid; grid-template-columns: 1fr auto; row-gap: 6px; text-shadow: var(--hud-shadow); }
+#field span { font-family: var(--hud-mono); font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: #c4a8ff; }
+#field b { font-family: var(--hud-mono); font-size: 11px; font-weight: 400; letter-spacing: 0.08em; color: #c4a8ff; }
+#field .bar { grid-column: 1 / -1; height: 2px; background: rgba(255, 255, 255, 0.18); }
+#field .bar i { display: block; height: 100%; background: #b48cff; transform-origin: left; }
+#field.on .bar i { background: linear-gradient(90deg, #8f6bff, #9ff4ff); box-shadow: 0 0 6px #b48cff; }
+/* dentro do campo: o mundo lá fora corre — borda violeta pulsando */
+#vignette::after { content: ''; position: absolute; inset: 0; opacity: 0; transition: opacity 0.35s; background: radial-gradient(ellipse at center, transparent 62%, rgba(110, 70, 255, 0.18) 88%, rgba(150, 230, 255, 0.28)); }
+body.dilated #vignette::after { opacity: 1; animation: dilate-pulse 0.4s ease-in-out infinite alternate; }
+@keyframes dilate-pulse { to { filter: hue-rotate(25deg) brightness(1.15); } }

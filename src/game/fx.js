@@ -63,7 +63,7 @@ class FinishPass extends Pass {
       tDiffuse: { value: null },
       uTime: { value: 0 },
       uAberr: { value: 0 },
-      uVignette: { value: 0.32 },
+      uVignette: { value: 0.18 },
       uGrain: { value: 0.035 },
       uFreeze: { value: 0 },
       uGlitch: { value: 0 },
@@ -385,6 +385,113 @@ class HazePass extends Pass {
   }
 }
 
+/**
+ * Lente gravitacional do campo de dilatação temporal (os dois botões por 5 s): a imagem em
+ * volta da bolha é sugada para ela como perto de um buraco negro; a distorção vai sumindo aos poucos para fora. Com a câmera DENTRO da bolha,
+ * são as bordas da tela que se curvam e giram (o mundo lá fora visto através da lente).
+ */
+const lensFS = /* glsl */ `
+  uniform sampler2D tDiffuse;
+  uniform vec2 uCenter;
+  uniform float uR, uAspect, uFade, uTime, uInside;
+  varying vec2 vUv;
+  vec2 toUv(vec2 d){ d.x /= uAspect; return uCenter + d; }
+  void main(){
+    vec2 d = vUv - uCenter; d.x *= uAspect;
+    float r = length(d) + 1e-5;
+    float x = r / uR;
+    vec2 dir = d / r;
+    vec2 q;
+    if (uInside > 0.5) {
+      // dentro: as bordas da tela são sugadas para dentro (contração), pulsando de leve
+      float e = smoothstep(0.3, 1.25, x);
+      q = d * (1.0 + e * e * (0.32 + 0.05 * sin(uTime * 3.0)));
+    } else if (x > 1.0) {
+      // fora: o que está em volta é sugado em linha reta para a bolha (~1/x), esmaecendo aos poucos
+      float k = (0.55 / x) * exp(-(x - 1.0) * 1.6);
+      q = d + dir * uR * k;
+    } else {
+      // miolo: contraído — o que está atrás aparece encolhido em direção ao centro
+      // (na borda vale 1,55: emenda com o lado de fora sem salto)
+      q = d * (1.55 + 1.6 * (1.0 - x) * (1.0 - x)) * (1.0 + 0.04 * sin(uTime * 2.0) * (1.0 - x));
+    }
+    q = mix(d, q, uFade);
+    float ca = (uInside > 0.5 ? 0.004 : 0.003 * exp(-abs(x - 1.0) * 4.0)) * uFade;
+    vec3 col;
+    col.r = texture2D(tDiffuse, toUv(q + dir * ca)).r;
+    col.g = texture2D(tDiffuse, toUv(q)).g;
+    col.b = texture2D(tDiffuse, toUv(q - dir * ca)).b;
+    if (uInside < 0.5 && x < 1.0) col *= mix(1.0, 0.82, (1.0 - x) * uFade); // miolo um pouco mais escuro
+    // arco roxo brilhante na borda: um fio forte (passa do limiar do bloom e brilha) e um halo largo e suave
+    if (uInside < 0.5) {
+      float g = x - 1.0;
+      float core = exp(-pow(g / 0.03, 2.0));
+      float halo = exp(-pow(g / 0.14, 2.0));
+      float flick = 0.9 + 0.1 * sin(uTime * 5.0 + atan(dir.y, dir.x) * 3.0);
+      col += (vec3(0.62, 0.32, 1.0) * core * 3.2 + vec3(0.42, 0.2, 1.0) * halo * 0.45) * flick * uFade;
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+class LensPass extends Pass {
+  constructor(camera) {
+    super();
+    this.camera = camera;
+    this.field = null; // { center: Vector3, R, fade } vindo do jogo
+    this.material = new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null }, uCenter: { value: new THREE.Vector2(0.5, 0.5) }, uR: { value: 0.2 }, uAspect: { value: 1 }, uFade: { value: 0 }, uTime: { value: 0 }, uInside: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: lensFS,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.quad = new FullScreenQuad(this.material);
+    this.enabled = false;
+    this._p = new THREE.Vector3();
+    this._r = new THREE.Vector3();
+  }
+
+  /** posição da bolha na tela; fora da vista (atrás da câmera) o passe sai da cadeia */
+  prepare() {
+    const f = this.field;
+    const u = this.material.uniforms;
+    this.enabled = !!f && f.fade > 0.001;
+    if (!this.enabled) return;
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+    u.uAspect.value = aspect;
+    u.uFade.value = f.fade;
+    u.uTime.value = performance.now() / 1000;
+    const dist = cam.position.distanceTo(f.center);
+    if (dist < f.R) {
+      u.uInside.value = 1;
+      u.uCenter.value.set(0.5, 0.5);
+      u.uR.value = 0.62;
+      return;
+    }
+    u.uInside.value = 0;
+    const c = this._p.copy(f.center).applyMatrix4(cam.matrixWorldInverse);
+    if (c.z > -0.05) return void (this.enabled = false); // atrás da câmera
+    const ndc = this._r.copy(f.center).project(cam);
+    u.uCenter.value.set(ndc.x * 0.5 + 0.5, ndc.y * 0.5 + 0.5);
+    // raio aparente da esfera (em unidades da altura da tela)
+    const ang = Math.asin(Math.min(0.999, f.R / dist));
+    u.uR.value = (Math.tan(ang) / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) * 0.5;
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    this.material.uniforms.tDiffuse.value = readBuffer.texture;
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.quad.render(renderer);
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.quad.dispose();
+  }
+}
+
 class ScenePass extends Pass {
   constructor(scene, camera, target) {
     super();
@@ -415,6 +522,8 @@ export class Post {
     this.composer.addPass(this.blur);
     this.haze = new HazePass(camera, this.sceneRT); // névoa de calor sobre a rocha fundida
     this.composer.addPass(this.haze);
+    this.lens = new LensPass(camera); // lente do campo de dilatação temporal
+    this.composer.addPass(this.lens);
     this.shock = new ShaderPass(ShockShader);
     this.composer.addPass(this.shock);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 1.6);
@@ -469,8 +578,9 @@ export class Post {
     this.shock.enabled = su.uT.value < 1;
     // salto no tempo: aberração forte que some em ~0,7 s
     this.warp = Math.max(0, (this.warp ?? 0) - dt * 1.5);
-    u.uAberr.value = slow * 0.012 + this.warp * this.warp * 0.08;
-    u.uVignette.value = 0.32 + slow * 0.25 + this.warp * 0.4;
+    // `dilate` 0..1: carga/campo de dilatação temporal (a imagem se separa nas bordas)
+    u.uAberr.value = slow * 0.012 + this.warp * this.warp * 0.08 + (this.dilate ?? 0) * 0.005;
+    u.uVignette.value = 0.18 + slow * 0.25 + this.warp * 0.4;
     this.bloom.strength = 0.45 + slow * 0.25;
     // no tempo lento a câmera anda pouco por quadro: o rastro fica mais longo;
     // acima de ~8 m/s o rastro cresce com a velocidade e ganha o borrão radial
@@ -481,6 +591,7 @@ export class Post {
     this.blur.radial = fast * 0.05 * ahead + this.tunnel * this.tunnel * 0.16;
     this.blur.strength += this.tunnel * 3;
     this.haze.prepare();
+    this.lens.prepare();
     this.composer.render(dt);
   }
 }

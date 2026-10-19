@@ -23,6 +23,13 @@ Outros (OpenGameArt):
   wind.ogg            "wind whoosh loop"               https://opengameart.org/content/wind-whoosh-loop
   t-rex_calls.mp3     "T-rex Calls"                    https://opengameart.org/content/t-rex-calls
 
+Com atribuição (Creative Commons Atribuição 4.0, CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/):
+  thunder_clap.wav    "Nosferatu thunderclap", de Richard Humphries (Wikimedia Commons)
+                      https://commons.wikimedia.org/wiki/File:Nosferatu_thunderclap_-_Richard_Humphries.wav
+                      Alterado: recortado (1,5 s a partir de 3,25 s), tom 15% mais grave, graves reforçados,
+                      saturação leve, mono, volume normalizado e fim em fade.
+                      Usado quando o campo de dilatação temporal nasce.
+
 Uso: arma (laserLarge, forceField, impactMetal, spaceEngine), passos (concreto, chapa
 metálica, vidro), portas e botões (metal de verdade), torretas, bolas de energia, laser, funil,
 viagem no tempo, buraco negro, vento da velocidade e rugido do T-rex. Confirmações e recompensas

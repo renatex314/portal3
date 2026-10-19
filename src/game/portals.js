@@ -57,7 +57,7 @@ const displayFS = /* glsl */ `
     vec2 e = pl / (vec2(uA, uB) * max(uOpen, 0.001));
     float r = length(e);
     if (r > 1.0) discard;
-    // laranja temporal com laser saindo dele: fundo preto (sem vista nenhuma)
+    // laranja temporal sem vista (laser saindo dele, bola do passado): só estática, sem imagem nenhuma
     vec3 view = uStatic > 0.0 ? vec3(0.0) : texture2D(map, gl_FragCoord.xy / uRes).rgb;
     // portal temporal: a vista do passado sai só em tons de cinza, sem nada por cima
     float lum = dot(view, vec3(0.3, 0.59, 0.11));
@@ -69,7 +69,7 @@ const displayFS = /* glsl */ `
       float g = h(px + fr * vec2(7.13, 3.71));
       float band = smoothstep(0.6, 1.0, n2(vec2(gl_FragCoord.y * 0.02 - uTime * 3.0, fr * 0.37)));
       float roll = 0.85 + 0.15 * sin(gl_FragCoord.y * 0.8 + uTime * 40.0);
-      view = mix(view * roll, vec3(g), uNoise * (0.38 + 0.4 * band));
+      view = uStatic > 0.0 ? vec3(g * roll * (0.55 + 0.35 * band)) : mix(view * roll, vec3(g), uNoise * (0.38 + 0.4 * band));
     }
     // sem par: plasma girando na cor do portal, mais claro perto da borda
     float ang = uTime * 0.7 + r * 3.2;
@@ -977,7 +977,7 @@ export class PortalSystem {
       S.uniforms.uLinked.value = 1;
       // com vista (o futuro, pelo vermelho do passado): imagem com estática; sem vista: fundo preto
       S.uniforms.uStatic.value = f.view ? 0 : 1;
-      S.uniforms.uNoise.value = f.view ? 1 : 0;
+      S.uniforms.uNoise.value = 1; // com ou sem vista, a estática fica por cima
       S.rimMat.uniforms.uFlash.value = 0;
       S.light.intensity = 3 + 2 * Math.sin(t * 23) * Math.sin(t * 7);
     });
