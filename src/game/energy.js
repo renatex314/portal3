@@ -333,6 +333,12 @@ export class EnergySystem {
               break;
             }
           }
+        // o vermelho de uma versão passada sua, visto do passado (fundo preto): a bola some
+        // ali e sai pelo ciano Δ s depois
+        if (hit && !intoPortal && !entered && on.intoGhost?.(p, hit.point)) {
+          this.kill(p);
+          entered = true;
+        }
         if (entered) break;
         if (hit && !intoPortal) {
           p.pos.copy(hit.point).addScaledVector(hit.normal, R + 0.002);

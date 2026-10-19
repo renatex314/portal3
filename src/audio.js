@@ -178,6 +178,18 @@ export class Soundtrack {
     this.music.gain.setTargetAtTime(on ? 0.18 : 0.5, this.ctx.currentTime, on ? 0.15 : 0.8);
   }
 
+  /** para a trilha (some em 3 s); o próximo setMood recomeça */
+  stopMood() {
+    if (!this.ctx || !this.current) return;
+    const t = this.ctx.currentTime;
+    const old = this.current;
+    old.bus.gain.cancelScheduledValues(t);
+    old.bus.gain.setValueAtTime(old.bus.gain.value, t);
+    old.bus.gain.linearRampToValueAtTime(0, t + 3);
+    old.dying = t + 3.2;
+    this.current = null;
+  }
+
   setMood(name) {
     if (!this.ctx || this.current?.name === name) return;
     const t = this.ctx.currentTime;

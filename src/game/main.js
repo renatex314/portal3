@@ -58,6 +58,7 @@ camera.layers.enable(2); // a arma em primeira pessoa
 scene.add(camera);
 
 const post = new Post(renderer, scene, camera);
+post.haze.lakes = () => world.hazards; // névoa de calor sobre a rocha fundida
 const motes = dust();
 scene.add(motes);
 const shadows = new ContactShadows(scene);
@@ -77,6 +78,7 @@ const sound = new Soundtrack();
 const sfx = new Sfx(sound);
 const narrator = new Narrator();
 narrator.onSpeaking = (on) => sound.duck(on);
+narrator.loadClips(); // falas gravadas (public/vozes)
 
 const dyn = new THREE.Group(); // cubos e personagens da fase
 
@@ -348,10 +350,10 @@ const chronosFx = {
   },
   pause(on) {
     on ? sfx.freeze() : sfx.unfreeze();
-    post.shockwave();
+    // parar/continuar o tempo: uma onda de distorção abrindo do centro da tela (sem anel)
+    post.shockwave({ big: true });
     post.warp = Math.max(post.warp ?? 0, on ? 0.45 : 0.3);
-    timeRing(camera.position.clone().addScaledVector(camForward(), 1.6), camForward().negate(), new THREE.Color(on ? 0.6 : 1.2, on ? 1.6 : 1.0, on ? 2.6 : 0.5), 0.7, 3.5);
-    if (on && (chronosFx._said = (chronosFx._said ?? 0) + 1) <= 2) toast('Tempo parado. Roda do mouse: quantos segundos voltar. Laranja = passado, azul = presente.');
+    if (on && (chronosFx._said = (chronosFx._said ?? 0) + 1) <= 2) toast('Tempo parado. Roda do mouse: quantos segundos voltar. Vermelho = passado, ciano = presente.');
   },
   scrub(d) {
     sfx.scrub(d);
@@ -426,7 +428,7 @@ function updateClockHud() {
   setText('clock-state', h.paused ? 'tempo parado' : relogio.sweep ? 'saltando no tempo' : 'tempo normal');
   setText('clock-d', h.paused ? `−${h.delta.toFixed(1).replace('.', ',')} s` : fmt(h.tw));
   $('clock-fill').style.width = h.paused ? `${Math.min(100, (h.delta / Math.max(h.max, 0.5)) * 100)}%` : '0%';
-  setText('clock-hint', h.paused ? 'roda do mouse: voltar mais/menos · laranja = passado · azul = presente · 2: continuar' : '2 — parar o tempo');
+  setText('clock-hint', h.paused ? 'roda do mouse: voltar mais/menos · vermelho = passado · ciano = presente · 2: continuar' : '2 — parar o tempo');
   setText('clock-extra', [h.clones ? `${h.clones} clone${h.clones > 1 ? 's' : ''} do passado` : '', h.paradoxes ? `${h.paradoxes} paradoxo${h.paradoxes > 1 ? 's' : ''}` : '', showBlocked ? '⚠ destino ocupado' : ''].filter(Boolean).join(' · '));
 }
 
@@ -680,7 +682,6 @@ let cycle = null; // portal da fase que troca de lugar sozinho
 let inFizzler = false;
 const lastPlayerPos = new THREE.Vector3();
 const gemOwners = new Map(); // nome → cristais (multiplayer)
-let spottedOnce = false;
 let moonVisited = false;
 // gravidade da fase + zonas de gravidade, buracos negros e funis (série Fronteira)
 const gravityAt = (p) => frontier.gravity(p, gravityFn(p, grav));
@@ -735,13 +736,13 @@ function clearLevel() {
   relogio?.clear();
   relogio = null;
   portals.pastView = null;
+  portals.futureView = null;
   document.body.dataset.relogio = '';
   fight = null;
   crystals = [];
   gemsMine = 0;
   gemOwners.clear();
   health = 100;
-  spottedOnce = false;
   moonVisited = false;
   npcs = {};
   npcList = [];
@@ -995,11 +996,12 @@ function loadLevel(i, silent = false) {
       })
     : null;
   portals.pastView = relogio ? { begin: (d) => relogio.beginPast(d), end: () => relogio.endPast() } : null;
+  portals.futureView = relogio ? { begin: (v) => relogio.beginFuture(v), end: () => relogio.endFuture() } : null;
   portals.onTemporal = relogio ? (prop, P) => relogio.sendToPast(prop, P) : null;
   document.body.dataset.relogio = 'play';
   $('clock').hidden = !relogio;
   $('keys').textContent = relogio
-    ? 'Esquerdo/Q: portal azul · Direito: portal laranja (parado: no passado) · 2: parar/continuar o tempo · Rodinha parado: voltar mais/menos · Meio: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Esc: pausa'
+    ? 'Esquerdo/Q: portal ciano · Direito: portal vermelho (parado: no passado) · 2: parar/continuar o tempo · Rodinha parado: voltar mais/menos · Meio: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Esc: pausa'
     : KEYS_TEXT;
   cycle = data.cycle ? { ...data.cycle, i: 0, t: data.cycle.every } : null;
   if (cycle) portals.placeFixed(cycle.which, ...cycleSpot(0));
@@ -1023,7 +1025,9 @@ function loadLevel(i, silent = false) {
   REC.samples = [];
   REC.acc = 0;
   inTube = false;
-  sound.setMood(level.music);
+  // campanha original: só os sons do próprio mapa (sem a trilha deste jogo)
+  if (level.series === 'campaign') sound.stopMood();
+  else sound.setMood(level.music);
   if (!editing) portals.prewarm(); // compila tudo agora (inclusive a vista pelos portais), não na hora do primeiro portal
   $('lvl-num').textContent = levelLabel(level);
   $('lvl-name').textContent = level.name;
@@ -1059,7 +1063,7 @@ async function runQueue(run) {
     const npc = npcs[SPEAKER_NPC[who]];
     if (npc) npc.P.talking = true;
     const t0 = performance.now();
-    const ok = await narrator.speak(spoken(text), who);
+    const ok = await narrator.speak(spoken(text), who, text);
     const min = ok ? 900 : Math.max(2600, text.length * 65);
     const left = min - (performance.now() - t0);
     if (left > 0) await sleep(left);
@@ -1109,7 +1113,7 @@ function shoot(which) {
   }
   // o projétil voa até onde o tiro bate (parede ou grade de desintegração); o
   // portal é decidido e aberto quando ele chega
-  // laranja na pausa: o tiro vê as paredes (portas) do passado escolhido
+  // vermelho na pausa: o tiro vê as paredes (portas) do passado escolhido
   const wall = !blue && relogio?.paused ? relogio.inPast(relogio.delta, () => world.raycast(origin, dir, 400)) : world.raycast(origin, dir, 400);
   const fz = world.rayFizzler(origin, dir, wall ? wall.dist : 400);
   const end = fz ? fz.clone() : wall ? wall.point.clone() : origin.clone().addScaledVector(dir, 60);
@@ -1134,7 +1138,7 @@ function landShot(which, origin, dir, allowed) {
       : temporal
         ? relogio.placeOrange(origin, dir, relogio.delta)
         : portals.tryPlace(which, origin, dir);
-  if (res.ok && temporal) toast(`Portal aberto ${relogio.delta.toFixed(1).replace('.', ',')} s no passado: entre no azul para voltar.`);
+  if (res.ok && temporal) toast(`Portal aberto ${relogio.delta.toFixed(1).replace('.', ',')} s no passado: entre no ciano para voltar.`);
   if (res.why) toast(res.why);
   if (res.ok) {
     if (mp())
@@ -1260,7 +1264,7 @@ function holdDistance(eye, fwd) {
     const rest = MAX - dist;
     const wall = world.raycast(o, d, rest);
     const end = o.clone().addScaledVector(d, wall ? wall.dist + 0.01 : rest);
-    // azul temporal: o objeto entra na parede junto com você (vai no salto), sem parar antes
+    // ciano temporal: o objeto entra na parede junto com você (vai no salto), sem parar antes
     if (portals.temporalCrossing?.(o, end)) return MAX;
     const P = portals.crossing(o, end);
     if (!P) return wall ? Math.max(dist + wall.dist - 0.45, 0.5) : MAX;
@@ -2033,7 +2037,8 @@ function recordRun(dt) {
   while (REC.acc >= 1 / 30) {
     REC.acc -= 1 / 30;
     const r = (v) => Math.round(v * 100) / 100;
-    REC.samples.push([r(player.pos.x), r(player.pos.y), r(player.pos.z), r(player.yaw), r(player.pitch), player.grounded ? 1 : 0, player.upSign]);
+    // (7–9: velocidade, para o editor medir o robô num ponto e levar para a Trajetória)
+    REC.samples.push([r(player.pos.x), r(player.pos.y), r(player.pos.z), r(player.yaw), r(player.pitch), player.grounded ? 1 : 0, player.upSign, r(player.vel.x), r(player.vel.y), r(player.vel.z)]);
   }
 }
 
@@ -2124,7 +2129,7 @@ function update(dt, t) {
     }
     // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
     player.update(dt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
-      // azul temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
+      // ciano temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
       if (relogio && P.partner.delta > 0) {
         relogio.jump(P);
         return;
@@ -2286,6 +2291,10 @@ function update(dt, t) {
   for (const I of world.incinerators) and(I.opens, I.active);
   for (const C of world.laserCatchers) and(C.opens, C.active);
   for (const [id, v] of world.signals) and(id, v); // sinais ligados pela própria fase (lutas contra chefes)
+  // emissor de laser ligado a um sinal (o feixe acende no quadro seguinte)
+  for (const L of world.lasers) if (L.sig) L.off = !sig.get(L.sig);
+  // grade de desintegração ligada a um sinal: o botão a desliga (mode 'off') ou a liga (mode 'on')
+  for (const f of world.fizzLinked) world.setFizzler(f, f.mode === 'on' ? !!sig.get(f.sig) : !sig.get(f.sig));
   // funil que vira de sentido com um sinal
   for (const F of world.funnels) {
     if (F.id) F.reversed = F.startReversed !== !!sig.get(F.id);
@@ -2347,7 +2356,7 @@ function update(dt, t) {
       gunMode = pd.gives;
       if (pd.entity) data?.campaign?.runtime?.pickupGun(pd.entity); // campanha: as saídas do mapa
       sfx.gun();
-      toast(pd.gives === 'blue' ? 'Você pegou a arma de portais (por enquanto, só o portal azul).' : 'Arma completa: agora ela abre os dois portais!');
+      toast(pd.gives === 'blue' ? 'Você pegou a arma de portais (por enquanto, só o portal ciano).' : 'Arma completa: agora ela abre os dois portais!');
       updateCrosshair();
     }
 
@@ -2356,15 +2365,15 @@ function update(dt, t) {
   tmpMax.copy(player.pos).add(player.half);
   energy.update(wdt, tv, world, portals, { min: tmpMin.clone(), max: tmpMax.clone() }, {
     launch: () => sfx.launch(),
-    bounce: (p) => sfx.bounce(p.distanceTo(player.pos)),
     caught: () => sfx.caught(),
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
     props: () => [...cubes, ...turrets],
     intoPast: (p, O) => relogio?.ballIntoPast(p, O),
+    intoGhost: (p, at) => relogio?.ballIntoGhost(p, at),
     toPast: relogio ? (p, P) => relogio.ballToPast(p, P) : null,
   });
-  relogio?.pastPellets(); // bolas do passado que entraram no laranja temporal saem pelo azul
+  relogio?.pastPellets(); // bolas do passado que entraram no vermelho temporal saem pelo ciano
 
   fight?.update(dt, t);
 
@@ -2381,29 +2390,27 @@ function update(dt, t) {
   if (turrets.length || world.lasers.length) {
     const eye = player.eye();
     let shotsTaken = 0;
-    let anySees = false;
-    // alvos pelos portais: você do outro lado de um par comum; pelo azul temporal, o seu
+    // alvos pelos portais: você do outro lado de um par comum; pelo ciano temporal, o seu
     // eu do passado (acertá-lo machuca você agora: era você)
     const via = [];
     for (const P of [portals.blue, portals.orange]) {
       if (!P.placed || !portals.isLinked(P)) continue;
-      if (P.delta > 0) continue; // o laranja do passado não existe no presente
+      if (P.delta > 0) continue; // o vermelho do passado não existe no presente
       if (P.partner.delta > 0) {
         const me = relogio?.pastSelfEye?.(P.partner.delta);
         if (me) via.push({ real: me, P, Q: P.partner, past: true });
       } else via.push({ real: eye, P, Q: P.partner });
     }
-    // torretas do passado (como estavam Δ s atrás) que viam o laranja: as balas saem do azul agora
+    // torretas do passado (como estavam Δ s atrás) que viam o vermelho: as balas saem do ciano agora
     if (relogio) {
       const past = relogio.pastTurretShots?.(wdt, eye) ?? 0;
       if (past) {
         shotsTaken += past;
-        sfx.turretShot(portals.blue.center.distanceTo(eye));
+        turretFiring(portals.blue.center.distanceTo(eye));
       }
     }
     for (const t of turrets) {
       const shots = t.update(wdt, world, portals, gravityAt, eye, cubes, via);
-      if (t.spottedNow) anySees = true;
       // bipes de alvo encontrado / perdido e o desligar
       if (t.spottedNow && !t.wasSpotted) sfx.turretSpot();
       else if (!t.spottedNow && t.wasSpotted && t.active) sfx.turretLost();
@@ -2421,16 +2428,12 @@ function update(dt, t) {
       }
       if (shots) {
         shotsTaken += shots;
-        sfx.turretShot(t.pos.distanceTo(eye));
+        turretFiring(t.pos.distanceTo(eye));
         if (t.viaPast && !t.saidPast) {
           t.saidPast = true;
-          toast('A torreta acertou o seu eu do passado pelo azul — e era você.');
+          toast('A torreta acertou o seu eu do passado pelo ciano — e era você.');
         }
       }
-    }
-    if (anySees && !spottedOnce) {
-      spottedOnce = true;
-      playLines([['Marquinho', 'Torreta te viu! Sai da mira dela!']]);
     }
     if (shotsTaken) {
       health -= shotsTaken * 6;
@@ -2584,6 +2587,15 @@ let manualT = 0;
 const coverEls = [...document.querySelectorAll('.overlay'), $('menu')].filter(Boolean);
 let coverFlip = false;
 
+// última rajada de torreta ouvida (o som é um laço enquanto ela atira)
+let fireAt = -1e9;
+let fireDist = Infinity;
+function turretFiring(dist) {
+  const now = performance.now();
+  if (now - fireAt > 160 || dist < fireDist) fireDist = dist;
+  fireAt = now;
+}
+
 function frame() {
   if (!manualStep && coverEls.some((e) => !e.hidden)) {
     coverFlip = !coverFlip;
@@ -2613,7 +2625,8 @@ function frame() {
       update(dt * SLOW.k, t);
     } else if (SLOW.on) toggleSlowmo(false);
     else {
-      world.update(t, dt);
+      // pausado: portas, plataformas e elevadores ficam parados (dt = 0)
+      world.update(t, 0);
       portals.update(t, dt);
       for (const w of npcList) poseWorker(w, t, dt);
       updateDinos(t, dt);
@@ -2645,6 +2658,9 @@ function frame() {
   const live = running && level && !paused && !completed;
   if (live) {
     sfx.hold(held ? 1 : 0);
+    sfx.slowHum(SLOW.on ? 1 : 0);
+    // rajada das torretas: segue tocando enquanto chegam tiros (a cada 0,1 s)
+    sfx.turretFire(performance.now() - fireAt < 160 ? Math.max(0.2, 1 - fireDist / 30) : 0);
     // vento: gravação em laço que cresce com a velocidade (sintetizado se ainda não carregou)
     const wv = inTube ? Math.min(spd / 28, 1) : clamp((spd - 5) / 18, 0, 1);
     sound.setWhoosh(sfx.wind(wv) ? 0 : wv);

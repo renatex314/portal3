@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { floorButton, envMap } from './models.js';
 import * as TX from './textures.js';
+import { lavaMaterial, lavaEmbers, updateLava } from './lava.js';
 
 const TILE = 2; // metros por repetição de textura
 const _path = new THREE.Vector3();
@@ -201,8 +202,6 @@ export function materials() {
   const ceil = std(TX.ceiling(), { roughness: 1, metalness: 0, color: 0xc8c8c8 });
   const mWall = std(TX.metalWall(), { roughness: 1, metalness: 0.65, color: 0xc4c8d0, envMapIntensity: 0.6, normalScale: new THREE.Vector2(1.2, 1.2) });
   const mFloor = std(TX.metalFloor(), { roughness: 1, metalness: 0.7, color: 0xc8ccd2, envMapIntensity: 0.6 });
-  const magma = TX.magma();
-  magma.repeat.set(0.3, 0.3); // a crosta repetindo de 2 em 2 m vira um xadrez de longe
   const side6 = (side, top, bottom) => [side, side, top, bottom, side, side];
   MATS = {
     white: { mat: wall, faces: side6(wall, floor, ceil), portalable: true },
@@ -223,7 +222,7 @@ export function materials() {
       portalable: false,
     },
     magma: {
-      mat: new THREE.MeshStandardMaterial({ map: magma, color: 0x8a3a18, emissiveMap: magma, emissive: 0xff6a1a, emissiveIntensity: 1, roughness: 0.6 }),
+      mat: lavaMaterial(), // procedural (lava.js)
       portalable: false,
     },
     stripe: { mat: std({ map: TX.hazardStripe() }, { roughness: 0.6 }), portalable: false },
@@ -356,12 +355,14 @@ export class World {
     }
     this.solids = [];
     this.hazards = [];
+    this.lavaLights = [];
     this.triggers = [];
     this.doors = [];
     this.buttons = [];
     this.lights = [];
     this.anim = [];
-    this.fizzlers = [];
+    this.fizzlers = []; // só as grades LIGADAS (o que desintegra e barra tiros)
+    this.fizzLinked = []; // grades ligadas a um sinal (main.js as liga/desliga)
     this.launchers = [];
     this.catchers = [];
     this.incinerators = [];
@@ -380,7 +381,9 @@ export class World {
   }
 
   box(x0, y0, z0, x1, y1, z1, matName = 'white', opts = {}) {
-    const M = materials()[matName];
+    // grade: sólida para o corpo, vazada para a vista, e os tiros/bolas passam (como as da campanha)
+    const grate = matName === 'grate';
+    const M = grate ? { mat: this.importedMat('grate'), portalable: false } : materials()[matName];
     const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
     const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
     const mesh = new THREE.Mesh(worldBoxGeo(min, max), M.faces ?? M.mat);
@@ -391,6 +394,7 @@ export class World {
     }
     this.group.add(mesh);
     const b = { min, max, mat: matName, portalable: M.portalable && !opts.noPortal, mesh, solid: opts.solid !== false };
+    if (grate) b.noRay = b.seeThrough = true;
     if (b.solid) {
       this.solids.push(b);
       this.physics?.addBox(b, !!opts.kinematic);
@@ -407,10 +411,16 @@ export class World {
     // `light`/`lightLift`: intensidade e altura da luz (mapas importados usam mais alta e mais fraca)
     const light = new THREE.PointLight(0xff6a20, opts.light ?? 25, 18, 1.6);
     light.position.set((x0 + x1) / 2, y1 + (opts.lightLift ?? 1.5), (z0 + z1) / 2);
+    light.userData.lava = { base: light.intensity, seed: Math.random() * 100 }; // tremula com a lava (update)
     this.group.add(light);
+    this.lavaLights.push(light);
+    // brasas subindo da superfície (só em lava "deitada": volumes altos são cascatas/paredes)
+    const embers = b.max.y - b.min.y < 3 ? lavaEmbers(b.min, b.max, b.max.y) : null;
+    if (embers) this.group.add(embers);
     if (opts.era) {
       this.inEra(b, opts.era);
       this.inEra(light, opts.era);
+      if (embers) this.inEra(embers, opts.era);
     }
     return b;
   }
@@ -782,7 +792,11 @@ export class World {
    * passa por ela e desintegra objetos (que voltam ao dispensador). Também
    * barra os tiros da arma de portais.
    */
-  fizzler(x0, y0, z0, x1, y1, z1) {
+  /**
+   * Grade de desintegração. `sig`: um botão/receptor liga a grade a um sinal;
+   * `mode` 'off' = o sinal DESLIGA a grade (começa ligada), 'on' = o sinal LIGA (começa desligada).
+   */
+  fizzler(x0, y0, z0, x1, y1, z1, { sig = null, mode = 'off' } = {}) {
     const min = new THREE.Vector3(Math.min(x0, x1), Math.min(y0, y1), Math.min(z0, z1));
     const max = new THREE.Vector3(Math.max(x0, x1), Math.max(y0, y1), Math.max(z0, z1));
     const size = new THREE.Vector3().subVectors(max, min);
@@ -793,6 +807,7 @@ export class World {
       uTime: { value: 0 },
       uSize: { value: new THREE.Vector2(w, hgt) },
       uRipple: { value: new THREE.Vector3(0.5, 0.5, -99) }, // (u, v, instante) da última passagem
+      uPower: { value: 1 }, // 0 = desligada: as bobinas e a fenda ficam quase apagadas
     };
     const mat = new THREE.ShaderMaterial({
       uniforms,
@@ -813,26 +828,26 @@ export class World {
     // sequência, fenda de energia virada para a grade e tampas com aletas
     const M = materials();
     const coilMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: uniforms.uTime },
+      uniforms: { uTime: uniforms.uTime, uPower: uniforms.uPower },
       vertexShader: 'varying vec3 vP; void main(){ vP = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `
-        uniform float uTime; varying vec3 vP;
+        uniform float uTime; uniform float uPower; varying vec3 vP;
         void main(){
           float wave = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(vP.y * 3.0 - uTime * 7.0), 6.0);
-          gl_FragColor = vec4(vec3(0.5, 1.2, 2.6) * wave, 1.0);
+          gl_FragColor = vec4(vec3(0.5, 1.2, 2.6) * wave * (0.12 + 0.88 * uPower), 1.0);
         }`,
       toneMapped: false,
     });
     const slitMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: uniforms.uTime },
+      uniforms: { uTime: uniforms.uTime, uPower: uniforms.uPower },
       vertexShader: 'varying vec2 vUv; varying vec3 vP; void main(){ vUv = uv; vP = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `
-        uniform float uTime; varying vec3 vP;
+        uniform float uTime; uniform float uPower; varying vec3 vP;
         float h(float x){ return fract(sin(x * 91.7) * 43758.5); }
         void main(){
           float flick = 0.8 + 0.2 * h(floor(uTime * 30.0) + floor(vP.y * 6.0));
           float band = 0.6 + 0.4 * sin(vP.y * 11.0 + uTime * 9.0);
-          gl_FragColor = vec4(vec3(0.7, 1.6, 3.0) * flick * band, 1.0);
+          gl_FragColor = vec4(vec3(0.7, 1.6, 3.0) * flick * band * (0.08 + 0.92 * uPower), 1.0);
         }`,
       toneMapped: false,
     });
@@ -914,9 +929,25 @@ export class World {
       motes.material.uniforms.uH.value = window.innerHeight * 0.75;
     });
     const pad = new THREE.Vector3(thin === 'x' ? 0.1 : 0, thin === 'y' ? 0.1 : 0, thin === 'z' ? 0.1 : 0);
-    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin, plane, uniforms };
+    const f = { min: min.clone().sub(pad), max: max.clone().add(pad), axis: thin, plane, motes, uniforms, sig, mode, on: true };
     this.fizzlers.push(f);
+    if (sig) {
+      this.fizzLinked.push(f);
+      this.setFizzler(f, mode !== 'on');
+    }
     return f;
+  }
+
+  /** liga/desliga uma grade: desligada não apaga portais nem desintegra nada, e o campo some */
+  setFizzler(f, on) {
+    if (f.on === on) return;
+    f.on = on;
+    const i = this.fizzlers.indexOf(f);
+    if (on && i < 0) this.fizzlers.push(f);
+    if (!on && i >= 0) this.fizzlers.splice(i, 1);
+    f.plane.visible = on;
+    f.motes.visible = on;
+    f.uniforms.uPower.value = on ? 1 : 0;
   }
 
   /** onda no campo da grade no ponto `p` (algo atravessou ou foi desintegrado) */
@@ -1329,7 +1360,8 @@ export class World {
 
   // ------------------------------------------------------------------ laser
   /** emissor de laser na parede/chão (`dir` = para onde o feixe sai) */
-  laser(x, y, z, dir) {
+  /** emissor de laser; `sig`: só liga enquanto esse sinal estiver ligado (botão, receptor…) */
+  laser(x, y, z, dir, { sig = null } = {}) {
     const d = new THREE.Vector3(...dir).normalize();
     const M = materials();
     const g = new THREE.Group();
@@ -1351,7 +1383,7 @@ export class World {
     g.position.set(x, y, z);
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
     this.group.add(g);
-    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(d, 0.55), dir: d, group: g, lensMat };
+    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(d, 0.55), dir: d, group: g, lensMat, sig, off: !!sig };
     this.lasers.push(L);
     return L;
   }
@@ -1883,9 +1915,12 @@ export class World {
 
   update(t, dt) {
     for (const f of this.anim) f(t, dt);
-    const magma = materials().magma.mat.map;
-    magma.offset.set(t * 0.02, t * 0.013);
-    materials().magma.mat.emissiveIntensity = 0.95 + Math.sin(t * 1.7) * 0.2;
+    updateLava(t);
+    for (const L of this.lavaLights) {
+      if (!L.intensity) continue; // apagada pela época (inEra)
+      const { base, seed } = L.userData.lava;
+      L.intensity = base * (0.86 + 0.09 * Math.sin(t * 2.3 + seed) + 0.05 * Math.sin(t * 7.1 + seed * 3));
+    }
     for (const d of this.doors) {
       // movimento próprio (trem/elevador da campanha importada, que segue trilhos)
       if (d.drive) {

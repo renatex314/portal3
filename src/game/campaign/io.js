@@ -4,8 +4,8 @@
 // curinga e !activator/!caller/!self/!player) sobre as peças deste jogo.
 
 import * as THREE from 'three';
-import { S, toV, parseVec, vecKV, modelBounds, isCube, cubeOpts, yawFromSource } from './convert.js';
-import { PORTAL_B } from '../portals.js';
+import { S, toV, parseVec, vecKV, modelBounds, isCube, cubeOpts, yawFromSource, addHull } from './convert.js';
+import { PORTAL_A, PORTAL_B } from '../portals.js';
 import { RocketTurret, Rocket, bossMachine, animateBoss, coreModel, explosion, elevatorShell, pedestalSwitch } from './boss.js';
 import { buildModel, placeModel, playSeq } from './model3d.js';
 import { REAL_MODEL } from './index.js';
@@ -398,6 +398,12 @@ export class CampaignRuntime {
     this.ctx.world.group.add(cont);
     n.real = obj;
     n.realCont = cont;
+    if (/round_elevator_body/.test(model)) {
+      // luz da cabine (no original vem de entidades de luz que não convertemos)
+      const lamp = new THREE.PointLight(0xdfe8ff, 4, 6, 1);
+      lamp.position.set(0, 0, 100); // polegadas, acima do piso
+      obj.root.add(lamp);
+    }
     const def = (n.e.kv.get('defaultanim') ?? '').toLowerCase();
     n.defaultAnim = obj.clips.has(def) ? def : obj.clips.has('idle') ? 'idle' : null;
     if (n.defaultAnim) playSeq(n.real, n.defaultAnim, { loop: true });
@@ -410,6 +416,19 @@ export class CampaignRuntime {
       const axis = sf & 4 ? new THREE.Vector3(1, 0, 0) : sf & 8 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
       spin = { axis, pivot: vecKV(pe, 'origin'), speed: THREE.MathUtils.degToRad(parseFloat(pe.kv.get('maxspeed')) || 30) * (sf & 2 ? -1 : 1), on: !!(sf & 1), a: 0, name: (pe.kv.get('targetname') ?? '').toLowerCase() };
       n.spin = spin;
+    }
+    // plataformas da sala da GLaDOS: colisão do .phy, na pose de origem (paradas)
+    if (/glados_(platform|disc_)/.test(model) && n.e.kv.get('solid') !== '0' && !spin?.on && M.hulls?.length)
+      n.hulls = M.hulls.map((h) => addHull(this.ctx.world, h.map(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(base)))).filter(Boolean);
+    // cabine do elevador: o piso e as paredes do .phy andam com o trem (o "trem" do mapa é só uma barra)
+    if (/round_elevator_body/.test(model) && M.hulls?.length) {
+      const init0 = n.init;
+      n.init = () => {
+        init0?.();
+        const train = this.find(n.e.kv.get('parentname') ?? '', n, null).find((x) => x.cls === 'func_tracktrain');
+        if (!train?.attachSolids) return;
+        train.attachSolids(M.hulls.map((h) => addHull(this.ctx.world, h.map(([x, y, z]) => new THREE.Vector3(x, y, z).applyMatrix4(base)), { kinematic: true })).filter(Boolean));
+      };
     }
     const tmp = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -856,6 +875,21 @@ const SETUP = {
       this.ctx.world.doors.push(d);
       return d;
     });
+    // peças presas no trem depois (colisão da cabine do elevador): andam junto
+    n.attachSolids = (list) => {
+      for (const s of list) {
+        const d = { id: `train-${n.doors.length}`, box: s, plain: false, open: 0, target: 0, baseMin: s.min.clone(), baseMax: s.max.clone(), mesh: s.mesh, delta: new THREE.Vector3(), offset: n.offset };
+        d.drive = () => {};
+        this.ctx.world.doors.push(d);
+        n.doors.push(d);
+        n.solids.push(s);
+        n.base.push({ min: s.min.clone(), max: s.max.clone() });
+        s.min.add(n.offset);
+        s.max.add(n.offset);
+        s.mesh.position.copy(n.offset);
+        this.ctx.world.physics?.moveBox(s);
+      }
+    };
     const place = (off, dt) => {
       const delta = off.clone().sub(n.offset);
       n.offset.copy(off);
@@ -956,7 +990,7 @@ const SETUP = {
     n.tick = (dt) => {
       // sobe junto com o elevador (func_door) em que está presa
       n.turret.group.position.copy(n.base).add(this.parentOffset(n));
-      const shot = n.turret.update(dt, this.ctx.player.eye(new THREE.Vector3()), this.ctx.world);
+      const shot = n.turret.update(dt, this.ctx.player.eye(new THREE.Vector3()), this.ctx.world, this.ctx.portals);
       if (shot) {
         this.rockets.push(new Rocket(this.ctx.world.group, shot.pos, shot.dir));
         this.ctx.sound?.('Portal.rocket_fire', 1);
@@ -1028,6 +1062,33 @@ const SETUP = {
   func_door_rotating(n) {
     // botão de pedestal: a porta giratória invisível com "abre com o uso" recebe o E
     if (flags(n.e) & 256) n.useable = (a) => !n.isOpen && INPUTS.func_door_rotating.call(this, n, 'open', '', { activator: a });
+  },
+  // volume que percebe os portais do jogador (câmara 19: a parede invisível da saída
+  // só some com os dois portais lá dentro, e volta se um deles sair)
+  func_portal_detector(n) {
+    if (!this.setupTrigger(n)) return;
+    // a placa do portal (não só o centro) encostando no volume, com folga: o teto do
+    // poço da câmara 19 fica um pouco acima do volume e o portal de lá também vale
+    const inside = (P) =>
+      P.placed &&
+      ['x', 'y', 'z'].every((a) => {
+        const r = Math.abs(P.right[a]) * PORTAL_A + Math.abs(P.up[a]) * PORTAL_B + 0.6;
+        return P.center[a] + r > n.min[a] && P.center[a] - r < n.max[a];
+      });
+    n.had = new Set();
+    n.tick = () => {
+      if (!n.enabled) return n.had.clear();
+      const { portals } = this.ctx;
+      const now = new Set([portals.blue, portals.orange].filter(inside));
+      for (const P of now)
+        if (!n.had.has(P)) {
+          this.fire(n, P === portals.blue ? 'onstarttouchportal1' : 'onstarttouchportal2');
+          if (portals.isLinked(P)) this.fire(n, 'onstarttouchlinkedportal');
+        }
+      if (now.size === 2 && n.had.size < 2) this.fire(n, 'onstarttouchbothlinkedportals');
+      for (const P of n.had) if (!now.has(P)) this.fire(n, P === portals.blue ? 'onendtouchportal1' : 'onendtouchportal2');
+      n.had = now;
+    };
   },
   func_noportal_volume(n) {
     if (!this.setupTrigger(n)) return;

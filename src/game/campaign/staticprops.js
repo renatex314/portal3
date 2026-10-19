@@ -184,7 +184,7 @@ function detectStripGroupSize(xd, mdl, md) {
  * Colisão (.phy): cada sólido é um "compact surface" do IVP com várias peças
  * convexas ("ledges"); devolve os vértices de cada peça, em polegadas do Source.
  */
-function readPHY(phy) {
+export function readPHY(phy) {
   const d = new DataView(phy.buffer, phy.byteOffset, phy.byteLength);
   const hulls = [];
   try {

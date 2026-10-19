@@ -16,12 +16,13 @@ export const PORTAL_A = 0.68; // meia largura (m)
 export const PORTAL_B = 1.08; // meia altura (m)
 // cores dos pares de portais de cada jogador (multiplayer: até 4)
 export const SLOT_COLORS = [
-  [new THREE.Color(0.2, 0.62, 1.0), new THREE.Color(1.0, 0.5, 0.08)],
-  [new THREE.Color(0.58, 0.32, 1.0), new THREE.Color(1.0, 0.18, 0.2)],
+  // 1º par (o seu no modo solo): ciano e vermelho; os outros, para os colegas no multijogador
+  [new THREE.Color(0.15, 0.95, 1.0), new THREE.Color(1.0, 0.12, 0.1)],
+  [new THREE.Color(0.58, 0.32, 1.0), new THREE.Color(1.0, 0.5, 0.08)],
   [new THREE.Color(0.2, 1.0, 0.5), new THREE.Color(1.0, 0.9, 0.2)],
-  [new THREE.Color(0.2, 0.95, 1.0), new THREE.Color(1.0, 0.35, 0.8)],
+  [new THREE.Color(0.2, 0.62, 1.0), new THREE.Color(1.0, 0.35, 0.8)],
 ];
-export const SLOT_CSS = ['#3fa2ff/#ff8a1e', '#9452ff/#ff2e33', '#33ff80/#ffe633', '#33f2ff/#ff59cc'].map((s) => s.split('/'));
+export const SLOT_CSS = ['#26f2ff/#ff1f1a', '#9452ff/#ff8a1e', '#33ff80/#ffe633', '#3fa2ff/#ff59cc'].map((s) => s.split('/'));
 const RY180 = new THREE.Matrix4().makeRotationY(Math.PI);
 
 const displayVS = /* glsl */ `
@@ -41,7 +42,7 @@ const NOISE = /* glsl */ `
 const displayFS = /* glsl */ `
   uniform sampler2D map;
   uniform vec3 uCenter, uRight, uUp, uNormal, uColor;
-  uniform float uA, uB, uLinked, uOpen, uTime, uPast, uStatic;
+  uniform float uA, uB, uLinked, uOpen, uTime, uPast, uStatic, uNoise;
   uniform vec2 uRes;
   varying vec3 vW;
   ${NOISE}
@@ -61,6 +62,15 @@ const displayFS = /* glsl */ `
     // portal temporal: a vista do passado sai só em tons de cinza, sem nada por cima
     float lum = dot(view, vec3(0.3, 0.59, 0.11));
     view = mix(view, vec3(lum), uPast);
+    // vermelho do passado: o futuro do outro lado, com estática por cima (ele ainda pode mudar)
+    if (uNoise > 0.0) {
+      vec2 px = mod(floor(gl_FragCoord.xy / 2.0), 512.0); // números pequenos: o hash não vira padrão
+      float fr = mod(floor(uTime * 24.0), 61.0);
+      float g = h(px + fr * vec2(7.13, 3.71));
+      float band = smoothstep(0.6, 1.0, n2(vec2(gl_FragCoord.y * 0.02 - uTime * 3.0, fr * 0.37)));
+      float roll = 0.85 + 0.15 * sin(gl_FragCoord.y * 0.8 + uTime * 40.0);
+      view = mix(view * roll, vec3(g), uNoise * (0.38 + 0.4 * band));
+    }
     // sem par: plasma girando na cor do portal, mais claro perto da borda
     float ang = uTime * 0.7 + r * 3.2;
     vec2 sp = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * e * 2.4;
@@ -201,6 +211,7 @@ class Portal {
       uLinked: { value: 0 },
       uPast: { value: 0 },
       uStatic: { value: 0 },
+      uNoise: { value: 0 },
       uOpen: { value: 0 },
       uTime: { value: 0 },
       uRes: { value: new THREE.Vector2(size.x, size.y) },
@@ -354,6 +365,13 @@ const _r2 = new THREE.Vector4();
 const NONE = new THREE.Vector4(); // marca: portal todo atrás da câmera
 const _sphere = new THREE.Sphere();
 
+/** quadros de portal de fundo preto, sem repetir lugar e com uma chave do lugar */
+function staticList(frames) {
+  const out = [];
+  for (const f of frames) if (f.box && !out.some((g) => g.c.distanceTo(f.c) < 0.3)) out.push({ ...f, key: `${f.c.x.toFixed(2)},${f.c.y.toFixed(2)},${f.c.z.toFixed(2)}` });
+  return out;
+}
+
 export class PortalSystem {
   constructor(renderer, scene, camera, world) {
     this.renderer = renderer;
@@ -481,18 +499,15 @@ export class PortalSystem {
     const c = new THREE.Vector3(...center);
     let n = new THREE.Vector3(...normal);
     let u = new THREE.Vector3(...up);
-    // a parede logo atrás do centro; se o ponto dado estiver enterrado nela (mapas
-    // importados), começa cada vez mais à frente até sair do sólido
-    let hit = null;
-    for (const ofs of [0.3, 0.6, 1.0, 1.6]) {
-      hit = this.world.raycast(c.clone().addScaledVector(n, ofs), n.clone().negate(), ofs + 0.7);
-      if (hit) break;
-    }
+    // a parede encostada no centro, na direção dada
+    const behind = (d, ofs = 0.3, reach = 0.45) => this.world.raycast(c.clone().addScaledVector(d, ofs), d.clone().negate(), reach);
+    let hit = behind(n);
     if (!hit) {
-      // nada atrás na direção dada (há mapas do original com o ângulo trocado): o
-      // portal assenta na superfície em que o ponto encosta, em qualquer direção
+      // nada encostado atrás na direção dada (há mapas do original com o ângulo trocado,
+      // como o azul que sai da câmara 01): o portal assenta na superfície em que o
+      // ponto encosta, em qualquer direção
       for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]].map((v) => new THREE.Vector3(...v))) {
-        const h = this.world.raycast(c.clone().addScaledVector(d, 0.3), d.clone().negate(), 0.45);
+        const h = behind(d);
         if (h && h.normal.dot(d) > 0.99) {
           hit = h;
           n = d;
@@ -501,6 +516,11 @@ export class PortalSystem {
           break;
         }
       }
+    }
+    // ponto enterrado na parede (mapas importados): começa cada vez mais à frente até sair do sólido
+    for (const ofs of [0.6, 1.0, 1.6]) {
+      if (hit) break;
+      hit = behind(n, ofs, ofs + 0.7);
     }
     if (!hit) return null;
     P.setFrame(hit.point.addScaledVector(n, 0.002), n, u, hit.box);
@@ -935,22 +955,29 @@ export class PortalSystem {
         P.light.intensity = 0;
       }
     }
+    // os do laser e os vermelhos do passado (relógio), sem repetir lugar
+    const frames = [...this.staticFrames];
+    for (const g of this.ghostFrames ?? []) if (!frames.some((f) => f.c.distanceTo(g.c) < 0.3)) frames.push(g);
     this.statics.forEach((S, i) => {
-      const f = this.staticFrames[i];
+      const f = frames[i];
       if (!f?.box) {
         if (S.group.visible) S.remove();
         S.shown = null;
+        S.frame = null;
         return;
       }
       if (S.shown !== f.key) {
         S.setFrame(f.c, f.n, f.u, f.box);
         S.shown = f.key;
       }
+      S.frame = f;
       S.uniforms.uTime.value = t;
       S.open = Math.min(1, S.open + dt * 4.5);
       S.uniforms.uOpen.value = S.open;
       S.uniforms.uLinked.value = 1;
-      S.uniforms.uStatic.value = 1;
+      // com vista (o futuro, pelo vermelho do passado): imagem com estática; sem vista: fundo preto
+      S.uniforms.uStatic.value = f.view ? 0 : 1;
+      S.uniforms.uNoise.value = f.view ? 1 : 0;
       S.rimMat.uniforms.uFlash.value = 0;
       S.light.intensity = 3 + 2 * Math.sin(t * 23) * Math.sin(t * 7);
     });
@@ -958,9 +985,12 @@ export class PortalSystem {
 
   /** onde mostrar laranjas de estática neste quadro: [{ c, n, u, box }] (até 2) */
   setStatics(frames) {
-    const out = [];
-    for (const f of frames) if (f.box && !out.some((g) => g.c.distanceTo(f.c) < 0.3)) out.push({ ...f, key: `${f.c.x.toFixed(2)},${f.c.y.toFixed(2)},${f.c.z.toFixed(2)}` });
-    this.staticFrames = out.slice(0, this.statics.length);
+    this.staticFrames = staticList(frames).slice(0, this.statics.length);
+  }
+
+  /** vermelhos de versões passadas suas, vistos do passado (o relógio diz quais, a cada quadro) */
+  setGhostStatics(frames) {
+    this.ghostFrames = staticList(frames);
   }
 
   /**
@@ -1037,7 +1067,9 @@ export class PortalSystem {
     _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_pm);
     const todo = this.list.filter((P) => this.isLinked(P) && P.delta === 0 && _frustum.intersectsSphere(_sphere.set(P.center, PORTAL_B * 1.2)));
-    if (!todo.length) return;
+    // vermelhos do passado com vista: o outro lado é o ciano, no futuro
+    const ahead = this.futureView ? this.statics.filter((S) => S.placed && S.frame?.view && _frustum.intersectsSphere(_sphere.set(S.center, PORTAL_B * 1.2))) : [];
+    if (!todo.length && !ahead.length) return;
     const prevTarget = r.getRenderTarget();
     const prevClip = r.clippingPlanes;
     // os laranjas de estática ficam no plano do laranja: nas vistas pelos portais eles
@@ -1077,10 +1109,31 @@ export class PortalSystem {
       if (past) [P.group.visible, P.light.intensity] = hidP;
       Q.group.visible = wasVisible;
     }
+    for (const S of ahead) {
+      const to = S.frame.view.to;
+      const right = new THREE.Vector3().crossVectors(to.u, to.n).normalize();
+      const Qm = new THREE.Matrix4().makeBasis(right, to.u, to.n).setPosition(to.c);
+      const M = new THREE.Matrix4().multiplyMatrices(Qm, RY180).multiply(S.inverse);
+      const v = this.vcam;
+      v.projectionMatrix.copy(cam.projectionMatrix);
+      v.projectionMatrixInverse.copy(cam.projectionMatrixInverse);
+      v.matrixWorld.multiplyMatrices(M, cam.matrixWorld);
+      v.matrixWorldInverse.copy(v.matrixWorld).invert();
+      this.scissorTo(S, S.rt[1 - S.read], _pv.multiplyMatrices(v.projectionMatrix, v.matrixWorldInverse));
+      this.clip.setFromNormalAndCoplanarPoint(to.n, to.c);
+      r.clippingPlanes = [this.clip];
+      this.futureView.begin(S.frame.view);
+      v.layers.disable(1); // você não está lá: está atravessando
+      r.setRenderTarget(S.rt[1 - S.read]);
+      r.clear();
+      r.render(this.scene, v);
+      v.layers.enable(1);
+      this.futureView.end();
+    }
     r.clippingPlanes = prevClip;
     r.setRenderTarget(prevTarget);
     this.statics.forEach((S, i) => (S.group.visible = staticVis[i]));
-    for (const P of todo) {
+    for (const P of [...todo, ...ahead]) {
       P.read = 1 - P.read;
       P.uniforms.map.value = P.rt[P.read].texture;
     }

@@ -1,7 +1,7 @@
 // Série Chefes — B01 "Sistema Nervoso": um crânio gigante, com as veias e os
 // nervos à mostra, protege a saída. A luta segue a do Portal 1: uma torreta
 // atira foguetes em você; saia da frente e deixe o foguete entrar no portal
-// azul — o laranja, já na parede, aponta para o crânio. Cada foguete que
+// ciano — o vermelho, já na parede, aponta para o crânio. Cada foguete que
 // acerta derruba um núcleo, que você leva (E) até a fornalha no meio do salão.
 // Com os três queimados ele se acalma: os nervos recuam, sobra só o feixe
 // arrumado — o "sistema tranquilo" — e a porta de trás se abre.
@@ -565,15 +565,15 @@ function createFight(ctx, S) {
         T.group.position.y = -3.8 * (1 - lift);
         T.group.visible = rise > 0.01;
         T.enabled = !idle && rise >= 0.999;
-        const shot = T.update(dt, eye, world);
+        const shot = T.update(dt, eye, world, portals);
         if (T.lock === 0) tipped = false;
         if (T.enabled && T.lock > 0.3 && !tipped && tip < 2) {
           tipped = true;
           tip++;
           ctx.say([
             portals.blue.placed
-              ? ['Helena', 'O laser travou em você! Saia do caminho: o foguete vai reto até o portal azul.']
-              : ['Helena', 'O laser travou! Ponha o portal azul numa parede branca atrás de você e saia da frente do foguete.'],
+              ? ['Helena', 'O laser travou em você! Saia do caminho: o foguete vai reto até o portal ciano.']
+              : ['Helena', 'O laser travou! Ponha o portal ciano numa parede branca atrás de você e saia da frente do foguete.'],
           ]);
         }
         if (shot) {
@@ -596,7 +596,7 @@ function createFight(ctx, S) {
           prev.copy(r.pos).addScaledVector(r.dir, -0.05);
           r.homing = true;
         }
-        // depois do portal o foguete corrige a rota sozinho rumo ao crânio (o ângulo de entrada no azul
+        // depois do portal o foguete corrige a rota sozinho rumo ao crânio (o ângulo de entrada no ciano
         // não precisa ser perfeito): só se ele já estiver apontado mais ou menos para lá
         if (r.homing) {
           seg.copy(SK).sub(r.pos).normalize();
@@ -666,7 +666,7 @@ export const CHEFES = [
   B(0, {
     name: 'Sistema Nervoso',
     who: 'Helena',
-    lesson: 'Fique na frente do portal azul e saia do caminho quando o foguete vier: ele sai no laranja, direto no crânio. Queime os três núcleos que caem.',
+    lesson: 'Fique na frente do portal ciano e saia do caminho quando o foguete vier: ele sai no vermelho, direto no crânio. Queime os três núcleos que caem.',
     build(w) {
       // salão: paredes de metal escuro com painéis brancos de portal encaixados; teto de metal
       w.box(-25, 0, -73, -24, 38, -9, 'metal');
@@ -737,16 +737,16 @@ export const CHEFES = [
       return {
         spawn: [0, 0, -14, 0],
         gun: 'blue',
-        // o laranja já está na parede, na altura do crânio: tudo que entra no azul sai apontado para ele
+        // o vermelho já está na parede, na altura do crânio: tudo que entra no ciano sai apontado para ele
         portals: [{ which: 'orange', c: [-23.9, 27, -55], n: [1, 0, 0], u: [0, 1, 0] }],
         fight: (ctx) => createFight(ctx, S),
         intro: [
           ['Helena', 'Esse crânio gigante manda na câmara. As torretas de foguete miram em você: o laser trava e o foguete sai reto e rápido. Os olhos dele também cospem bolas de energia: não encoste.'],
-          ['Helena', 'O portal laranja já está na parede, de frente para o crânio. Ponha o azul na parede branca atrás de você, espere o laser travar e saia do caminho: o foguete passa pelo portal e acerta o crânio.'],
+          ['Helena', 'O portal vermelho já está na parede, de frente para o crânio. Ponha o ciano na parede branca atrás de você, espere o laser travar e saia do caminho: o foguete passa pelo portal e acerta o crânio.'],
           ['Helena', 'Cada acerto derruba um núcleo da boca dele. Leve até a fornalha no meio do salão (E pega e solta). Com três queimados, a porta de trás abre.'],
         ],
         hints: [
-          { after: 70, lines: [['Helena', 'De costas para uma parede branca, atire o portal azul nela. Quando o laser travar em você, ande para o lado: o foguete segue em linha reta até o portal.']] },
+          { after: 70, lines: [['Helena', 'De costas para uma parede branca, atire o portal ciano nela. Quando o laser travar em você, ande para o lado: o foguete segue em linha reta até o portal.']] },
           { after: 150, lines: [['Helena', 'Quando o núcleo cair, as torretas param. Pegue ele com E (olhando de perto) e jogue dentro do buraco brilhante do chão.']] },
         ],
       };

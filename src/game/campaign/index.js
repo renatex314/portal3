@@ -5,12 +5,12 @@
 // do Portal dele (ver source.js).
 
 import { parseBSP } from './bsp.js';
-import { buildMap } from './convert.js';
+import { buildMap, REAL_PROP_TEX } from './convert.js';
 import { Dialogue } from './dialogue.js';
 import { ensureSource, readFile, packedContent } from './source.js';
 import { MAPS } from './maps.js';
 import { animatedModels, sequenceDurations } from './mdl.js';
-import { parseStaticProps, parseModel } from './staticprops.js';
+import { parseStaticProps, parseModel, readPHY } from './staticprops.js';
 import { parseAnimatedModel } from './mdlmodel.js';
 import { buildModel, placeModel, playSeq } from './model3d.js';
 import * as THREE from 'three';
@@ -66,7 +66,7 @@ async function loadPropModels(bsp, pak) {
 
 // modelos de entidade desenhados com o modelo do original (a sala da GLaDOS: corpo,
 // núcleos, discos, gerador, monitores, varanda, porta e os destroços do final)
-export const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/)/;
+export const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/|props\/round_elevator_)/;
 const entModels = new Map();
 async function loadEntityModels(bsp, pak) {
   const names = new Set();
@@ -74,12 +74,15 @@ async function loadEntityModels(bsp, pak) {
     const m = (e.kv.get('model') ?? '').toLowerCase().replace(/\\/g, '/');
     if (/^prop_(dynamic|dynamic_override|physics|glados_core)/.test(e.classname) && REAL_MODEL.test(m)) names.add(m);
   }
+  for (const p of bsp.staticProps ?? []) if (REAL_PROP_TEX.test(p.model)) names.add(p.model);
   await Promise.all(
     [...names].filter((n) => !entModels.has(n)).map(async (name) => {
       const base = name.replace(/\.mdl$/, '');
       try {
-        const [mdl, vvd, vtx, ani] = await Promise.all(['.mdl', '.vvd', '.dx90.vtx', '.ani'].map((x) => modelFile(pak, base + x)));
-        entModels.set(name, mdl && vvd && vtx ? parseAnimatedModel(mdl, vvd, vtx, ani) : null);
+        const [mdl, vvd, vtx, ani, phy] = await Promise.all(['.mdl', '.vvd', '.dx90.vtx', '.ani', '.phy'].map((x) => modelFile(pak, base + x)));
+        const M = mdl && vvd && vtx ? parseAnimatedModel(mdl, vvd, vtx, ani) : null;
+        if (M) M.hulls = phy ? readPHY(phy) : []; // colisão (plataformas da sala da GLaDOS)
+        entModels.set(name, M);
       } catch (err) {
         console.warn('modelo', name, err);
         entModels.set(name, null);

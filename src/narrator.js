@@ -1,4 +1,5 @@
-// Narração com as vozes em português do Brasil do próprio sistema
+// Narração: o áudio gravado da fala, se houver (public/vozes, gerado por
+// scripts/vozes.mjs); senão, as vozes em português do Brasil do próprio sistema
 // (Web Speech API). Cada personagem tem gênero, tom e ritmo próprios; se o
 // sistema tiver só uma voz pt-BR, o tom/ritmo diferenciam os personagens.
 
@@ -20,9 +21,13 @@ const SPEAKERS = {
 const FEMALE = /maria|francisca|thalita|luciana|vit[oó]ria|leila|brenda|elza|manuela|yara|giovanna|raquel|female|feminin|google português/i;
 const MALE = /daniel|ant[oô]nio|donato|f[aá]bio|humberto|j[uú]lio|nicolau|val[eé]rio|felipe|male|masculin/i;
 
+import { voiceKey } from './voicekey.js';
+
 export class Narrator {
   constructor() {
     this.enabled = false;
+    this.clips = new Set(); // chaves das falas gravadas
+    this.audio = null;
     this.supported = 'speechSynthesis' in window;
     this.voices = [];
     this.onSpeaking = () => {};
@@ -41,7 +46,32 @@ export class Narrator {
   }
 
   get available() {
-    return this.supported && this.voices.length > 0;
+    return (this.supported && this.voices.length > 0) || this.clips.size > 0;
+  }
+
+  /** lista de falas gravadas (public/vozes/index.json); sem ela, só a voz do sistema */
+  async loadClips(base = 'vozes/') {
+    this.clipBase = base;
+    try {
+      const r = await fetch(`${base}index.json`);
+      if (r.ok) this.clips = new Set(await r.json());
+    } catch {
+      /* sem falas gravadas */
+    }
+  }
+
+  /** toca a fala gravada; resolve quando termina ou é cancelada */
+  _playClip(key, my) {
+    return new Promise((resolve) => {
+      const a = new Audio(`${this.clipBase}${key}.mp3`);
+      this.audio = a;
+      const done = () => {
+        if (this.audio === a) this.audio = null;
+        resolve(my === this.token);
+      };
+      a.onended = a.onerror = a.onpause = done;
+      a.play().catch(done);
+    });
   }
 
   _voice(g) {
@@ -51,14 +81,26 @@ export class Narrator {
 
   cancel() {
     this.token++;
+    this.audio?.pause();
     if (this.supported) speechSynthesis.cancel();
     this.onSpeaking(false);
   }
 
-  /** Fala um texto (dividido em frases). Resolve quando termina, é cancelado ou se a narração estiver desligada. */
-  async speak(text, who = 'Narrador') {
+  /**
+   * Fala um texto (dividido em frases). Resolve quando termina, é cancelado ou se a
+   * narração estiver desligada. `raw`: o texto como está no jogo (acha a fala gravada).
+   */
+  async speak(text, who = 'Narrador', raw = text) {
     if (!this.enabled || !this.available) return false;
     const my = this.token;
+    const key = voiceKey(who, raw);
+    if (this.clips.has(key)) {
+      this.onSpeaking(true);
+      await this._playClip(key, my);
+      if (my === this.token) this.onSpeaking(false);
+      return true;
+    }
+    if (!this.supported || !this.voices.length) return false;
     const sp = SPEAKERS[who] ?? SPEAKERS.Narrador;
     const voice = this._voice(sp.g);
     const sameVoice = voice === this._voice(sp.g === 'f' ? 'm' : 'f');

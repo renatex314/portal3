@@ -1,6 +1,6 @@
 :root {
-  --blue: #3fa2ff;
-  --orange: #ff8a1e;
+  --blue: #26f2ff; /* ciano */
+  --orange: #ff1f1a; /* vermelho */
   --panel: rgba(10, 13, 20, 0.78);
   --border: rgba(255, 255, 255, 0.14);
   --text: #eef2f8;

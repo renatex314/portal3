@@ -559,29 +559,6 @@ export function doorPanel() {
 }
 
 /** lama/rocha fundida: emissiva, animada pelo deslocamento da textura */
-export function magma() {
-  const size = 512;
-  const cv = canvas(size);
-  const g = cv.getContext('2d');
-  g.fillStyle = '#ff6a10';
-  g.fillRect(0, 0, size, size);
-  blotches(g, 0, 0, size, size, 20, '255,220,120', 0.5);
-  grain(g, 0, 0, size, size, 9000, 0.4, 3);
-  // crosta escura rachada
-  for (let i = 0; i < 70; i++) {
-    g.strokeStyle = `rgba(50,8,0,${0.5 + Math.random() * 0.4})`;
-    g.lineWidth = 3 + Math.random() * 9;
-    g.lineJoin = 'round';
-    g.beginPath();
-    let x = Math.random() * size;
-    let y = Math.random() * size;
-    g.moveTo(x, y);
-    for (let k = 0; k < 6; k++) g.lineTo((x += (Math.random() - 0.5) * 90), (y += (Math.random() - 0.5) * 90));
-    g.stroke();
-  }
-  return tex(cv);
-}
-
 /** regolito lunar: pó cinza com pedrinhas e crateras pequenas (aceita portal, como a rocha lunar) */
 export function moonGround() {
   const size = 1024;

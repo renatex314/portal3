@@ -108,7 +108,7 @@ export const LEVELS = [
         booths,
         intro: [
           ['Helena', 'Bem-vindo ao Laboratório Antípoda. Aqui embaixo de Nova Lima a gente testa o que não dá pra testar no poço.'],
-          ['Helena', 'Essa é a arma de portais: botão esquerdo abre o portal azul, botão direito abre o laranja.'],
+          ['Helena', 'Essa é a arma de portais: botão esquerdo abre o portal ciano, botão direito abre o vermelho.'],
           ['Helena', 'Portal só gruda em concreto claro. Rocha e metal, não. Leva você até o elevador do outro lado.'],
           ['Helena', 'Ah: o raptor de capacete aqui do lado é o Pipoca, nosso mascote. Ele não morde. Muito.'],
         ],

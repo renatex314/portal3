@@ -13,7 +13,12 @@ const seq = (base, n, ext = 'ogg') => Array.from({ length: n }, (_, i) => `${bas
 const n3 = (base, ...ns) => ns.map((i) => `${base}_${String(i).padStart(3, '0')}.ogg`);
 export const SAMPLES = {
   // arma de portais
-  shot: seq('laserLarge', 5), // disparo
+  shot: seq('laserLarge', 5), // disparo (reserva)
+  blast: ['portalgun_blast.wav'], // disparo da arma de portais (gravação do jogador)
+  enter: ['portal_enter.wav'], // entrar num portal (gravação do jogador)
+  tick: ['tick.wav'], // roda do mouse com o tempo parado (gravação do jogador)
+  turretFire: ['turret_fire.wav'], // rajada da torreta, em laço enquanto ela atira (gravação do jogador)
+  slowHum: ['slow_mo_hum.wav'], // zumbido em laço durante o tempo lento (gravação do jogador)
   open: seq('forceField', 5), // portal abrindo; pegar/soltar
   fail: seq('impactMetal', 5), // superfície que não aceita portal
   pass: ['spaceEngineLow_000.ogg', 'spaceEngineLow_003.ogg'], // atravessar um portal
@@ -244,13 +249,13 @@ export class Sfx {
    * liga as fontes ao nó `out`; devolve { set(v, extra) } — `extra` permite
    * mudar timbre (ex.: altura do zumbido).
    */
-  loop(name, build, max = 0.2) {
+  loop(name, build, max = 0.2, dest = null) {
     if (!this.ok) return { set() {} };
     if (!this.loops.has(name)) {
       const ctx = this.sound.ctx;
       const out = ctx.createGain();
       out.gain.value = 0;
-      out.connect(this.sound.sfx);
+      out.connect(dest ?? this.sound.sfx);
       const ctl = build(ctx, out) ?? {};
       const entry = {
         v: 0,
@@ -315,7 +320,7 @@ export class Sfx {
    * Laço feito de uma gravação (`key` em SAMPLES). Devolve false se ela ainda
    * não carregou (quem chamou usa a versão sintetizada).
    */
-  _sloop(name, key, v, { max = 0.2, rate = 1, fade = 0.6, filter = null, tune = null, extra, boost = 1 } = {}) {
+  _sloop(name, key, v, { max = 0.2, rate = 1, fade = 0.6, filter = null, tune = null, extra, boost = 1, dest = null } = {}) {
     const buf = this.bufs[key]?.find(Boolean);
     if (!buf) return false;
     this.loop(
@@ -339,8 +344,21 @@ export class Sfx {
         return { tune: (d, t) => tune?.(f, d, t) };
       },
       max,
+      dest,
     ).set(v, extra);
     return true;
+  }
+
+  /** rajada das torretas: toca em laço enquanto alguma atira (v: 0..1, pela distância) */
+  turretFire(v) {
+    if (!this.ok || !this.ready) return;
+    this._sloop('turretFireL', 'turretFire', v, { max: 0.55, fade: 0.04 });
+  }
+
+  /** zumbido do tempo lento (laço); vai direto para a saída, sem o abafado do tempo lento */
+  slowHum(v) {
+    if (!this.ok || !this.ready) return;
+    this._sloop('slowHumL', 'slowHum', v, { max: 0.6, fade: 0.4, dest: this.sound.master });
   }
 
   /** zumbido do campo da arma segurando um objeto (gravação em laço; sintetizado enquanto não carrega) */
@@ -536,6 +554,7 @@ export class Sfx {
   shot(blue) {
     if (!this.ok) return;
     const t = this.t;
+    if (this.sample('blast', { vol: 0.6, jitter: 0.02 })) return;
     // gravação: o azul um pouco mais agudo que o laranja (como cada portal tem sua "voz")
     if (this.sample('shot', { vol: 0.42, rate: blue ? 1.12 : 0.86 })) {
       this._osc('sine', 150, 50, t, 0.16, 0.12); // soco grave por baixo
@@ -601,6 +620,7 @@ export class Sfx {
   /** passagem por um portal: dobra de fase */
   whoosh() {
     if (!this.ok) return;
+    if (this.sample('enter', { vol: 0.6, jitter: 0.02 })) return;
     if (this.sample('pass', { vol: 0.32, rate: 1.7, dur: 0.6, from: Math.random() * 3, filter: { type: 'highpass', freq: 220 } })) return;
     const t = this.t;
     this._noise(t, 0.45, 'bandpass', 3500, 300, 0.2, 2.5);
@@ -818,22 +838,19 @@ export class Sfx {
     if (!this.ok) return;
     const m = this.sound.master;
     if (this.sample('sweepL', { vol: 0.55, rate: 0.9, rateTo: 0.25, dur: 0.9, dest: m })) {
-      this.sample('boom', { vol: 0.4, rate: 0.6, delay: 0.05, dest: m });
-      this.sample('btnDown', { vol: 0.5, rate: 0.5, delay: 0.1, dest: m });
-      return;
+      return; // só a distorção (sem estrondo nem batida)
     }
     const t = this.t;
     this._osc('sine', 700, 38, t, 1.0, 0.3, 0.01, m);
     this._osc('triangle', 1300, 90, t, 0.6, 0.12, 0.005, m);
     this._noise(t, 0.55, 'bandpass', 4200, 280, 0.2, 2, m);
-    this._osc('square', 95, 60, t + 0.06, 0.09, 0.16, 0.002, m);
   }
 
   unfreeze() {
     if (!this.ok) return;
     const m = this.sound.master;
     if (this.sample('sweepL', { vol: 0.5, rate: 0.35, rateTo: 1.6, dur: 0.55, dest: m })) {
-      this.sample('btnDown', { vol: 0.4, rate: 1.1, delay: 0.3, dest: m });
+      this.sample('tick', { vol: 0.5, jitter: 0.01, delay: 0.3, dest: m });
       return;
     }
     const t = this.t;
@@ -842,11 +859,11 @@ export class Sfx {
     this._osc('square', 800, 800, t + 0.32, 0.05, 0.1, 0.002, m);
   }
 
-  /** um passo da roda do mouse no holograma do passado: tique que fica mais agudo quanto mais perto do presente */
+  /** um passo da roda do mouse no holograma do passado: o tique gravado (sintetizado enquanto não carrega) */
   scrub(delta) {
     if (!this.ok) return;
     const f = 1800 - delta * 40;
-    if (this.sample('btnDown', { vol: 0.28, rate: 1.1 + (30 - delta) * 0.03, dest: this.sound.master })) return;
+    if (this.sample('tick', { vol: 0.5, jitter: 0.01, dest: this.sound.master })) return;
     this._osc('square', f, f * 0.8, this.t, 0.04, 0.07, 0.002, this.sound.master);
   }
 
@@ -896,7 +913,7 @@ export class Sfx {
 
   lowTime() {
     if (!this.ok) return;
-    if (this.sample('btnDown', { vol: 0.35, rate: 1.7, dest: this.sound.master })) return;
+    if (this.sample('tick', { vol: 0.5, jitter: 0.01, dest: this.sound.master })) return;
     const t = this.t;
     this._osc('square', 1320, 1320, t, 0.06, 0.05, 0.003, this.sound.master);
   }

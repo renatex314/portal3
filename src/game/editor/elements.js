@@ -34,6 +34,7 @@ const MATS = [
   ['metal', 'Metal'],
   ['rock', 'Rocha'],
   ['glass', 'Vidro'],
+  ['grate', 'Grade (tiros de portal passam)'],
 ];
 const num = (k, label, d, o = {}) => ({ k, label, t: 'num', d, ...o });
 const sig = (k, label, d = '') => ({ k, label, t: 'sig', d });
@@ -224,8 +225,12 @@ export const ELEMENTS = {
     color: 0x66d9ff,
     shape: 'box',
     size: [4, 4, 0.2],
+    params: [
+      sig('sig', 'Sinal do botão (vazio = sempre ligada)'),
+      { k: 'mode', label: 'Quando o botão é apertado', t: 'select', o: [['off', 'Desativa a grade'], ['on', 'Ativa a grade']], d: 'off' },
+    ],
     build(w, it) {
-      w.fizzler(...minmax(it));
+      w.fizzler(...minmax(it), { sig: it.sig || null, mode: it.mode });
     },
   },
   incinerator: {
@@ -275,9 +280,9 @@ export const ELEMENTS = {
     shape: 'point',
     hit: [0.9, 0.9, 0.9],
     lift: 0.1,
-    params: [dir('+x')],
+    params: [dir('+x'), sig('sig', 'Sinal que liga (vazio = sempre ligado)')],
     build(w, it) {
-      w.laser(it.p[0], it.p[1], it.p[2], dirVec(it.dir));
+      w.laser(it.p[0], it.p[1], it.p[2], dirVec(it.dir), { sig: it.sig || null });
     },
   },
   laserCatcher: {
@@ -319,7 +324,7 @@ export const ELEMENTS = {
     params: [
       { k: 'mode', label: 'Definir por', t: 'select', o: [['vel', 'Velocidade'], ['alvo', 'Ponto de pouso']], d: 'alvo' },
       v3('vel', 'Velocidade (x, y, z)', [0, 12, -6]),
-      v3('target', 'Pouso (x, y, z)', [0, 0, -12]),
+      { ...v3('target', 'Pouso (x, y, z)', [0, 0, -12]), pick: 'alvo' }, // pick: dá para escolher no cenário (e põe mode = 'alvo')
       num('apex', 'Altura acima do mais alto (m)', 4, { min: 0.5, step: 0.5 }),
     ],
     build(w, it) {
@@ -442,7 +447,7 @@ export const ELEMENTS = {
     shape: 'point',
     hit: [1.2, 1.9, 1.2],
     lift: 0.95,
-    params: [{ k: 'gives', label: 'Entrega', t: 'select', o: [['blue', 'Só portal azul'], ['both', 'Os dois portais']], d: 'both' }],
+    params: [{ k: 'gives', label: 'Entrega', t: 'select', o: [['blue', 'Só portal ciano'], ['both', 'Os dois portais']], d: 'both' }],
     build(w, it) {
       w.pedestal(it.p[0], it.p[1], it.p[2], it.gives, portalGun());
     },
@@ -455,7 +460,7 @@ export const ELEMENTS = {
     shape: 'point',
     hit: [1.4, 2.2, 0.4],
     lift: 0,
-    params: [{ k: 'which', label: 'Cor', t: 'select', o: [['blue', 'Azul'], ['orange', 'Laranja']], d: 'blue' }, { ...dir('+z'), label: 'Aponta para' }],
+    params: [{ k: 'which', label: 'Cor', t: 'select', o: [['blue', 'Ciano'], ['orange', 'Vermelho']], d: 'blue' }, { ...dir('+z'), label: 'Aponta para' }],
     build(w, it, c) {
       const n = dirVec(it.dir);
       c.data.portals.push({ which: it.which, c: [...it.p], n, u: Math.abs(n[1]) > 0.5 ? [0, 0, -1] : [0, 1, 0] });

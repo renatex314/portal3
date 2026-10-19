@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { flight, pellet, PLAYER_HALF } from './trajectory.js';
 
 const COLORS = [0x66d9ff, 0xffb347, 0xff6a9a, 0x9aff6a, 0xb06cff, 0xffee66];
-const END_COLOR = { pouso: 0x4cff8a, parede: 0xffa94d, mata: 0xff4040, grade: 0xb06cff, tempo: 0xaaaaaa, abismo: 0xff4040, vida: 0xaaaaaa, rebates: 0xaaaaaa };
+const END_COLOR = { pouso: 0x4cff8a, parede: 0xffa94d, mata: 0xff4040, grade: 0xb06cff, tempo: 0xaaaaaa, abismo: 0xff4040, fundo: 0xaaaaaa, vida: 0xaaaaaa, rebates: 0xaaaaaa };
 const END_TEXT = {
   pouso: 'pousa em uma superfície',
   parede: 'bate numa parede',
@@ -13,6 +13,7 @@ const END_TEXT = {
   grade: 'é desintegrado na grade',
   tempo: 'ainda está no ar depois de 14 s',
   abismo: 'cai no vazio',
+  fundo: 'passa por tudo e sai por baixo do nível',
   vida: 'some depois de viver o tempo todo',
   rebates: 'quica sem parar',
 };
@@ -20,7 +21,7 @@ const fmt = (n, d = 1) => n.toFixed(d).replace('.', ',');
 
 export function createTrajTool(ctx) {
   const { el, group } = ctx;
-  const S = { plates: true, pellets: true, origin: null, yaw: 0, pitch: 35, speed: 12, picking: false, report: [], ends: [] };
+  const S = { ghost: true, plates: true, pellets: true, origin: null, yaw: 0, pitch: 35, speed: 12, picking: false, report: [], ends: [] };
   const report = el('div', { class: 'report' });
   const inputs = {};
   const row = (label, key, min, max, step) => {
@@ -34,6 +35,7 @@ export function createTrajTool(ctx) {
     'div',
     { class: 'tool' },
     el('h3', {}, 'Trajetória'),
+    el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => ((S.ghost = e.target.checked), refresh()) }), 'Atravessar tudo (sem colisão; só portais e placas mudam o voo)'),
     el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => ((S.plates = e.target.checked), refresh()) }), 'Arco das placas de lançamento'),
     el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: true, onchange: (e) => ((S.pellets = e.target.checked), refresh()) }), 'Caminho das bolas de energia'),
     el('p', { class: 'note' }, 'Lançamento livre: escolha de onde sai e para onde vai.'),
@@ -127,6 +129,7 @@ export function createTrajTool(ctx) {
     S.ends = [];
     const env = ctx.env();
     const add = (title, r, kind) => {
+      if (S.ghost && kind === 'voo' && r.end.kind === 'abismo') r.end.kind = 'fundo';
       drawPath(r.pts, r.seg, r.end.kind, r.end.pos, r.times);
       const st = r.stats;
       const line =
@@ -139,7 +142,7 @@ export function createTrajTool(ctx) {
     };
     if (S.plates)
       ctx.world.plates.forEach((P, n) => {
-        const r = flight(env, { pos: P.pos.clone().add(new THREE.Vector3(0, 0.2 + PLAYER_HALF.y + 0.05, 0)), vel: P.vel.clone() });
+        const r = flight(env, { pos: P.pos.clone().add(new THREE.Vector3(0, 0.2 + PLAYER_HALF.y + 0.05, 0)), vel: P.vel.clone(), ghost: S.ghost });
         add(`Placa ${n + 1}`, r, 'voo');
       });
     if (S.pellets)
@@ -147,7 +150,7 @@ export function createTrajTool(ctx) {
         add(`Bola ${n + 1}`, pellet(env, { pos: L.pos.clone(), dir: L.dir.clone(), speed: L.speed, life: L.life }), 'bola');
       });
     if (S.origin) {
-      const r = flight(env, { pos: S.origin.clone(), vel: velOf() });
+      const r = flight(env, { pos: S.origin.clone(), vel: velOf(), ghost: S.ghost });
       add('Lançamento livre', r, 'voo');
       const m = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.5, 12), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
       m.position.copy(S.origin).add(new THREE.Vector3(0, 0.4, 0));
@@ -172,6 +175,22 @@ export function createTrajTool(ctx) {
     refresh,
     get ends() {
       return S.ends;
+    },
+    /** lançamento livre com uma velocidade pronta (a do robô gravado); sem origem, pede para escolher */
+    setLaunch(v) {
+      const sp = v.length();
+      const r1 = (x) => Math.round(x * 10) / 10;
+      S.speed = r1(sp);
+      if (sp > 1e-3) {
+        S.pitch = r1(Math.asin(Math.max(-1, Math.min(1, v.y / sp))) * (180 / Math.PI));
+        if (Math.hypot(v.x, v.z) > 1e-3) S.yaw = r1(Math.atan2(-v.x, -v.z) * (180 / Math.PI));
+      }
+      if (!S.origin) S.picking = true;
+      sync();
+      refresh();
+    },
+    get picking() {
+      return S.picking;
     },
     /** clique no cenário (devolve true se usou) */
     click(e, ray) {

@@ -8,6 +8,10 @@ import { CONTENTS, SURF } from './bsp.js';
 import { portalGun } from '../models.js';
 import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { modelMaterial } from './model3d.js';
+
+/** objetos estáticos desenhados com as texturas originais (a moldura branca dos portais fixos) */
+export const REAL_PROP_TEX = /models\/props\/autoportal_frame\//;
 
 export const S = 0.025;
 export const toV = (x, y, z) => new THREE.Vector3(x * S, z * S, -y * S);
@@ -653,7 +657,7 @@ function propMaterial(tex, model, w) {
   return m;
 }
 
-function propParts(name, model, w) {
+function propParts(name, model, w, bsp = null) {
   if (propGeo.has(name)) return propGeo.get(name);
   const parts = model.groups.map((g) => {
     const n = g.positions.length / 3;
@@ -675,10 +679,32 @@ function propParts(name, model, w) {
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setIndex(new THREE.BufferAttribute(idx, 1));
     geo.computeBoundingSphere();
-    return { geo, mat: propMaterial(g.material, name, w) };
+    const real = REAL_PROP_TEX.test(name) && bsp?.readAsset ? bsp.entModels?.get(name) : null;
+    return { geo, mat: real ? modelMaterial(bsp.readAsset, g.material, real.dirs ?? []) : propMaterial(g.material, name, w) };
   });
   propGeo.set(name, parts);
   return parts;
+}
+
+/** peça convexa de colisão de um modelo (pontos já no mundo); null se degenerada */
+export function addHull(w, pts, { kinematic = false } = {}) {
+  let ch;
+  try {
+    ch = new ConvexHull().setFromPoints(pts);
+  } catch {
+    return null;
+  }
+  const planes = [];
+  for (const face of ch.faces) {
+    if (face.mark !== 0) continue;
+    const n = face.normal.clone();
+    if (planes.some((q) => q.n.dot(n) > 0.9999 && Math.abs(q.d - face.constant) < 1e-4)) continue;
+    planes.push({ n, d: face.constant, kind: null });
+  }
+  if (planes.length < 4) return null;
+  const s = w.convex(ch.vertices.map((v) => v.point.clone()), planes, { solid: true, noRay: false, kinematic });
+  if (s) s.prop = true;
+  return s;
 }
 
 function addStaticProps(w, bsp) {
@@ -696,32 +722,15 @@ function addStaticProps(w, bsp) {
     const left = new THREE.Vector3().crossVectors(u, f);
     // eixos locais daqui: x = frente do Source, y = cima, z = −esquerda
     const M = new THREE.Matrix4().makeBasis(f, u, left.clone().negate()).setPosition(toV(...p.origin));
-    for (const { geo, mat } of propParts(p.model, model, w)) {
+    for (const { geo, mat } of propParts(p.model, model, w, bsp)) {
       if (!batches.has(mat)) batches.set(mat, []);
       batches.get(mat).push(geo.clone().applyMatrix4(M));
     }
     shown++;
     if (!p.solid) continue;
     for (const hull of model.hulls) {
-      const pts = hull.map(([x, y, z]) => new THREE.Vector3(x * S, z * S, -y * S).applyMatrix4(M));
-      let ch;
-      try {
-        ch = new ConvexHull().setFromPoints(pts);
-      } catch {
-        continue;
-      }
-      const planes = [];
-      for (const face of ch.faces) {
-        if (face.mark !== 0) continue;
-        const n = face.normal.clone();
-        if (planes.some((q) => q.n.dot(n) > 0.9999 && Math.abs(q.d - face.constant) < 1e-4)) continue;
-        planes.push({ n, d: face.constant, kind: null });
-      }
-      if (planes.length < 4) continue;
-      const verts = ch.vertices.map((v) => v.point.clone());
-      const s = w.convex(verts, planes, { solid: true, noRay: false });
+      const s = addHull(w, hull.map(([x, y, z]) => new THREE.Vector3(x * S, z * S, -y * S).applyMatrix4(M)));
       if (s) {
-        s.prop = true;
         if (seeThrough) s.seeThrough = s.noRay = true; // cerca: a torreta enxerga e o tiro passa
         hulls++;
       }

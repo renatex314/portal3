@@ -235,10 +235,11 @@ const ShockShader = {
     uAspect: { value: 1 },
     uMaxR: { value: 0.14 },
     uStrength: { value: 0.03 },
+    uWidth: { value: 1 },
   },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse; uniform vec2 uCenter; uniform float uT, uAspect, uMaxR, uStrength;
+    uniform sampler2D tDiffuse; uniform vec2 uCenter; uniform float uT, uAspect, uMaxR, uStrength, uWidth;
     varying vec2 vUv;
     void main(){
       if (uT >= 1.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
@@ -247,7 +248,7 @@ const ShockShader = {
       float r = length(d);
       float e = 1.0 - pow(1.0 - uT, 3.0); // abre rápido e desacelera
       float R = 0.015 + e * uMaxR;
-      float w = mix(0.015, 0.04, e);
+      float w = mix(0.015, 0.04, e) * uWidth;
       float x = (r - R) / w;
       float band = exp(-x * x);
       float fade = pow(1.0 - uT, 1.4);
@@ -265,6 +266,125 @@ const ShockShader = {
  * texturas deles (em espaço linear, sem tom), então nada muda para eles.
  */
 /** desenha a cena no alvo com MSAA; os passes seguintes trabalham em alvos sem MSAA */
+/**
+ * Névoa de calor sobre a rocha fundida: para cada pixel, quanto do raio câmera → superfície
+ * atravessa a camada de ar quente (HAZE_H metros acima de cada lago). Onde atravessa, a
+ * imagem tremula subindo e ganha um brilho quente. Paredes na frente cortam o raio: não tremem.
+ */
+const HAZE_N = 12;
+const HAZE_H = 3.2;
+const hazeFS = /* glsl */ `
+  uniform sampler2D tDiffuse, tDepth;
+  uniform mat4 uInvVP;
+  uniform vec3 uCam;
+  uniform vec4 uLake[${HAZE_N}];
+  uniform float uTop[${HAZE_N}];
+  uniform int uCount;
+  uniform float uTime, uAspect;
+  varying vec2 vUv;
+  float hh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hh(i), hh(i + vec2(1, 0)), u.x), mix(hh(i + vec2(0, 1)), hh(i + vec2(1, 1)), u.x), u.y); }
+  void main(){
+    float d = texture2D(tDepth, vUv).x;
+    vec4 w = uInvVP * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    w /= w.w;
+    vec3 ro = uCam, rd = w.xyz - uCam;
+    float s = 0.0;
+    for (int i = 0; i < ${HAZE_N}; i++) {
+      if (i >= uCount) break;
+      vec3 lo = vec3(uLake[i].x, uTop[i], uLake[i].y);
+      vec3 hi = vec3(uLake[i].z, uTop[i] + ${HAZE_H.toFixed(2)}, uLake[i].w);
+      vec3 inv = 1.0 / (rd + vec3(1e-6));
+      vec3 a = (lo - ro) * inv, b = (hi - ro) * inv;
+      vec3 mn = min(a, b), mx = max(a, b);
+      float t0 = max(max(mn.x, mn.y), max(mn.z, 0.0));
+      float t1 = min(min(mx.x, mx.y), min(mx.z, 1.0)); // 1.0 = a superfície que a câmera vê
+      if (t1 <= t0) continue;
+      float L = (t1 - t0) * length(rd);
+      float y = (ro.y + rd.y * (t0 + t1) * 0.5 - uTop[i]) / ${HAZE_H.toFixed(2)}; // altura média no trecho (0 = rente)
+      float k = (1.0 - clamp(y, 0.0, 1.0));
+      s += L * k * k * 0.16;
+    }
+    s = clamp(s, 0.0, 1.0);
+    if (s < 0.003) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+    // ondas subindo (a tremulação do ar)
+    vec2 q = vec2(vUv.x * uAspect, vUv.y);
+    vec2 off = vec2(vn(q * 38.0 + vec2(0.0, -uTime * 2.2)) - 0.5, vn(q * 31.0 + vec2(5.2, -uTime * 2.8)) - 0.5);
+    off += 0.5 * vec2(vn(q * 90.0 + vec2(0.0, -uTime * 4.0)) - 0.5, 0.0);
+    vec3 col = texture2D(tDiffuse, vUv + off * 0.012 * s).rgb;
+    // brilho quente no ar (luz da lava espalhada)
+    col += vec3(1.0, 0.33, 0.07) * s * (0.16 + 0.05 * sin(uTime * 1.7));
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+class HazePass extends Pass {
+  constructor(camera, source) {
+    super();
+    this.camera = camera;
+    this.source = source;
+    this.lakes = () => []; // caixas de rocha fundida (world.hazards)
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse: { value: null },
+        tDepth: { value: null },
+        uInvVP: { value: new THREE.Matrix4() },
+        uCam: { value: new THREE.Vector3() },
+        uLake: { value: Array.from({ length: HAZE_N }, () => new THREE.Vector4()) },
+        uTop: { value: new Array(HAZE_N).fill(0) },
+        uCount: { value: 0 },
+        uTime: { value: 0 },
+        uAspect: { value: 1 },
+      },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: hazeFS,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.quad = new FullScreenQuad(this.material);
+    this.vp = new THREE.Matrix4();
+  }
+
+  /** escolhe os lagos do quadro; sem lava por perto o passe sai da cadeia (não custa nada) */
+  prepare() {
+    const cam = this.camera;
+    const u = this.material.uniforms;
+    const pos = cam.getWorldPosition(u.uCam.value);
+    // os lagos mais perto da câmera (a superfície de cada um é o topo da caixa)
+    const list = this.lakes()
+      .filter((b) => b.max.y - b.min.y < 3)
+      .map((b) => ({ b, d: Math.hypot(Math.max(b.min.x - pos.x, 0, pos.x - b.max.x), Math.max(b.max.y - pos.y, 0, pos.y - b.max.y - HAZE_H), Math.max(b.min.z - pos.z, 0, pos.z - b.max.z)) }))
+      .filter((l) => l.d < 120)
+      .sort((a, c) => a.d - c.d)
+      .slice(0, HAZE_N);
+    list.forEach(({ b }, i) => {
+      u.uLake.value[i].set(b.min.x, b.min.z, b.max.x, b.max.z);
+      u.uTop.value[i] = b.max.y;
+    });
+    u.uCount.value = list.length;
+    this.enabled = list.length > 0;
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    const cam = this.camera;
+    const u = this.material.uniforms;
+    cam.updateMatrixWorld();
+    this.vp.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    u.uInvVP.value.copy(this.vp).invert();
+    u.tDiffuse.value = readBuffer.texture;
+    u.tDepth.value = this.source.depthTexture;
+    u.uTime.value = performance.now() / 1000;
+    u.uAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.quad.render(renderer);
+  }
+
+  dispose() {
+    this.material.dispose();
+    this.quad.dispose();
+  }
+}
+
 class ScenePass extends Pass {
   constructor(scene, camera, target) {
     super();
@@ -293,6 +413,8 @@ export class Post {
     this.composer.addPass(new ScenePass(scene, camera, this.sceneRT));
     this.blur = new MotionBlurPass(camera, this.sceneRT);
     this.composer.addPass(this.blur);
+    this.haze = new HazePass(camera, this.sceneRT); // névoa de calor sobre a rocha fundida
+    this.composer.addPass(this.haze);
     this.shock = new ShaderPass(ShockShader);
     this.composer.addPass(this.shock);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 1.6);
@@ -309,13 +431,24 @@ export class Post {
     this.sceneRT.setSize(Math.floor(window.innerWidth * pr), Math.floor(window.innerHeight * pr));
   }
 
-  /** dispara a onda de choque (distorção); a posição na tela vem de `shockAt` a cada quadro */
-  shockwave() {
-    this.shock.uniforms.uT.value = 0;
+  /**
+   * dispara a onda de choque (distorção); a posição na tela vem de `shockAt` a cada quadro.
+   * `big`: onda grande saindo do centro da tela (parar/continuar o tempo)
+   */
+  shockwave({ big = false } = {}) {
+    const u = this.shock.uniforms;
+    u.uT.value = 0;
+    this.shockBig = big;
+    this.shockRate = big ? 1.4 : 2.6;
+    u.uMaxR.value = big ? 0.8 : 0.14;
+    u.uStrength.value = big ? 0.05 : 0.03;
+    u.uWidth.value = big ? 2.6 : 1;
+    if (big) u.uCenter.value.set(0.5, 0.5);
   }
 
   /** onde fica a boca da arma na tela (coordenadas 0..1), para a onda sair dali */
   set shockAt(v) {
+    if (this.shockBig && this.shock.uniforms.uT.value < 1) return; // a onda grande fica no centro
     this.shock.uniforms.uCenter.value.copy(v);
   }
 
@@ -331,7 +464,7 @@ export class Post {
     const u = this.finish.uniforms;
     u.uTime.value = t;
     const su = this.shock.uniforms;
-    su.uT.value = Math.min(1, su.uT.value + dt * 2.6);
+    su.uT.value = Math.min(1, su.uT.value + dt * (this.shockRate ?? 2.6));
     su.uAspect.value = window.innerWidth / Math.max(1, window.innerHeight);
     this.shock.enabled = su.uT.value < 1;
     // salto no tempo: aberração forte que some em ~0,7 s
@@ -347,6 +480,7 @@ export class Post {
     this.tunnel = Math.max(0, (this.tunnel ?? 0) - dt * 1.3); // salto no tempo: túnel radial
     this.blur.radial = fast * 0.05 * ahead + this.tunnel * this.tunnel * 0.16;
     this.blur.strength += this.tunnel * 3;
+    this.haze.prepare();
     this.composer.render(dt);
   }
 }

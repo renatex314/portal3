@@ -22,7 +22,8 @@ const _p2 = new THREE.Vector3();
 /**
  * Voo de um corpo lançado.
  *   env = { world, portals, gravityAt(p) → Vector3 (m/s², devolve cópia) }
- *   opts = { pos, vel, half?, dt?, maxT?, plates?, ignore?(box) }
+ *   opts = { pos, vel, half?, dt?, maxT?, plates?, ignore?(box), ghost? }
+ *   ghost: atravessa tudo (sólidos, rocha fundida, grades); só portais e placas mudam o voo
  * Devolve { pts, seg, times, end:{kind,pos,normal,t,speed}, stats, passes:[{t,pos}] }.
  *   seg[i]: quantos portais já foram atravessados até o ponto i (para pintar cada trecho de uma cor).
  *   end.kind: 'pouso' (superfície que sustenta) | 'parede' | 'mata' (rocha fundida) | 'grade' | 'tempo' | 'abismo'
@@ -46,6 +47,8 @@ export function flight(env, o) {
   let end = null;
   const startPos = pos.clone();
   const filter = o.ignore ? (b) => !o.ignore(b) : null;
+  // sem colisão, o voo acaba um pouco abaixo da parte mais baixa do nível
+  const floorY = o.ghost ? world.solids.reduce((m, b) => Math.min(m, b.min?.y ?? m), startPos.y) - 10 : -300;
   const ext = (d) => Math.abs(d.x) * half.x + Math.abs(d.y) * half.y + Math.abs(d.z) * half.z;
   while (t < maxT && !end) {
     gravityAt(pos, _g);
@@ -91,7 +94,7 @@ export function flight(env, o) {
     }
     cool -= dt;
     // fornalha/rocha fundida e grades
-    if (world.hazards.some((h) => next.x > h.min.x && next.x < h.max.x && next.y - half.y < h.max.y && next.y + half.y > h.min.y && next.z > h.min.z && next.z < h.max.z)) {
+    if (!o.ghost && world.hazards.some((h) => next.x > h.min.x && next.x < h.max.x && next.y - half.y < h.max.y && next.y + half.y > h.min.y && next.z > h.min.z && next.z < h.max.z)) {
       pos.copy(next);
       end = { kind: 'mata', pos: pos.clone(), normal: new THREE.Vector3(0, 1, 0), t, speed: vel.length() };
       pts.push(pos.clone());
@@ -99,7 +102,7 @@ export function flight(env, o) {
       times.push(t);
       break;
     }
-    if (world.segmentFizzler?.(prev, next)) {
+    if (!o.ghost && world.segmentFizzler?.(prev, next)) {
       pos.copy(next);
       end = { kind: 'grade', pos: pos.clone(), normal: new THREE.Vector3(0, 1, 0), t, speed: vel.length() };
       pts.push(pos.clone());
@@ -108,7 +111,7 @@ export function flight(env, o) {
       break;
     }
     // sólidos: varredura da caixa do corpo (caixas alinhadas exatas; rampas e convexos pelo centro)
-    if (len > 1e-6) {
+    if (len > 1e-6 && !o.ghost) {
       _a.copy(_step).divideScalar(len);
       let hit = sweep(world, prev, _a, len, half, filter);
       // sobre a boca de um portal ligado a parede/chão some: o corpo passa (o jogo abre o buraco na colisão)
@@ -143,7 +146,7 @@ export function flight(env, o) {
     seg.push(cross);
     times.push(t);
     t += dt;
-    if (pos.y < -300 || pos.length() > 5000) end = { kind: 'abismo', pos: pos.clone(), normal: new THREE.Vector3(0, 1, 0), t, speed: vel.length() };
+    if (pos.y < floorY || pos.length() > 5000) end = { kind: 'abismo', pos: pos.clone(), normal: new THREE.Vector3(0, 1, 0), t, speed: vel.length() };
   }
   end ??= { kind: 'tempo', pos: pos.clone(), normal: new THREE.Vector3(0, 1, 0), t, speed: vel.length() };
   const last = end.pos;

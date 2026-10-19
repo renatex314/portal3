@@ -1,7 +1,7 @@
 // Bateria clássica: a sequência de testes que todo laboratório de portais do
 // gênero faz — do primeiro botão com cubo até a fornalha — refeita aqui
 // embaixo de Nova Lima. Os quebra-cabeças seguem a progressão dos testes
-// clássicos (sem arma → portal que muda de lugar → arma só com o azul →
+// clássicos (sem arma → portal que muda de lugar → arma só com o ciano →
 // celas de vidro → cubo pelo teto → dois botões → bola de energia →
 // elevador de energia → voo → arma completa → torretas → a amostra rosa),
 // com cenário, nomes e falas próprios.
@@ -75,7 +75,7 @@ export const CLASSIC = [
   C(1, {
     name: 'Portal Automático',
     who: 'Helena',
-    lesson: 'Sem arma: entre no portal azul quando o laranja estiver no lugar certo.',
+    lesson: 'Sem arma: entre no portal ciano quando o vermelho estiver no lugar certo.',
     build(w) {
       w.box(-6, -1, -14, 14, 0, 4, 'metal');
       w.box(-7, 6, -15, 15, 7, 5, 'metal');
@@ -93,7 +93,7 @@ export const CLASSIC = [
       w.box(6, -1, -15, 7, 6, -8, 'metal');
       northWallWithExit(w, -6, 6, 6, -14, 'd1');
       w.button(2, 0, -11, 'd1');
-      sign(w, -2, 3.2, 3.97, Math.PI, 'C01', 'PORTAL AUTOMÁTICO', 'o laranja troca de lugar sozinho');
+      sign(w, -2, 3.2, 3.97, Math.PI, 'C01', 'PORTAL AUTOMÁTICO', 'o vermelho troca de lugar sozinho');
       lights(w, [[0, -1], [11, -1], [0, -11]], 5.5, 35);
       return {
         spawn: [0, 0, 2, 0],
@@ -110,10 +110,10 @@ export const CLASSIC = [
           ],
         },
         intro: [
-          ['Helena', 'Ainda sem arma. O portal azul na parede é fixo; o laranja muda de sala a cada quatro segundos.'],
-          ['Helena', 'A amostra está na sala da direita, o botão na sala do fundo. Entra no azul na hora certa.'],
+          ['Helena', 'Ainda sem arma. O portal ciano na parede é fixo; o vermelho muda de sala a cada quatro segundos.'],
+          ['Helena', 'A amostra está na sala da direita, o botão na sala do fundo. Entra no ciano na hora certa.'],
         ],
-        hints: [{ after: 60, lines: [['Helena', 'Dá para atravessar segurando a amostra. Espera o laranja aparecer na sala do botão.']] }],
+        hints: [{ after: 60, lines: [['Helena', 'Dá para atravessar segurando a amostra. Espera o vermelho aparecer na sala do botão.']] }],
       };
     },
   }),
@@ -122,7 +122,7 @@ export const CLASSIC = [
   C(2, {
     name: 'A Arma',
     who: 'Helena',
-    lesson: 'Pegue a arma e chegue à sala de saída pelo portal laranja fixo.',
+    lesson: 'Pegue a arma e chegue à sala de saída pelo portal vermelho fixo.',
     build(w) {
       room(w, -5, 5, -2, 8, 6, { n: false });
       glassWall(w, 'z', -4, -2, -5, 5, 6);
@@ -134,15 +134,15 @@ export const CLASSIC = [
       northWallWithExit(w, -5, 5, 6, -14, null);
       w.fizzler(-1.5, 0, -15.35, 1.5, 3.5, -15.15);
       w.pedestal(0, 0, 3, 'blue', portalGun());
-      sign(w, 4.97, 3, 5, -Math.PI / 2, 'C02', 'A ARMA', 'portal azul · portal fixo');
+      sign(w, 4.97, 3, 5, -Math.PI / 2, 'C02', 'A ARMA', 'portal ciano · portal fixo');
       lights(w, [[0, 3], [0, -9]], 5.5, 40);
       return {
         spawn: [0, 0, 7, 0],
         gun: 'none',
         portals: [{ which: 'orange', c: [-5, 1.09, -9], n: [1, 0, 0], u: [0, 1, 0] }],
         intro: [
-          ['Helena', 'Ali no pedestal: a arma de portais. Por enquanto ela só abre o azul.'],
-          ['Helena', 'O laranja já está aceso do outro lado do vidro. Põe o azul numa parede branca daqui e passa.'],
+          ['Helena', 'Ali no pedestal: a arma de portais. Por enquanto ela só abre o ciano.'],
+          ['Helena', 'O vermelho já está aceso do outro lado do vidro. Põe o ciano numa parede branca daqui e passa.'],
         ],
       };
     },
@@ -176,7 +176,7 @@ export const CLASSIC = [
       w.box(-13, 7, -7, 13, 8, 7, 'metal');
       northWallWithExit(w, -6, 6, 7, -6, 'd1');
       w.button(9, -3, 0, 'd1');
-      sign(w, -5.6, 2.6, -5.97, 0, 'C03', 'CELAS DE VIDRO', 'só o azul · poços · amostra');
+      sign(w, -5.6, 2.6, -5.97, 0, 'C03', 'CELAS DE VIDRO', 'só o ciano · poços · amostra');
       lights(w, [[0, 0], [-9, 0], [9, 0]], 6.5, 45);
       return {
         spawn: [0, 0, 4, 0],
@@ -185,11 +185,11 @@ export const CLASSIC = [
         portals: [{ which: 'orange', c: [0, 1.09, 6], n: [0, 0, -1], u: [0, 1, 0] }],
         intro: [
           ['Luciana', 'Dois poços de vidro: a amostra está no da esquerda, o botão no da direita.'],
-          ['Luciana', 'O laranja fixo está na parede de trás. Mira o azul no fundo do poço e entra no laranja.'],
+          ['Luciana', 'O vermelho fixo está na parede de trás. Mira o ciano no fundo do poço e entra no vermelho.'],
         ],
         hints: [
           { after: 40, lines: [['Luciana', 'Chega bem perto do vidro e mira pela fresta, lá no fundo do poço.']] },
-          { after: 80, lines: [['Luciana', 'Pra voltar do poço é só pisar no azul, lá embaixo mesmo. Você cai e sai pela parede.']] },
+          { after: 80, lines: [['Luciana', 'Pra voltar do poço é só pisar no ciano, lá embaixo mesmo. Você cai e sai pela parede.']] },
         ],
       };
     },
@@ -233,10 +233,10 @@ export const CLASSIC = [
         cubes: [[-5, 0, 2]],
         portals: [{ which: 'orange', c: [0, 8, -6], n: [0, -1, 0], u: [0, 0, -1] }],
         intro: [
-          ['Bigode', 'O botão tá na ilha, no meio da rocha fundida. O laranja tá no teto bem em cima dele.'],
+          ['Bigode', 'O botão tá na ilha, no meio da rocha fundida. O vermelho tá no teto bem em cima dele.'],
           ['Bigode', 'A amostra tá presa naquela gaiola de vidro. Pensa no que cai.'],
         ],
-        hints: [{ after: 50, lines: [['Bigode', 'Põe o azul no chão da gaiola, embaixo da amostra.']] }],
+        hints: [{ after: 50, lines: [['Bigode', 'Põe o ciano no chão da gaiola, embaixo da amostra.']] }],
       };
     },
   }),
@@ -264,7 +264,7 @@ export const CLASSIC = [
         portals: [{ which: 'orange', c: [8, 6.09, 1], n: [-1, 0, 0], u: [0, 1, 0] }],
         intro: [
           ['Kelly', 'Dois botões, duas amostras. Uma tá aqui no chão, a outra lá em cima daquela plataforma.'],
-          ['Kelly', 'O laranja tá na parede, em cima da plataforma. Você sabe o que fazer.'],
+          ['Kelly', 'O vermelho tá na parede, em cima da plataforma. Você sabe o que fazer.'],
         ],
       };
     },
@@ -290,9 +290,9 @@ export const CLASSIC = [
         portals: [{ which: 'orange', c: [-5, 4, -10], n: [0, 0, 1], u: [0, 1, 0] }],
         intro: [
           ['Rodrigo', 'Isso aí é uma bola de energia. Quica em tudo e passa por portal. Encostou, queima.'],
-          ['Rodrigo', 'O receptor tá lá no alto, na parede de trás. O laranja fixo aponta pra ele.'],
+          ['Rodrigo', 'O receptor tá lá no alto, na parede de trás. O vermelho fixo aponta pra ele.'],
         ],
-        hints: [{ after: 45, lines: [['Rodrigo', 'Põe o azul na parede onde a bola bate, bem na altura dela.']] }],
+        hints: [{ after: 45, lines: [['Rodrigo', 'Põe o ciano na parede onde a bola bate, bem na altura dela.']] }],
       };
     },
   }),
@@ -325,7 +325,7 @@ export const CLASSIC = [
         portals: [{ which: 'orange', c: [-7, 2.4, -0.5], n: [1, 0, 0], u: [0, 1, 0] }],
         intro: [
           ['Rodrigo', 'Essa bola cai do teto e quica no chão. A plataforma só anda com energia no receptor.'],
-          ['Rodrigo', 'Azul no chão, onde a bola bate. Ela sai do laranja e vai direto no receptor.'],
+          ['Rodrigo', 'Ciano no chão, onde a bola bate. Ela sai do vermelho e vai direto no receptor.'],
         ],
         hints: [{ after: 50, lines: [['Rodrigo', 'Depois que ligar, a plataforma vai e volta. Sobe nela quando chegar perto.']] }],
       };
@@ -336,7 +336,7 @@ export const CLASSIC = [
   C(8, {
     name: 'Voo',
     who: 'Bigode',
-    lesson: 'Caia de bem alto no portal azul e voe por cima da rocha fundida.',
+    lesson: 'Caia de bem alto no portal ciano e voe por cima da rocha fundida.',
     heat: true,
     build(w) {
       w.box(-7, -1, 4, 7, 12, 10, 'metal'); // torre de saída
@@ -360,9 +360,9 @@ export const CLASSIC = [
         portals: [{ which: 'orange', c: [0, 6, 3.8], n: [0, 0, -1], u: [0, 1, 0] }],
         intro: [
           ['Bigode', 'Daqui de cima até lá embaixo são doze metros. Lembra da regra: velocidade que entra, velocidade que sai.'],
-          ['Bigode', 'O laranja tá na frente da torre, olhando pro outro lado. Azul no chão lá embaixo, perto da torre, e pula.'],
+          ['Bigode', 'O vermelho tá na frente da torre, olhando pro outro lado. Ciano no chão lá embaixo, perto da torre, e pula.'],
         ],
-        hints: [{ after: 50, lines: [['Bigode', 'Põe o azul bem pertinho da torre e desce devagar da beirada, sem correr.']] }],
+        hints: [{ after: 50, lines: [['Bigode', 'Põe o ciano bem pertinho da torre e desce devagar da beirada, sem correr.']] }],
       };
     },
   }),
@@ -378,7 +378,7 @@ export const CLASSIC = [
       northWallWithExit(w, -8, 8, 10, -14, 'd1', 6);
       w.button(4, 6, -11, 'd1');
       w.pedestal(0, 0, 2, 'both', portalGun());
-      sign(w, -7.97, 3, 1, Math.PI / 2, 'C09', 'ARMA COMPLETA', 'azul e laranja · patamar');
+      sign(w, -7.97, 3, 1, Math.PI / 2, 'C09', 'ARMA COMPLETA', 'ciano e vermelho · patamar');
       lights(w, [[0, 2], [0, -11]], 9.5, 55);
       return {
         spawn: [0, 0, 5, 0],

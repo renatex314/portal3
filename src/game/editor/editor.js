@@ -109,6 +109,8 @@ export function createEditor(host) {
   let dirty = false;
   let stroke = null; // arrasto de construção/pintura em andamento: { seen:Set }
   let moving = null; // arrasto de um item: { id }
+  let picking = null; // escolhendo um ponto no cenário para um campo v3 do item: { id, k, mode }
+  let edge = null; // arrasto de uma face (alça de borda): { id, a, sg, n, f0, s0, start, undone, moved }
   let hover = null;
   const cam = { pos: new THREE.Vector3(0, 12, 14), yaw: 0, pitch: -0.6, speed: 10 };
   const keys = new Set();
@@ -123,7 +125,8 @@ export function createEditor(host) {
   const ghost = new THREE.Group();
   const hoverG = new THREE.Group();
   const toolG = new THREE.Group();
-  root.add(mark, links, ghost, hoverG, toolG);
+  const handles = new THREE.Group(); // alças nas faces do item selecionado: arrastar uma move só aquela borda
+  root.add(mark, links, ghost, hoverG, toolG, handles);
   const grid = new THREE.GridHelper(120, 30, 0x4a6a8a, 0x2a3b4d); // uma linha por célula (4 m)
   grid.position.y = 0.01;
   grid.material.transparent = true;
@@ -242,7 +245,104 @@ export function createEditor(host) {
           links.add(l);
         }
     setLayer(links);
+    refreshHandles();
     syncGizmo();
+  }
+
+  // ------------------------------------------------------------------ alças de borda
+  const AXES = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const AXIS_COLORS = [0xff5a5a, 0x6aff6a, 0x5aa8ff];
+  const handleGeo = new THREE.BoxGeometry(1, 1, 1);
+  let hotHandle = null;
+  /** item que mostra alças: um só selecionado, com tamanho (shape 'box') */
+  function edgeItem() {
+    if (selected.length !== 1 || armed || testing || gizmo || tab !== 'items') return null;
+    const it = itemOf(selected[0]);
+    return it && ELEMENTS[it.type].shape === 'box' ? it : null;
+  }
+  function refreshHandles() {
+    disposeKids(handles);
+    if (hotHandle) canvas.style.cursor = '';
+    hotHandle = null;
+    const it = edgeItem();
+    if (!it) return;
+    const b = obbOf(it);
+    for (let a = 0; a < 3; a++)
+      for (const sg of [1, -1]) {
+        const m = new THREE.Mesh(handleGeo, new THREE.MeshBasicMaterial({ color: AXIS_COLORS[a], depthTest: false, transparent: true, opacity: 0.9 }));
+        const n = AXES[a].clone().multiplyScalar(sg).applyQuaternion(b.q);
+        m.position.copy(b.c).addScaledVector(n, b.h.getComponent(a));
+        m.quaternion.copy(b.q);
+        m.renderOrder = 10;
+        m.userData = { a, sg, n };
+        handles.add(m);
+      }
+    setLayer(handles);
+    scaleHandles();
+  }
+  /** as alças têm o mesmo tamanho na tela, perto ou longe */
+  function scaleHandles() {
+    for (const m of handles.children) m.scale.setScalar(Math.max(0.12, m.position.distanceTo(camera.position) * 0.022) * (m === hotHandle ? 1.5 : 1));
+  }
+  function pickHandle(r) {
+    const R = new THREE.Ray(r.o, r.d);
+    let best = null;
+    let bd = Infinity;
+    for (const m of handles.children) {
+      const d = R.distanceToPoint(m.position);
+      const t = m.position.clone().sub(r.o).dot(r.d);
+      if (t > 0 && d < m.scale.x * 1.8 && t < bd) (best = m), (bd = t);
+    }
+    return best;
+  }
+  /** ponto da reta (f0 + s·n) mais perto do raio do mouse: devolve s */
+  function alongAxis(r, f0, n) {
+    const w0 = f0.clone().sub(r.o);
+    const b = n.dot(r.d);
+    const den = 1 - b * b;
+    if (den < 1e-4) return null; // olhando de frente para o eixo: não dá para medir
+    return (b * r.d.dot(w0) - n.dot(w0)) / den;
+  }
+  function startEdge(m, r) {
+    const it = itemOf(selected[0]);
+    const { a, sg, n } = m.userData;
+    const f0 = m.position.clone();
+    const s0 = alongAxis(r, f0, n);
+    if (s0 === null) return false;
+    edge = { id: it.id, a, sg, n: n.clone(), f0, s0, start: clone(it), undone: false, moved: false, sym: false };
+    return true;
+  }
+  /** arrasta a face: a oposta fica parada (com Shift, as duas se afastam juntas) */
+  function dragEdge(e) {
+    const it = itemOf(edge.id);
+    if (!it) return;
+    const s = alongAxis(mouseRay(e), edge.f0, edge.n);
+    if (s === null) return;
+    const { a, sg, n, f0, start } = edge;
+    let d = s - edge.s0;
+    // item sem giro: a face encaixa na grade do mundo; girado: o tamanho muda em passos da grade
+    const k = 'xyz'[a];
+    const plain = !start.r || start.r.every((v) => Math.abs(v % 360) < 1e-6);
+    if (plain) d = (snapTo(f0[k] + d * sg) - f0[k]) * sg;
+    else d = snapTo(d);
+    const sym = e.shiftKey;
+    const grow = sym ? 2 * d : d;
+    const size = Math.max(snap, r2(start.s[a] + grow));
+    d = sym ? (size - start.s[a]) / 2 : size - start.s[a];
+    const s3 = [...start.s];
+    s3[a] = size;
+    const p = sym ? [...start.p] : start.p.map((v, i) => r2(v + n.getComponent(i) * (d / 2)));
+    if (s3.every((v, i) => v === it.s[i]) && p.every((v, i) => v === it.p[i])) return;
+    if (!edge.undone) {
+      pushUndo();
+      edge.undone = true;
+    }
+    it.s = s3;
+    it.p = p;
+    edge.moved = true; // (como no arrasto de mover: o mundo se refaz ao soltar)
+    refreshMarks();
+    fillProps(true);
+    setStatus(`${['largura (x)', 'altura (y)', 'profundidade (z)'][a]}: ${r2(size)} m${sym ? ' · Shift: dos dois lados' : ''}`);
   }
   function syncGizmo() {
     if (!selected.length || armed || testing || !gizmo || tab !== 'items') {
@@ -318,6 +418,7 @@ export function createEditor(host) {
   // ------------------------------------------------------------------ itens
   function select(ids, additive = false) {
     selected = additive ? [...new Set([...selected, ...ids])] : ids;
+    if (picking && !selected.includes(picking.id)) (picking = null), disposeKids(hoverG);
     refreshMarks();
     fillProps();
   }
@@ -625,6 +726,12 @@ export function createEditor(host) {
     layer: setLayer,
     env: () => ({ world, portals: host.portals, gravityAt: (p, out) => out.copy(host.gravityAt(p)) }),
     makeGhost: () => host.makeGhost(),
+    /** Robô → Trajetória: a velocidade dele num ponto vira o lançamento livre (você escolhe de onde sai) */
+    useVelocity(v) {
+      if (toolId !== 'traj') setToolId('traj');
+      tools.traj.setLaunch(v);
+      host.toast(tools.traj.picking ? `Velocidade do robô: ${v.length().toFixed(1).replace('.', ',')} m/s. Clique na plataforma de onde ele vai sair.` : 'Velocidade do robô no lançamento livre.');
+    },
     clearProof() {
       pushUndo();
       delete doc.recording;
@@ -747,7 +854,7 @@ export function createEditor(host) {
     $hint.textContent =
       tab === 'chamber'
         ? 'clique/arraste: ' + (buildTool === 'paint' ? 'pinta (Shift = toda a parede)' : buildTool === 'add' ? 'abre células' : 'fecha células') + ' · A adiciona · X remove · P pinta · PgUp/PgDn muda de andar'
-        : 'arraste para mover · R gira 90° · Del apaga · Ctrl+D duplica · botão direito + WASD voa · F foca';
+        : 'arraste para mover · arraste as alças coloridas para mexer só uma borda (Shift: as duas) · R gira 90° · Del apaga · Ctrl+D duplica · botão direito + WASD voa · F foca';
     syncPalette();
   }
   const $hint = bottom.querySelector('#ed-hint');
@@ -817,15 +924,38 @@ export function createEditor(host) {
     if (f.t === 'select') return el('label', { class: 'f' }, el('span', {}, f.label), el('select', { onchange: (e) => set(e.target.value) }, f.o.map(([v, l]) => el('option', { value: v, selected: v === it[f.k] }, l))));
     if (f.t === 'color') return el('label', { class: 'f' }, el('span', {}, f.label), el('input', { type: 'color', value: it[f.k] ?? '#ffffff', onchange: (e) => set(e.target.value) }));
     if (f.t === 'sig') return null; // os sinais aparecem na seção “Ligações”
-    if (f.t === 'v3')
+    if (f.t === 'v3') {
+      const on = picking?.id === it.id && picking.k === f.k;
       return el('div', { class: 'f' }, el('span', {}, f.label), el('div', { class: 'v3' }, [0, 1, 2].map((i) =>
         el('input', { type: 'number', step: '0.5', value: it[f.k][i], onchange: (e) => {
           pushUndo();
           it[f.k] = it[f.k].map((v, j) => (j === i ? Number(e.target.value) || 0 : v));
           changed();
-        } }))));
+        } }))),
+        f.pick ? btn(on ? 'Clique no cenário… (Esc cancela)' : '◎ Escolher no cenário', 'Escolher o ponto com o mouse', () => startPick(on ? null : { id: it.id, k: f.k, mode: f.pick }), on ? 'on' : '') : null);
+    }
     if (f.t === 'text') return el('label', { class: 'f' }, el('span', {}, f.label), el('input', { type: 'text', value: it[f.k] ?? '', maxlength: '120', onchange: (e) => set(e.target.value) }));
     return el('label', { class: 'f' }, el('span', {}, f.label), el('input', { type: 'number', step: f.step ?? 'any', min: f.min, max: f.max, value: it[f.k] ?? '', onchange: (e) => set(e.target.value === '' ? null : Number(e.target.value)) }));
+  }
+  /** escolher um ponto com o mouse (ex.: o pouso da placa de lançamento) */
+  function startPick(pk) {
+    picking = pk;
+    disposeKids(hoverG);
+    fillProps();
+    setStatus(pk ? 'Clique no lugar onde quer que caia' : '');
+  }
+  function pickPreview(e) {
+    disposeKids(hoverG);
+    const s = surfaceAt(mouseRay(e));
+    if (!s) return null;
+    const p = [snapTo(s.p.x), r2(s.p.y), snapTo(s.p.z)];
+    const m = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x66ff99, transparent: true, opacity: 0.85, depthTest: false }));
+    m.position.set(p[0], p[1] + 0.03, p[2]);
+    m.renderOrder = 12;
+    hoverG.add(m);
+    setLayer(hoverG);
+    setStatus(`Pouso em ${p.map((v) => String(v).replace('.', ',')).join('; ')}`);
+    return p;
   }
   function connectionsBox(it) {
     const sinks = isSource(it) && it.opens ? doc.items.filter((o) => o !== it && sinkKey(o) && o[sinkKey(o)] === it.opens) : [];
@@ -910,7 +1040,7 @@ export function createEditor(host) {
     return [
       el('h3', {}, 'Este nível'),
       el('label', { class: 'f' }, el('span', {}, 'Objetivo (mostrado na tela)'), el('input', { type: 'text', value: c.lesson, maxlength: '120', onchange: (e) => set('lesson', e.target.value) })),
-      el('label', { class: 'f' }, el('span', {}, 'Arma de portais'), el('select', { onchange: (e) => set('gun', e.target.value) }, [['both', 'Os dois portais'], ['blue', 'Só o azul'], ['none', 'Nenhuma (use o pedestal)']].map(([v, l]) => el('option', { value: v, selected: v === c.gun }, l)))),
+      el('label', { class: 'f' }, el('span', {}, 'Arma de portais'), el('select', { onchange: (e) => set('gun', e.target.value) }, [['both', 'Os dois portais'], ['blue', 'Só o ciano'], ['none', 'Nenhuma (use o pedestal)']].map(([v, l]) => el('option', { value: v, selected: v === c.gun }, l)))),
       el('label', { class: 'f' }, el('span', {}, 'Gravidade (m/s²)'), el('input', { type: 'number', step: 0.1, min: 0, value: c.gravity, onchange: (e) => set('gravity', Number(e.target.value)) })),
       el('label', { class: 'f' }, el('span', {}, 'Música'), el('select', { onchange: (e) => set('music', e.target.value) }, [['lab', 'Laboratório'], ['labTense', 'Tensa']].map(([v, l]) => el('option', { value: v, selected: v === c.music }, l)))),
       el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: c.autoLight !== false, onchange: (e) => set('autoLight', e.target.checked) }), 'Luzes de teto automáticas'),
@@ -1018,6 +1148,7 @@ export function createEditor(host) {
       } else {
         if (e.code === 'Delete' || e.code === 'Backspace') removeItems();
         else if (e.code === 'KeyR') rotateSel();
+        else if (e.code === 'Escape' && picking) startPick(null);
         else if (e.code === 'Escape') {
           armed = null;
           linking = null;
@@ -1035,6 +1166,20 @@ export function createEditor(host) {
     else if (e.button === 1) (mouse.mmb = true), canvas.setPointerCapture?.(e.pointerId), e.preventDefault();
     else if (e.button === 0 && !tc.dragging) {
       const r = mouseRay(e);
+      if (picking) {
+        const it = itemOf(picking.id);
+        const p = pickPreview(e);
+        if (it && p) {
+          pushUndo();
+          it[picking.k] = p;
+          if (picking.mode) it.mode = picking.mode;
+          picking = null;
+          disposeKids(hoverG);
+          changed();
+          setStatus('Pouso escolhido.');
+        }
+        return;
+      }
       if (toolId && tools[toolId]?.click?.(e, r)) return;
       if (tab === 'chamber') {
         stroke = { seen: new Set(), undone: false };
@@ -1060,11 +1205,13 @@ export function createEditor(host) {
         return;
       }
       if (tc.axis) return; // clicou no gizmo
+      const h = !linking && pickHandle(r);
+      if (h && startEdge(h, r)) return canvas.setPointerCapture?.(e.pointerId);
       const it = pickItem(r);
       if (linking) {
         const from = itemOf(linking);
         if (it && it !== from && link(from, it)) host.toast('Ligado.');
-        else if (it && it !== from) host.toast('Esses dois não se ligam (um precisa ser botão/receptor, o outro uma porta, plataforma ou funil).');
+        else if (it && it !== from) host.toast('Esses dois não se ligam (um precisa ser botão/receptor, o outro uma porta, plataforma, funil, laser ou grade).');
         linking = null;
         refreshMarks();
         fillProps();
@@ -1090,6 +1237,11 @@ export function createEditor(host) {
       if (moving) {
         const m = moving;
         moving = null;
+        if (m.moved) changed();
+      }
+      if (edge) {
+        const m = edge;
+        edge = null;
         if (m.moved) changed();
       }
     }
@@ -1136,7 +1288,7 @@ export function createEditor(host) {
   }
   function onPointerMove(e) {
     if (!active) return;
-    mouse.over = e.target === canvas || stroke !== null || moving !== null;
+    mouse.over = e.target === canvas || stroke !== null || moving !== null || edge !== null;
     mouse.x = e.clientX;
     mouse.y = e.clientY;
     if (mouse.rmb) {
@@ -1156,7 +1308,17 @@ export function createEditor(host) {
       if (dirty) rebuild(), refreshMarks();
       return;
     }
+    if (edge) return dragEdge(e);
+    if (picking) return void pickPreview(e);
     if (moving) return moveItem(e);
+    if (handles.children.length) {
+      const h = pickHandle(mouseRay(e));
+      if (h !== hotHandle) {
+        hotHandle = h;
+        scaleHandles();
+        canvas.style.cursor = h ? 'grab' : '';
+      }
+    }
     if (tab === 'chamber') {
       hover = chamberTarget(mouseRay(e));
       drawHover(hover);
@@ -1275,6 +1437,7 @@ export function createEditor(host) {
     grid.position.x = Math.round(cam.pos.x / CELL) * CELL - CELL / 2;
     grid.position.z = Math.round(cam.pos.z / CELL) * CELL - CELL / 2;
     grid.position.y = layer * CELL + 0.01;
+    scaleHandles();
     if (toolId) tools[toolId]?.frame?.(dt);
   }
 

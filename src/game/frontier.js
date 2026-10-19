@@ -134,6 +134,7 @@ export class Frontier {
     this.funnelMeshes = [];
     this.moonDone = false;
     this.inFunnel = false;
+    this.exitHist = [];
   }
 
   // ------------------------------------------------------------------ feixes
@@ -199,7 +200,7 @@ export class Frontier {
       const ok = (this.liveEntries ?? []).some((x) => x.at.distanceTo(need.at) < 0.5);
       c.laserMiss = ok ? 0 : (c.laserMiss ?? 0) + dt;
       if (c.laserMiss > 0.2) {
-        R.rollback(c.cp, 'o laser não voltou a entrar no azul (era ele que saía do laranja)', need.at.clone());
+        R.rollback(c.cp, 'o laser não voltou a entrar no ciano (era ele que saía do vermelho)', need.at.clone());
         return;
       }
     }
@@ -218,12 +219,21 @@ export class Frontier {
       this.pastKey = null;
       this.pastN = 0;
       this.pastExtra = [];
+      this.exitHist = [];
       return this.pastExtra;
     }
-    const keyParts = oranges.map((O) => [R.samples[R.indexAt(R.tw - O.delta)], O.delta, O.center.x, O.center.y, O.center.z, O.normal.x, O.normal.z]);
+    // o que saiu do azul Δ s atrás também é laser do passado: se bater no laranja, sai do
+    // azul de novo agora (um portal de frente para o outro multiplica o feixe pelo tempo)
+    this.exitHist = (this.exitHist ?? []).filter((e) => e.t <= R.tw + 1e-6 && R.tw - e.t < 31);
+    const exitsAt = (T) => {
+      let best = null;
+      for (const e of this.exitHist) if (Math.abs(e.t - T) <= 1 / 30 && (!best || Math.abs(e.t - T) < Math.abs(best.t - T))) best = e;
+      return best;
+    };
+    const keyParts = oranges.map((O) => [R.samples[R.indexAt(R.tw - O.delta)], O.delta, O.center.x, O.center.y, O.center.z, O.normal.x, O.normal.z, exitsAt(R.tw - O.delta)]);
     const k = this.pastKey;
     const entering = (this.prevEntries ?? []).length > 0; // laser indo para o passado: refaz sempre
-    if (!entering && k && k.length === keyParts.length && k.every((a, i) => a.every((v, j) => v === keyParts[i][j]))) return this.pastExtra;
+    if (!entering && k && k.length === keyParts.length && k.every((a, i) => a.every((v, j) => v === keyParts[i][j]))) return this.keepExits(R, this.pastExtra);
     this.pastKey = keyParts;
     const segs = [];
     const extra = [];
@@ -236,8 +246,9 @@ export class Frontier {
       });
       // o feixe que entra no azul agora sai deste laranja no passado (para a vista do azul)
       const fromBlue = (this.prevEntries ?? []).filter((e) => e.B.partner === O).map((e) => ({ pos: e.exit, dir: e.dir, mine: true }));
+      const before = (exitsAt(R.tw - O.delta)?.beams ?? []).slice(0, 8).map((b) => ({ pos: b.o, dir: b.d })); // no máximo 8 voltas, como no par comum
       R.inPast(O.delta, () => {
-        for (const L of [...this.world.lasers, ...fromBlue]) {
+        for (const L of [...this.world.lasers.filter((L) => !L.off), ...fromBlue, ...before]) {
           let o = L.pos;
           let d = L.dir;
           let ignore = null;
@@ -284,6 +295,14 @@ export class Frontier {
     for (let i = segs.length; i < this.pastBeams.length; i++) this.pastBeams[i].core.visible = this.pastBeams[i].glow.visible = false;
     this.pastN = segs.length;
     this.pastExtra = extra;
+    return this.keepExits(R, extra);
+  }
+
+  /** guarda os feixes que saem do azul agora (com o tempo andando), para o laço acima */
+  keepExits(R, extra) {
+    if (R.paused || R.sweep) return extra;
+    const last = this.exitHist[this.exitHist.length - 1];
+    if (!last || R.tw - last.t >= 1 / 60 - 1e-6) this.exitHist.push({ t: R.tw, beams: extra.map((b) => ({ o: b.o.clone(), d: b.d.clone() })) });
     return extra;
   }
 
@@ -605,7 +624,7 @@ export class Frontier {
     this.prevEntries = this.liveEntries ?? [];
     this.liveEntries = [];
     const emitted = this.pastEmissions(ctx);
-    for (const L of [...W.lasers, ...this.updatePast(ctx), ...emitted]) {
+    for (const L of [...W.lasers.filter((L) => !L.off), ...this.updatePast(ctx), ...emitted]) {
       let o = L.pos ?? L.o;
       let d = L.dir ?? L.d;
       let ignore = null;
@@ -682,10 +701,13 @@ export class Frontier {
       C.group.userData.spin.rotation.y += dt * (C.active ? 7 : 0.6);
     }
     for (const c of ctx.props) if (c.redirect) c.mesh.userData.lens?.color.setRGB(c.lit ? 4 : 0.6, c.lit ? 0.6 : 0.08, c.lit ? 0.4 : 0.05);
-    for (const L of W.lasers) L.lensMat.color.setRGB(3 + Math.sin(ctx.t * 20) * 0.4, 0.3, 0.2);
+    for (const L of W.lasers) {
+      if (L.off) L.lensMat.color.setRGB(0.25, 0.03, 0.02); // desligado: lente apagada
+      else L.lensMat.color.setRGB(3 + Math.sin(ctx.t * 20) * 0.4, 0.3, 0.2);
+    }
     for (let i = this.used; i < this.beams.length; i++) this.beams[i].core.visible = this.beams[i].glow.visible = false;
     for (let i = this.usedSparks; i < this.sparks.length; i++) this.sparks[i].visible = false;
-    sfx.laserHum(W.lasers.length ? 1 - THREE.MathUtils.clamp((nearest - 0.5) / 6, 0, 1) : 0);
+    sfx.laserHum(W.lasers.some((L) => !L.off) ? 1 - THREE.MathUtils.clamp((nearest - 0.5) / 6, 0, 1) : 0);
     this.burnT -= dt;
     if (burn && this.burnT <= 0) {
       sfx.sizzle();

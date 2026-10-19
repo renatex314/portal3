@@ -1,8 +1,8 @@
 // Série Experimento — o relógio do tempo do jogo em Flash "Time Experiment"
 // (RodKis, 2014), com portais. Tecla 2 PARA o tempo do mundo (você anda); na
-// pausa, a roda do mouse escolhe quantos segundos voltar e o tiro LARANJA cai
-// nas paredes daquele instante; o AZUL cai no presente. Entrar no azul leva
-// você ao laranja no passado: o seu eu que saltou vira um clone que repete o
+// pausa, a roda do mouse escolhe quantos segundos voltar e o tiro VERMELHO cai
+// nas paredes daquele instante; o CIANO cai no presente. Entrar no ciano leva
+// você ao vermelho no passado: o seu eu que saltou vira um clone que repete o
 // que você fez (pisa em botões) e o jogo avisa de PARADOXOS quando o passado
 // não pode se repetir. Ver `relogio.js`.
 //
@@ -53,13 +53,13 @@ export const EXPERIMENTO = [
       w.box(-9, 7, -65, 9, 8, 11, 'metal');
       w.box(-8, -1, 10, 8, 7, 11, 'metal');
       w.box(-8, -1, -65, 8, 7, -64, 'metal');
-      panel(w, -8, 0, 1, -7.9, 5, 9); // oeste (o azul, no presente)
-      panel(w, 7.9, 0, 1, 8, 5, 9); // leste (o laranja, no passado)
+      panel(w, -8, 0, 1, -7.9, 5, 9); // oeste (o ciano, no presente)
+      panel(w, 7.9, 0, 1, 8, 5, 9); // leste (o vermelho, no passado)
       w.door('bridge', -1.7, -4.4, -54, 1.7, -4.0, -2, { axis: 'y', dist: 4.0, speed: 1.8 });
       w.button(0, 0, 6, 'bridge');
       w.strip(-1.2, 0.005, 5.2, 1.2, 0.03, 5.3, 0x8fe3ff, 2);
       w.exitElevator(0, 0, -60);
-      sign(w, -7.97, 3.2, -0.5, Math.PI / 2, 'E01', 'A PONTE', 'pausa · passado · azul no presente');
+      sign(w, -7.97, 3.2, -0.5, Math.PI / 2, 'E01', 'A PONTE', 'pausa · passado · ciano no presente');
       lights(w, [[0, 6], [0, -20], [0, -40], [0, -58]], 6.2, 60);
       return {
         spawn: [0, 0, 8, 0],
@@ -68,7 +68,7 @@ export const EXPERIMENTO = [
         intro: [
           ['Helena', 'Esse é o relógio de pulso do experimento. A tecla 2 para o tempo do mundo: tudo congela, menos você.'],
           ['Helena', 'A ponte só sobe enquanto alguém pisa na placa, e a rocha tem cinquenta metros. Você é um só: precisa de outro você na placa.'],
-          ['Helena', 'Pise na placa e espere. Com o tempo parado, a roda do mouse escolhe quantos segundos voltar: laranja no passado, azul no presente. Entre no azul e atravesse: o seu passado continua na placa.'],
+          ['Helena', 'Pise na placa e espere. Com o tempo parado, a roda do mouse escolhe quantos segundos voltar: vermelho no passado, ciano no presente. Entre no ciano e atravesse: o seu passado continua na placa.'],
         ],
         hints: [{ after: 60, lines: [['Helena', 'Da parede leste até o elevador são uns vinte segundos correndo. Fique na placa mais que isso, pare o tempo, volte uns vinte e cinco segundos e corra sem parar: o seu passado só sai da placa quando o loop fecha.']] }],
       };
@@ -89,7 +89,7 @@ export const EXPERIMENTO = [
       panel(w, -12, 0, -14, -11.9, 5, -4); // parede oeste
       panel(w, -8, 0, -16, -3, 5, -15.9); // parede norte, à esquerda da porta
       snap(w);
-      sign(w, 11.97, 3.2, 0, -Math.PI / 2, 'E02', 'DOIS DE MIM', 'pausa · passado · azul no presente');
+      sign(w, 11.97, 3.2, 0, -Math.PI / 2, 'E02', 'DOIS DE MIM', 'pausa · passado · ciano no presente');
       lights(w, [[0, 2], [-6, -10], [6, -10]], 5.6, 45);
       return {
         spawn: [4, 0, 5, 0],
@@ -97,11 +97,11 @@ export const EXPERIMENTO = [
         relogio: true,
         intro: [
           ['Helena', 'A porta de saída só abre enquanto alguém está pisando no botão do canto, e ela bate na hora em que o botão solta: nem um portal te leva até lá a tempo.'],
-          ['Helena', 'Pise no botão, pare o tempo (2) e escolha na roda do mouse quantos segundos voltar. O laranja cai no passado, perto da porta; o azul, no presente, perto do botão.'],
-          ['Helena', 'Entre no azul: você sai no passado, e o seu eu de antes continua no botão enquanto você corre para a porta.'],
+          ['Helena', 'Pise no botão, pare o tempo (2) e escolha na roda do mouse quantos segundos voltar. O vermelho cai no passado, perto da porta; o ciano, no presente, perto do botão.'],
+          ['Helena', 'Entre no ciano: você sai no passado, e o seu eu de antes continua no botão enquanto você corre para a porta.'],
         ],
         hints: [
-          { after: 90, lines: [['Helena', 'Painel da esquerda da porta: laranja (no passado). Painel da parede oeste, do lado do botão: azul. O holograma mostra você no botão: escolha um tempo em que você já estava nele.']] },
+          { after: 90, lines: [['Helena', 'Painel da esquerda da porta: vermelho (no passado). Painel da parede oeste, do lado do botão: ciano. O holograma mostra você no botão: escolha um tempo em que você já estava nele.']] },
         ],
       };
     },
@@ -126,8 +126,8 @@ export const EXPERIMENTO = [
       w.mover('sh', -2, -0.4, -6, 2, 0, -2, { to: [0, 0, 18], speed: 3.5, waits: [3, 3] });
       w.button(0, 0, 20, 'd1');
       w.strip(-0.8, 0.005, 19.1, 0.8, 0.03, 19.2, 0xffb347, 2);
-      panel(w, -10, 0, -20, -4, 5, -19.9); // norte, à esquerda da porta (o laranja cai aqui, no passado)
-      panel(w, -6, 0, 23.9, 6, 5, 24); // sul, na ilha (o azul cai aqui, no presente)
+      panel(w, -10, 0, -20, -4, 5, -19.9); // norte, à esquerda da porta (o vermelho cai aqui, no passado)
+      panel(w, -6, 0, 23.9, 6, 5, 24); // sul, na ilha (o ciano cai aqui, no presente)
       snap(w);
       sign(w, -13.97, 3.2, -12, Math.PI / 2, 'E03', 'A ILHA', 'carrinho · botão · passado');
       lights(w, [[0, -12], [0, 4], [0, 20], [-8, -12], [8, -12]], 6.2, 55);
@@ -137,7 +137,7 @@ export const EXPERIMENTO = [
         relogio: true,
         intro: [
           ['Kelly', 'A porta de saída está aqui no norte, mas o botão que a abre fica na ilha, lá do outro lado da rocha fundida. O carrinho vai e volta.'],
-          ['Kelly', 'Vá até o botão. A porta só abre enquanto alguém pisa nele: pare o tempo, ponha o laranja no passado, perto da porta, e o azul perto do botão. O seu passado fica no botão.'],
+          ['Kelly', 'Vá até o botão. A porta só abre enquanto alguém pisa nele: pare o tempo, ponha o vermelho no passado, perto da porta, e o ciano perto do botão. O seu passado fica no botão.'],
         ],
         hints: [{ after: 120, lines: [['Kelly', 'Fique uns segundos no botão antes de saltar: assim, mesmo voltando alguns segundos, o seu passado já está nele quando você chegar.']] }],
       };
@@ -173,7 +173,7 @@ export const EXPERIMENTO = [
           ['Seu Tião', 'O segundo salto precisa cair depois do primeiro: não dá para voltar a antes da própria chegada. E os dois passados precisam continuar nos botões enquanto você corre: o botão da porta segura só três segundos.'],
         ],
         hints: [
-          { after: 150, lines: [['Seu Tião', 'Primeiro salto: azul na parede oeste, laranja na parede sul, com bastante tempo (uns dez segundos). Segundo: azul na sul, laranja ao lado da porta, uns três segundos.']] },
+          { after: 150, lines: [['Seu Tião', 'Primeiro salto: ciano na parede oeste, vermelho na parede sul, com bastante tempo (uns dez segundos). Segundo: ciano na sul, vermelho ao lado da porta, uns três segundos.']] },
         ],
       };
     },

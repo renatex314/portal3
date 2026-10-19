@@ -203,7 +203,7 @@ const pak = openVPK('portal/portal_pak');
 const hl2 = findFile('hl2/hl2_misc_dir.vpk') ? openVPK('hl2/hl2_misc') : null;
 const propModels = new Set(); // objetos estáticos (canos, tubos…) dos mapas
 const entModels = new Set(); // modelos desenhados de verdade (a sala da GLaDOS)
-const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/)/;
+const REAL_MODEL = /models\/(props_bts\/glados_|gladdysdestruction\/|props\/round_elevator_)/;
 const items = [];
 const add = (name, data) => items.push({ name, data });
 
@@ -282,6 +282,8 @@ for (const m of propModels) {
   }
 }
 console.log(`  ${propModels.size} modelos de objetos estáticos (${propFiles} arquivos)`);
+// objetos estáticos desenhados com as texturas originais (a moldura branca dos portais fixos)
+for (const m of propModels) if (/models\/props\/autoportal_frame\//.test(m)) entModels.add(m);
 
 // modelos de entidade com animação (.ani) e os materiais/texturas deles
 const readAny = (p) => (pak.has(p) ? pak.read(p) : hl2?.has(p) ? hl2.read(p) : null);
