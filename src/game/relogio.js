@@ -129,6 +129,7 @@ export class Chronos {
       buttons: world.buttons.map((b) => [b.pressed, b.count ?? 0]),
       pushButtons: (world.pushButtons ?? []).map((b) => [b.on, b.left, (b.chans ?? []).map((c) => [c.on, c.left])]),
       catchers: world.catchers.map((c) => c.active),
+      lasersOff: world.lasers.map((L) => !!L.off), // (ligado ou não naquele instante: o feixe do passado depende disso)
       incin: world.incinerators.map((i) => i.active),
       launchers: world.launchers.map((L) => [L.wait, L.done]),
       pellets: energy.pellets.map((p) => ({ uid: p.uid, li: world.launchers.indexOf(p.from), pos: p.pos.clone(), vel: p.vel.clone(), life: p.life, cd: p.cooldown })),

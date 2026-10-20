@@ -481,8 +481,11 @@ export class Frontier {
       // o feixe que entra no azul agora sai deste laranja no passado (para a vista do azul)
       const fromBlue = (this.prevEntries ?? []).filter((e) => e.B.partner === O).map((e) => ({ pos: e.exit, dir: e.dir, mine: true, bridge: e.bridge }));
       const before = (exitsAt(R.tw - O.delta)?.beams ?? []).slice(0, 8).map((b) => ({ pos: b.o, dir: b.d, bridge: b.bridge })); // no máximo 8 voltas, como no par comum
+      // os emissores como estavam então (um laser ligado por botão pode estar desligado agora e ligado no passado)
+      const offThen = snap.lasersOff;
+      const emitters = this.world.lasers.filter((L, k) => !(offThen?.[k] ?? L.off));
       R.inPast(O.delta, () => {
-        for (const L of [...this.world.lasers.filter((L) => !L.off), ...fromBlue, ...before]) {
+        for (const L of [...emitters, ...fromBlue, ...before]) {
           let o = L.pos;
           let d = L.dir;
           let ignore = null;
