@@ -2780,6 +2780,8 @@ function update(dt, t) {
   for (const tr of world.triggers) {
     if (tr.done || !inside(player.pos, tr.min, tr.max) || (tr.era && tr.era !== world.era)) continue;
     if (tr.exit) {
+      // com o relógio: a história tem de fechar antes de sair (senão é paradoxo e volta)
+      if (relogio?.exitParadox()) continue;
       tr.done = true;
       if (mp()) net.send({ t: 'exit', level: levelIdx, final: !!tr.final });
       else complete(!!tr.final);

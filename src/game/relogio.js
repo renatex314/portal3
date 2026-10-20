@@ -2069,10 +2069,15 @@ export class Chronos {
       // o chão em que você pisava sumiu
       if (pose.grounded && pose.up > 0) {
         const feet = pose.p.clone().add(new V3(0, -half.y + 0.25, 0));
-        // (a ponte de luz não para raios — tiros e lasers a atravessam —, mas é chão: conta à parte)
+        // a sola inteira, não só o centro: na beirada (de uma ponte de 2 m, por exemplo) o centro
+        // fica para fora e o corpo ainda está apoiado
+        const hx = half.x - 0.05;
+        const hz = half.z - 0.05;
+        const down = new V3(0, -1, 0);
         const hit =
-          world.raycast(feet, new V3(0, -1, 0), 0.75) ||
-          world.solids.some((b) => b.bridge && feet.x > b.min.x - 0.05 && feet.x < b.max.x + 0.05 && feet.z > b.min.z - 0.05 && feet.z < b.max.z + 0.05 && b.max.y <= feet.y + 0.05 && b.max.y >= feet.y - 0.75);
+          [[0, 0], [hx, hz], [-hx, hz], [hx, -hz], [-hx, -hz]].some(([x, z]) => world.raycast(feet.clone().add(new V3(x, 0, z)), down, 0.75)) ||
+          // (a ponte de luz não para raios — tiros e lasers a atravessam —, mas é chão: conta à parte)
+          world.solids.some((b) => b.bridge && feet.x + hx > b.min.x && feet.x - hx < b.max.x && feet.z + hz > b.min.z && feet.z - hz < b.max.z && b.max.y <= feet.y + 0.05 && b.max.y >= feet.y - 0.75);
         const under = (q, top) => Math.abs(q.x - pose.p.x) < 0.5 && Math.abs(q.z - pose.p.z) < 0.5 && Math.abs(q.y + top - (pose.p.y - half.y)) < 0.5;
         // em cima de um cubo — real ou o duplo de um cubo mandado ao passado (enquanto ele existe na história,
         // o real fica escondido e quem sustenta é o duplo)
@@ -2092,6 +2097,21 @@ export class Chronos {
   }
 
   /** o loop colapsa: tudo volta ao instante do salto */
+  /**
+   * Chegou na saída: a história tem de fechar. Uma versão sua do passado que ainda não entrou no
+   * azul (o salto dela é depois de agora) nunca entraria — paradoxo. Volta para o salto mais
+   * recente que ficou em aberto. Devolve true quando não pode sair agora (paradoxo, ou ainda
+   * rebobinando o salto).
+   */
+  exitParadox() {
+    if (this.sweep) return true;
+    const open = this.clones.filter((c) => c.end > this.tw + 1e-3);
+    if (!open.length) return false;
+    const c = open[open.length - 1];
+    this.rollback(c.cp, 'você chegou na saída antes de o seu passado entrar no portal', this.ctx.player.pos.clone());
+    return true;
+  }
+
   rollback(cp, why, at = null) {
     const { player, portals } = this.ctx;
     this.ctx.fx.paradox?.(why, at);
