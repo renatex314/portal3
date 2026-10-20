@@ -2393,7 +2393,7 @@ function update(dt, t) {
       player.vel.lerp(flow, 1 - Math.exp(-pdt * 5));
     }
     // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
-    player.update(pdt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
+    player.update(pdt, viewOverride?.freeze || verify ? NO_INPUT : input, world, portals, gravityAt, (P) => {
       // grade de desintegração: o caminho deste quadro vai só até a boca do portal (e recomeça na saída);
       // senão a reta "de um portal ao outro" cruza uma grade que fica entre os dois
       const toMouth = lastPlayerPos.clone().addScaledVector(P.normal, -lastPlayerPos.clone().sub(P.center).dot(P.normal));
@@ -2780,8 +2780,16 @@ function update(dt, t) {
   for (const tr of world.triggers) {
     if (tr.done || !inside(player.pos, tr.min, tr.max) || (tr.era && tr.era !== world.era)) continue;
     if (tr.exit) {
-      // com o relógio: a história tem de fechar antes de sair (senão é paradoxo e volta)
-      if (relogio?.exitParadox()) continue;
+      if (verify) continue; // (rodando a linha do tempo adiantada: já está na saída)
+      // com o relógio: se o seu passado ainda está agindo, o resto da história roda antes de sair
+      if (relogio && !mp()) {
+        if (relogio.sweep) continue;
+        const until = relogio.openUntil();
+        if (until > relogio.tw) {
+          startVerify(tr, until);
+          continue;
+        }
+      }
       tr.done = true;
       if (mp()) net.send({ t: 'exit', level: levelIdx, final: !!tr.final });
       else complete(!!tr.final);
@@ -2909,7 +2917,50 @@ function turretFiring(dist) {
   fireAt = now;
 }
 
+// ---- ao chegar na saída com o relógio: o resto da linha do tempo roda adiantado (sem desenhar,
+// atrás de uma tela de carregamento) até a última versão sua do passado terminar. Paradoxo no
+// caminho: o relógio volta para o salto (e mostra o paradoxo); história fechada: a fase acaba.
+let verify = null; // { tr, from, to, rb, deaths, t }
+function startVerify(tr, to) {
+  verify = { tr, from: relogio.tw, to, rb: relogio.rollbacks ?? 0, deaths, t: clock.elapsedTime };
+  for (const k of Object.keys(input)) if (typeof input[k] === 'boolean') input[k] = false;
+  if (sound.master) sound.master.gain.value = 0; // (os sons do trecho adiantado não tocam)
+  setText('verify-v', '0%');
+  $('verify-fill').style.transform = 'scaleX(0)';
+  $('verify').hidden = false;
+}
+function endVerify(done) {
+  const v = verify;
+  verify = null;
+  $('verify').hidden = true;
+  if (sound.master) sound.master.gain.value = 0.85;
+  if (done) {
+    v.tr.done = true;
+    complete(!!v.tr.final);
+  }
+}
+/** um pedaço da verificação (até ~25 ms por quadro, para a tela continuar viva) */
+function runVerify() {
+  const t0 = performance.now();
+  while (performance.now() - t0 < 25) {
+    verify.t += 1 / 60;
+    tick(1 / 60, 1 / 60, verify.t);
+    if ((relogio?.rollbacks ?? 0) !== verify.rb || deaths !== verify.deaths || !running || !relogio) return endVerify(false);
+    if (!relogio.sweep && relogio.tw >= verify.to + 0.1) return endVerify(true); // (um pouco depois do último salto: o que ele confere também conta)
+  }
+  const k = THREE.MathUtils.clamp((relogio.tw - verify.from) / Math.max(verify.to - verify.from, 1e-3), 0, 1);
+  setText('verify-v', `${Math.floor(k * 100)}%`);
+  $('verify-fill').style.transform = `scaleX(${k})`;
+}
+
 function frame() {
+  if (verify) {
+    if (running && level && !completed && relogio) runVerify();
+    else endVerify(false);
+    clock.getDelta(); // (o tempo real que passou aqui não vira um salto no próximo quadro)
+    requestAnimationFrame(frame);
+    return;
+  }
   if (!manualStep && coverEls.some((e) => !e.hidden)) {
     coverFlip = !coverFlip;
     if (coverFlip) {

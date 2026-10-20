@@ -2098,23 +2098,14 @@ export class Chronos {
   }
 
   /** o loop colapsa: tudo volta ao instante do salto */
-  /**
-   * Chegou na saída: a história tem de fechar. Uma versão sua do passado que ainda não entrou no
-   * azul (o salto dela é depois de agora) nunca entraria — paradoxo. Volta para o salto mais
-   * recente que ficou em aberto. Devolve true quando não pode sair agora (paradoxo, ou ainda
-   * rebobinando o salto).
-   */
-  exitParadox() {
-    if (this.sweep) return true;
-    const open = this.clones.filter((c) => c.end > this.tw + 1e-3);
-    if (!open.length) return false;
-    const c = open[open.length - 1];
-    this.rollback(c.cp, 'você chegou na saída antes de o seu passado entrar no portal', this.ctx.player.pos.clone());
-    return true;
+  /** até quando a história ainda tem versões suas do passado agindo (0 = nada pendente) */
+  openUntil() {
+    return Math.max(0, ...this.clones.map((c) => c.end).filter((e) => e > this.tw + 1e-3));
   }
 
   rollback(cp, why, at = null) {
     const { player, portals } = this.ctx;
+    this.rollbacks = (this.rollbacks ?? 0) + 1; // (a verificação na saída vê se houve paradoxo)
     this.ctx.fx.paradox?.(why, at);
     for (const c of this.clones) if (!cp.clones.includes(c)) this.dropClone(c);
     // objetos mandados ao passado dentro do loop desfeito: não aconteceu

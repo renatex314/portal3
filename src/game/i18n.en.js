@@ -3,6 +3,8 @@
 
 export const EN = new Map([
   // botões de apertar, ponte de luz e música da sala
+  ["Verificando a linha do tempo…", "Checking the timeline…"],
+  ["o seu passado ainda está agindo: o resto da história roda adiantado antes de sair", "your past self is still acting: the rest of the story runs fast-forward before you leave"],
   ["E — apertar o botão", "E — press the button"],
   ["Botão de apertar (pedestal)", "Push button (pedestal)"],
   ["Botão de apertar (parede)", "Push button (wall)"],
