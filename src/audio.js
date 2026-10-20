@@ -28,24 +28,43 @@ const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 export const TRACKS = {
   // câmaras de teste: pulso lento, tensão contida
   lab: [
-    { f: 'music/sector.mp3', g: 7.5 },
-    { f: 'music/pulse.mp3', g: 4.5 },
-    { f: 'music/airy.mp3', g: 12 },
+    { n: 'Sector', f: 'music/sector.mp3', g: 7.5 },
+    { n: 'Pulse', f: 'music/pulse.mp3', g: 4.5 },
+    { n: 'Airy', f: 'music/airy.mp3', g: 12 },
   ],
   // desafios e torretas: urgência
   labTense: [
-    { f: 'music/urgent.mp3', g: 15 },
-    { f: 'music/depths.mp3', g: 1.76 },
-    { f: 'music/infestation.mp3', g: 8.2 },
-    { f: 'music/searching.ogg', g: 0.53 },
+    { n: 'Urgent', f: 'music/urgent.mp3', g: 15 },
+    { n: 'Depths', f: 'music/depths.mp3', g: 1.76 },
+    { n: 'Infestation', f: 'music/infestation.mp3', g: 8.2 },
+    { n: 'Searching', f: 'music/searching.ogg', g: 0.53 },
   ],
   // série Momento, câmara final e o outro lado da Terra: sombrio e grande
   labEpic: [
-    { f: 'music/menacing.mp3', g: 0.33 },
-    { f: 'music/surreal.mp3', g: 5 },
-    { f: 'music/transmission.mp3', g: 4.3 },
+    { n: 'Menacing Otherworld', f: 'music/menacing.mp3', g: 0.33 },
+    { n: 'Surreal', f: 'music/surreal.mp3', g: 5 },
+    { n: 'Transmission', f: 'music/transmission.mp3', g: 4.3 },
   ],
 };
+// o que a fase pode tocar: um clima (as faixas dele, sorteadas) ou uma faixa só (`faixa:<arquivo sem extensão>`, em repetição)
+const MOOD_NAMES = { lab: 'Laboratório', labTense: 'Tensa', labEpic: 'Épica' };
+const trackId = (tr) => tr.f.replace(/^.*\//, '').replace(/\.\w+$/, '');
+export const MUSIC_OPTIONS = [
+  ...Object.keys(TRACKS).map((m) => [m, `${MOOD_NAMES[m] ?? m} (sorteia as faixas)`]),
+  ...Object.entries(TRACKS).flatMap(([m, list]) => list.map((tr) => [`faixa:${trackId(tr)}`, `Só "${tr.n}" (${(MOOD_NAMES[m] ?? m).toLowerCase()})`])),
+];
+/** `faixa:x` → o clima dela e só ela; um clima → as faixas dele */
+function moodTracks(name) {
+  if (name?.startsWith('faixa:')) {
+    const id = name.slice(6);
+    for (const [m, list] of Object.entries(TRACKS)) {
+      const tr = list.find((t) => trackId(t) === id);
+      if (tr) return { base: m, tracks: [tr], fixed: true };
+    }
+    return { base: 'lab', tracks: TRACKS.lab, fixed: false };
+  }
+  return { base: name, tracks: TRACKS[name] ?? [], fixed: false };
+}
 const FADE = 4; // segundos de transição entre faixas
 const BPM = { lab: 112, labTense: 138, labEpic: 100 };
 
@@ -191,7 +210,8 @@ export class Soundtrack {
   }
 
   setMood(name) {
-    if (!this.ctx || this.current?.name === name) return;
+    if (!this.ctx || (this.current?.key ?? this.current?.name) === name) return;
+    const pick = moodTracks(name);
     const t = this.ctx.currentTime;
     if (this.current) {
       const old = this.current;
@@ -204,10 +224,11 @@ export class Soundtrack {
     bus.gain.setValueAtTime(0, t);
     bus.gain.linearRampToValueAtTime(1, t + 3);
     bus.connect(this.music);
-    const mood = { name, bus, next: t + 0.1, step: 0, nodes: [] };
-    const bpm = BPM[name];
+    // (name = o clima, que o sequenciador sintetizado usa; key = o que a fase pediu)
+    const mood = { name: pick.base, key: name, tracks: pick.tracks, fixed: pick.fixed, bus, next: t + 0.1, step: 0, nodes: [] };
+    const bpm = BPM[pick.base];
     if (bpm) this.delay.delayTime.setTargetAtTime((3 * 60) / bpm / 4, t, 0.05); // eco de 3 semicolcheias
-    if (TRACKS[name]?.length) {
+    if (pick.tracks.length) {
       mood.next = Infinity; // sem sequenciador: quem toca é o streaming
       this._playlist(mood);
     } else this._startDrones(mood);
@@ -217,7 +238,7 @@ export class Soundtrack {
 
   // ------------------------------------------------------------ músicas gravadas
   _playlist(mood) {
-    const list = [...TRACKS[mood.name]].sort(() => Math.random() - 0.5);
+    const list = mood.fixed ? [...mood.tracks] : [...mood.tracks].sort(() => Math.random() - 0.5);
     mood.stream = { list, i: 0, cur: null, failed: false };
     this._nextTrack(mood, 0.3);
   }

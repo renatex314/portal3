@@ -127,6 +127,7 @@ export class Chronos {
     return {
       doors: world.doors.map((d) => [d.open, d.target, d.wait ?? 0]),
       buttons: world.buttons.map((b) => [b.pressed, b.count ?? 0]),
+      pushButtons: (world.pushButtons ?? []).map((b) => [b.on, b.left, (b.chans ?? []).map((c) => [c.on, c.left])]),
       catchers: world.catchers.map((c) => c.active),
       incin: world.incinerators.map((i) => i.active),
       launchers: world.launchers.map((L) => [L.wait, L.done]),
@@ -198,7 +199,7 @@ export class Chronos {
       // atravessando um portal (a caixa do corpo entra na parede/teto dele): não é obstrução
       ...(this.ctx.portals?.mouths(player.pos, true, 0.5).length || player.cooldown > -0.4 ? { inMouth: true } : {}),
       // lasers entrando num azul temporal agora (viram feixes saindo do laranja Δ s antes)
-      lz: (this.ctx.beams?.liveEntries ?? []).map((e) => ({ delta: e.delta, at: e.at.clone(), exit: e.exit.clone(), dir: e.dir.clone(), frame: e.frame })),
+      lz: (this.ctx.beams?.liveEntries ?? []).map((e) => ({ delta: e.delta, at: e.at.clone(), exit: e.exit.clone(), dir: e.dir.clone(), frame: e.frame, bridge: e.bridge || false })),
       w: this.snapshot(),
     });
     this.markArrive = false;
@@ -261,6 +262,15 @@ export class Chronos {
       d.target = s[1];
       if (d.wait !== undefined) d.wait = s[2];
     });
+    (world.pushButtons ?? []).forEach((b, k) => {
+      b.on = !!snap.pushButtons?.[k]?.[0];
+      b.left = snap.pushButtons?.[k]?.[1] ?? 0;
+      (b.chans ?? []).forEach((c, j) => {
+        const v = snap.pushButtons?.[k]?.[2]?.[j];
+        c.on = !!v?.[0];
+        c.left = v?.[1] ?? 0;
+      });
+    });
     world.buttons.forEach((b, k) => {
       b.pressed = !!snap.buttons[k]?.[0];
       b.count = snap.buttons[k]?.[1] ?? 0;
@@ -312,7 +322,7 @@ export class Chronos {
       if (s.a) c.body?.setAngvel({ x: s.a[0], y: s.a[1], z: s.a[2] }, true);
     });
     // portas e plataformas andam para onde estavam (e não esmagam quem está no caminho)
-    world.update(this.ctx.t(), 0);
+    world.update(this.vt, 0); // (o tempo visual, o mesmo do main: senão a lava e as animações pulam entre os dois)
     for (const d of moved) this.pushOut(player, d.box);
   }
 
@@ -1632,7 +1642,7 @@ export class Chronos {
     world.doors.forEach((d, k) => {
       if (snap.doors[k]) d.open = snap.doors[k][0];
     });
-    world.update(this.ctx.t(), 0);
+    world.update(this.vt, 0); // (o tempo visual, o mesmo do main: senão a lava e as animações pulam entre os dois)
     try {
       return fn();
     } finally {
@@ -1640,7 +1650,7 @@ export class Chronos {
         d.open = saved[k][0];
         d.target = saved[k][1];
       });
-      world.update(this.ctx.t(), 0);
+      world.update(this.vt, 0); // (o tempo visual, o mesmo do main: senão a lava e as animações pulam entre os dois)
     }
   }
 
@@ -1899,7 +1909,7 @@ export class Chronos {
       exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() },
       bad: {},
       // laser que você mandou para o passado: sai do laranja Δ antes de cada entrada no azul
-      laserEmits: tail.flatMap((s) => (s.lz ?? []).map((e) => ({ t: s.t - e.delta, entryT: s.t, at: e.at, exit: e.exit, dir: e.dir, frame: e.frame }))),
+      laserEmits: tail.flatMap((s) => (s.lz ?? []).map((e) => ({ t: s.t - e.delta, entryT: s.t, at: e.at, exit: e.exit, dir: e.dir, frame: e.frame, bridge: e.bridge }))),
     });
     this.samples = this.samples.slice(0, i + 1);
     this.tw = this.samples[i].t;
@@ -2058,7 +2068,10 @@ export class Chronos {
       // o chão em que você pisava sumiu
       if (pose.grounded && pose.up > 0) {
         const feet = pose.p.clone().add(new V3(0, -half.y + 0.25, 0));
-        const hit = world.raycast(feet, new V3(0, -1, 0), 0.75);
+        // (a ponte de luz não para raios — tiros e lasers a atravessam —, mas é chão: conta à parte)
+        const hit =
+          world.raycast(feet, new V3(0, -1, 0), 0.75) ||
+          world.solids.some((b) => b.bridge && feet.x > b.min.x - 0.05 && feet.x < b.max.x + 0.05 && feet.z > b.min.z - 0.05 && feet.z < b.max.z + 0.05 && b.max.y <= feet.y + 0.05 && b.max.y >= feet.y - 0.75);
         const under = (q, top) => Math.abs(q.x - pose.p.x) < 0.5 && Math.abs(q.z - pose.p.z) < 0.5 && Math.abs(q.y + top - (pose.p.y - half.y)) < 0.5;
         // em cima de um cubo — real ou o duplo de um cubo mandado ao passado (enquanto ele existe na história,
         // o real fica escondido e quem sustenta é o duplo)

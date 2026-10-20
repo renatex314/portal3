@@ -522,6 +522,14 @@ export class Sfx {
     this.sample('boom', { vol: 0.45 * vol, rate: 0.7, delay: 0.03, dest: m });
   }
 
+  /** tique-taque do botão de apertar com tempo (mais baixo de longe) */
+  timerTick(dist = 0) {
+    if (!this.ok) return;
+    const v = Math.max(0.08, 0.45 - dist * 0.02);
+    if (this.sample('tick', { vol: v, rate: 1.5, jitter: 0.02 })) return;
+    this._osc('square', 1800, 1700, this.t, 0.03, v * 0.25);
+  }
+
   /**
    * carga do campo de dilatação temporal (k de 0 a 1): o mesmo zumbido do tempo lento, num laço
    * próprio, começando abafado e abrindo com a carga (sintetizado enquanto a gravação não carrega)

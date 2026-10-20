@@ -10,10 +10,11 @@ import './editor.css';
 import * as THREE from 'three';
 import { tl, num, isEN } from '../i18n.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { ELEMENTS, typesByGroup, obbOf, dirVec } from './elements.js';
+import { ELEMENTS, typesByGroup, obbOf, dirVec, PUSH_TYPES, PUSH_MODES } from './elements.js';
 export { obbOf };
 import { add, clone, compile, newDoc, uid } from './doc.js';
 import { store } from './store.js';
+import { MUSIC_OPTIONS } from '../../audio.js';
 import { CELL, FACE_DIRS, PAINTS, cellKey, cellMin, cellCenter, cellOf, chamberBounds, setOpen, parseKey } from './chamber.js';
 import { validate } from './tools/validate.js';
 import { createTrajTool } from './tools/trajTool.js';
@@ -962,8 +963,32 @@ export function createEditor(host) {
     const sinks = isSource(it) && it.opens ? doc.items.filter((o) => o !== it && sinkKey(o) && o[sinkKey(o)] === it.opens) : [];
     const sources = sinkKey(it) && it[sinkKey(it)] ? doc.items.filter((o) => o !== it && isSource(o) && o.opens === it[sinkKey(it)]) : [];
     const rows = [];
-    for (const o of sinks) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `→ ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(it, o), 'danger sm')));
-    for (const o of sources) rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `← ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(o, it), 'danger sm')));
+    // como o item ligado reage a um botão de apertar (cada item do seu jeito; vazio = o modo do botão)
+    const pushMode = (sink, button) => {
+      const set = (k, v) => {
+        pushUndo();
+        if (v === '' || v === null) delete sink[k];
+        else sink[k] = v;
+        changed();
+      };
+      const def = PUSH_MODES.find(([v]) => v === (button.mode ?? 'timer'))?.[1] ?? '';
+      return el('div', { class: 'f' },
+        el('label', { class: 'f' }, el('span', {}, 'Ao apertar o botão'),
+          el('select', { onchange: (e) => set('pmode', e.target.value) },
+            el('option', { value: '', selected: !sink.pmode }, tl('Como o botão ({m})', { m: tl(def.replace(/ \(.*\)/, '').toLowerCase()) })),
+            PUSH_MODES.map(([v, l]) => el('option', { value: v, selected: sink.pmode === v }, l)))),
+        sink.pmode === 'timer'
+          ? el('label', { class: 'f' }, el('span', {}, 'Tempo ligado (s)'), el('input', { type: 'number', step: '0.5', min: '0.5', value: sink.ptime ?? 4, onchange: (e) => set('ptime', Number(e.target.value) || 4) }))
+          : null);
+    };
+    for (const o of sinks) {
+      rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `→ ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(it, o), 'danger sm')));
+      if (PUSH_TYPES.has(it.type)) rows.push(pushMode(o, it));
+    }
+    for (const o of sources) {
+      rows.push(el('div', { class: 'conn' }, el('button', { class: 'lnk', onclick: () => select([o.id]) }, `← ${tl(ELEMENTS[o.type].label)}`), btn('✕', 'Desligar', () => unlink(o, it), 'danger sm')));
+      if (PUSH_TYPES.has(o.type)) rows.push(pushMode(it, o));
+    }
     const can = isSource(it) || sinkKey(it);
     if (!can) return null;
     return el('div', { class: 'f' },
@@ -1043,7 +1068,7 @@ export function createEditor(host) {
       el('label', { class: 'f' }, el('span', {}, 'Objetivo (mostrado na tela)'), el('input', { type: 'text', value: c.lesson, maxlength: '120', onchange: (e) => set('lesson', e.target.value) })),
       el('label', { class: 'f' }, el('span', {}, 'Arma de portais'), el('select', { onchange: (e) => set('gun', e.target.value) }, [['both', 'Os dois portais'], ['blue', 'Só o ciano'], ['none', 'Nenhuma (use o pedestal)']].map(([v, l]) => el('option', { value: v, selected: v === c.gun }, l)))),
       el('label', { class: 'f' }, el('span', {}, 'Gravidade (m/s²)'), el('input', { type: 'number', step: 0.1, min: 0, value: c.gravity, onchange: (e) => set('gravity', Number(e.target.value)) })),
-      el('label', { class: 'f' }, el('span', {}, 'Música'), el('select', { onchange: (e) => set('music', e.target.value) }, [['lab', 'Laboratório'], ['labTense', 'Tensa']].map(([v, l]) => el('option', { value: v, selected: v === c.music }, l)))),
+      el('label', { class: 'f' }, el('span', {}, 'Música'), el('select', { onchange: (e) => set('music', e.target.value) }, MUSIC_OPTIONS.map(([v, l]) => el('option', { value: v, selected: v === (c.music || 'lab') }, l)))),
       el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: c.autoLight !== false, onchange: (e) => set('autoLight', e.target.checked) }), 'Luzes de teto automáticas'),
       el('label', { class: 'f chk' }, el('input', { type: 'checkbox', checked: !!c.relogio, onchange: (e) => set('relogio', e.target.checked) }), 'Relógio do tempo (tecla 2, portal temporal)'),
       el('p', { class: 'note' }, tl('{c} células · {n} itens · prova: {p}', { c: doc.chamber.open.length, n: doc.items.length, p: tl(st === 'none' ? 'nenhuma' : st === 'valid' ? 'válida ✔' : 'desatualizada ⚠') })),

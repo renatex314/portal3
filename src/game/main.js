@@ -448,6 +448,25 @@ const gun = portalGun();
   gun.rotation.set(0.05, 0.09, 0);
   gun.scale.setScalar(0.55); // Mark III: mais comprida e quadrada que a anterior
   gun.traverse((o) => o.layers.set(2));
+  // profundidade espremida perto da câmera: nada atrás dela a cobre (ex.: a superfície de um portal
+  // quando você está meio dentro dele, ou uma parede colada). Fica abaixo de 0,9 m, então a
+  // máscara da arma (esfera do campo, rastro, névoa) continua valendo
+  const patched = new Set();
+  gun.traverse((o) => {
+    for (const m of [o.material ?? []].flat()) {
+      if (patched.has(m)) continue;
+      patched.add(m);
+      const prev = m.onBeforeCompile;
+      m.onBeforeCompile = (sh, r) => {
+        prev?.call(m, sh, r);
+        const i = sh.vertexShader.lastIndexOf('}');
+        sh.vertexShader = sh.vertexShader.slice(0, i) + '  gl_Position.z = mix(-gl_Position.w, gl_Position.z, 0.15);\n}';
+      };
+      const key = m.customProgramCacheKey.bind(m);
+      m.customProgramCacheKey = () => key() + '|arma';
+      m.needsUpdate = true;
+    }
+  });
   camera.add(gun);
   const gunLight = new THREE.PointLight(0x9fd8ff, 0.6, 1.2);
   gunLight.position.set(0.16, -0.04, -1.2); // na frente da arma (encostada, estouraria o casco branco)
@@ -684,6 +703,7 @@ let gunMode = 'both'; // 'none' | 'blue' | 'both' (a arma é achada/melhorada em
 let cycle = null; // portal da fase que troca de lugar sozinho
 let inFizzler = false;
 const lastPlayerPos = new THREE.Vector3();
+let fizzleBeforePortal = false; // passou pela grade e logo depois entrou num portal (no mesmo quadro)
 const gemOwners = new Map(); // nome → cristais (multiplayer)
 let moonVisited = false;
 // gravidade da fase + zonas de gravidade, buracos negros e funis (série Fronteira)
@@ -998,12 +1018,13 @@ function loadLevel(i, silent = false) {
         dtReal: () => realDt,
         fx: chronosFx,
         // campos de dilatação criados depois de um ponto de controle somem se o loop for desfeito
-        checkpointExtra: () => ({ fields: FIELD.events.length, loop: FIELD.loop }),
+        checkpointExtra: () => ({ fields: FIELD.events.length, loop: FIELD.loop, presses: PRESS.events.length }),
         // simulações do relógio (bola/cubo mandados ao passado): passo de tempo num campo ativo no instante T
         timeScaleAt: (p, T) => (FIELD.events.some((ev) => T >= ev.t0 - 1e-6 && T < ev.t0 + ev.life && p.distanceTo(ev.center) < FIELD.R) ? 1 / FIELD.rate : 1),
         onRollback: (x) => {
           if (!x) return;
           FIELD.events.length = Math.min(FIELD.events.length, x.fields);
+          PRESS.events.length = Math.min(PRESS.events.length, x.presses ?? 0);
           FIELD.loop = x.loop; // você volta a ser o "você" de antes do salto
         },
       })
@@ -1029,7 +1050,7 @@ function loadLevel(i, silent = false) {
     crystals.push({ m, pos: new THREE.Vector3(cx, cy + 0.4, cz), taken: false });
   }
   $('gems').hidden = !crystals.length;
-  $('health').hidden = !(turrets.length || world.lasers.length);
+  $('health').hidden = !(turrets.length || world.lasers.some((L) => !L.bridge));
   $('era').hidden = !data.timeTravel;
   updateEraHud();
   updateGems();
@@ -1204,6 +1225,41 @@ function rayCube(origin, dir, maxD) {
   return best;
 }
 
+// ------------------------------------------------------------------ botões de apertar (E)
+// Os apertos entram na linha do tempo do relógio: voltando, a sua versão do passado aperta de novo.
+const PRESS = { events: [], lastTw: 0 };
+/** o botão de apertar na mira (até 2,3 m, sem parede no meio) */
+function aimButton(origin, dir) {
+  let best = null;
+  let bt = 2.3;
+  for (const B of world.pushButtons) {
+    const to = B.pos.clone().sub(origin);
+    const t = to.dot(dir);
+    if (t <= 0 || t > bt) continue;
+    if (to.addScaledVector(dir, -t).length() > 0.22) continue;
+    const wall = world.raycast(origin, dir, t - 0.12);
+    if (wall) continue;
+    best = B;
+    bt = t;
+  }
+  return best;
+}
+function pressPush(B, past = false) {
+  world.pressButton(B);
+  sfx.click(true);
+  setTimeout(() => sfx.click(false), 180);
+  B.tick = 0;
+  if (relogio && !past) PRESS.events.push({ t: relogio.tw, i: world.pushButtons.indexOf(B), loop: FIELD.loop });
+}
+/** com o relógio: os apertos das suas versões do passado acontecem de novo na hora certa */
+function replayPresses() {
+  if (!relogio) return;
+  const tw = relogio.tw;
+  if (tw > PRESS.lastTw)
+    for (const ev of PRESS.events) if (ev.loop < FIELD.loop && ev.t > PRESS.lastTw && ev.t <= tw && world.pushButtons[ev.i]) pressPush(world.pushButtons[ev.i], true);
+  PRESS.lastTw = tw;
+}
+
 function use() {
   if (!running || paused) return;
   if (held) {
@@ -1212,6 +1268,8 @@ function use() {
   }
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const dir = camForward();
+  const pb = aimButton(origin, dir);
+  if (pb) return pressPush(pb);
   // campanha original: botões de apertar (func_button) vêm antes de pegar objetos
   if (data?.campaign?.runtime?.use(origin, dir)) return;
   const hit = rayCube(origin, dir, 2.8);
@@ -1634,6 +1692,8 @@ function dropFields() {
 /** tudo do campo some (morte, troca de fase): inclusive o que estava gravado na linha do tempo */
 function resetField() {
   dropFields();
+  PRESS.events = [];
+  PRESS.lastTw = 0;
   FIELD.events = [];
   FIELD.loop = 0;
   FIELD.lastTw = 0;
@@ -2296,6 +2356,7 @@ function update(dt, t) {
   // relógio do tempo: 0 enquanto o mundo está parado ou voltando
   const wdt = relogio ? relogio.frame(dt) : dt;
   syncFieldTimeline(wdt);
+  replayPresses();
   const tv = relogio ? relogio.vt : t; // tempo visual do mundo (para quando ele para)
   world.update(tv, wdt);
   portals.update(t, dt);
@@ -2333,10 +2394,16 @@ function update(dt, t) {
     }
     // câmera de cena da campanha com "congelar o jogador": nenhuma tecla move
     player.update(pdt, viewOverride?.freeze ? NO_INPUT : input, world, portals, gravityAt, (P) => {
+      // grade de desintegração: o caminho deste quadro vai só até a boca do portal (e recomeça na saída);
+      // senão a reta "de um portal ao outro" cruza uma grade que fica entre os dois
+      const toMouth = lastPlayerPos.clone().addScaledVector(P.normal, -lastPlayerPos.clone().sub(P.center).dot(P.normal));
+      if (world.segmentFizzler(lastPlayerPos, toMouth, player.half)) fizzleBeforePortal = true;
+      lastPlayerPos.copy(player.pos);
       // ciano temporal: o jogador viaja no tempo (o relógio restaura o mundo e cria o clone)
       if (relogio && P.partner.delta > 0) {
         // deu certo: os campos que você criou até aqui passam a ser da sua versão do passado
         if (relogio.jump(P)) FIELD.loop++;
+        lastPlayerPos.copy(player.pos);
         return;
       }
       sfx.whoosh();
@@ -2508,6 +2575,23 @@ function update(dt, t) {
   for (const c of world.catchers) and(c.opens, c.active);
   for (const I of world.incinerators) and(I.opens, I.active);
   for (const C of world.laserCatchers) and(C.opens, C.active);
+  // (os sinais derivados, de itens com modo próprio, também valem o que os outros botões do sinal valem)
+  const before = new Map(sig);
+  for (const B of world.pushButtons) {
+    and(B.opens, B.on);
+    for (const c of world.pushChans(B)) and(c.sig, c.on);
+  }
+  for (const [id, v] of world.pushModes) if (before.has(v.base)) and(id, before.get(v.base));
+  // tique-taque dos botões de tempo (mais rápido no fim)
+  for (const B of world.pushButtons) {
+    const T = [B, ...world.pushChans(B)].filter((S) => S.mode === 'timer' && S.on);
+    if (!T.length) continue;
+    B.tick = (B.tick ?? 0) - wdt;
+    if (B.tick <= 0) {
+      B.tick = T.some((S) => S.left < S.time * 0.3) ? 0.25 : 0.5;
+      sfx.timerTick(B.pos.distanceTo(player.pos));
+    }
+  }
   for (const [id, v] of world.signals) and(id, v); // sinais ligados pela própria fase (lutas contra chefes)
   // emissor de laser ligado a um sinal (o feixe acende no quadro seguinte)
   for (const L of world.lasers) if (L.sig) L.off = !sig.get(L.sig);
@@ -2538,12 +2622,16 @@ function update(dt, t) {
     const target = sig.get(d.id) || (d.latch && d.target === 1) ? 1 : 0;
     if (d.target !== target) {
       d.target = target;
-      sfx.door();
+      // ligada desde o começo da fase (ex.: botão "desliga e fica desligado"): já aparece aberta, sem som
+      if (!d.seen) d.instant = true;
+      else sfx.door();
     }
+    d.seen = true;
   }
 
   // ---- grade de desintegração: passar por ela some com os seus portais
-  const nowIn = !!world.segmentFizzler(lastPlayerPos, player.pos, player.half); // o corpo todo, não só o centro
+  const nowIn = fizzleBeforePortal || !!world.segmentFizzler(lastPlayerPos, player.pos, player.half); // o corpo todo, não só o centro
+  fizzleBeforePortal = false;
   lastPlayerPos.copy(player.pos);
   if (nowIn && !inFizzler) {
     // onda no campo onde o jogador passou
@@ -2606,7 +2694,7 @@ function update(dt, t) {
   }
 
   // ---- torretas
-  if (turrets.length || world.lasers.length) {
+  if (turrets.length || world.lasers.some((L) => !L.bridge)) {
     const eye = player.eye();
     let shotsTaken = 0;
     // alvos pelos portais: você do outro lado de um par comum; pelo ciano temporal, o seu
@@ -2795,8 +2883,9 @@ function update(dt, t) {
   if (relogio) updateClockHud();
   // dica de "E" quando olhando para um cubo
   const look = rayCube(camera.position, fwd, 2.8);
-  $('use-hint').hidden = !(look && !held) && !held;
-  setText('use-hint', held ? 'E — soltar · botão esquerdo — arremessar' : 'E — pegar');
+  const lookBtn = !held && aimButton(camera.position, fwd);
+  $('use-hint').hidden = !((look || lookBtn) && !held) && !held;
+  setText('use-hint', held ? 'E — soltar · botão esquerdo — arremessar' : lookBtn ? 'E — apertar o botão' : 'E — pegar');
 }
 
 let realDt = 1 / 60;
@@ -2833,6 +2922,7 @@ function frame() {
     editor.frame(dt);
     gun.visible = false;
     world.update(t, dt);
+    frontier.editorPreview(t);
     portals.update(t, dt);
     for (const w of npcList) poseWorker(w, t, dt);
     updateDinos(t, dt);

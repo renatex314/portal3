@@ -10,7 +10,7 @@ import { tl } from './i18n.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { canvas, heightToNormal, tex, grain } from './textures.js';
+import { canvas, heightToNormal, tex, grain, hazardStripe } from './textures.js';
 
 let ENV = null;
 /** gera (uma vez) o mapa de reflexo usado pelos modelos */
@@ -1360,6 +1360,328 @@ export function sampleCube(opts = {}) {
  * em volta, anel de luz girando por baixo da placa e a placa vermelha que
  * afunda. Devolve { group, plate, lights, spin }.
  */
+/**
+ * Botão de apertar (E). Cinco designs (`look`), cada um com suporte de pedestal e cabeça
+ * (o botão + as luzes do tempo); `wall`: a cabeça numa placa de parede (frente para +z).
+ * Devolve { group, cap (afunda ao apertar), segs (luzes do tempo, acendem em ordem),
+ * lamps (acendem inteiras quando ligado), onMat, offMat, capMat }.
+ *   classic  pedestal do Portal: base com faixa de alerta, coluna branca, botão vermelho de vidro
+ *   mushroom parada de emergência: coluna quadrada industrial, botão-cogumelo, lâmpada sinalizadora
+ *   console  púlpito sci-fi inclinado, botão embutido ciano
+ *   arcade   fliperama: pedestal baixo e largo, cúpula transparente iluminada por dentro
+ *   clock    torre fina com um anel de vidro em volta da cabeça (o relógio), botão de disco
+ */
+export const PUSH_LOOKS = [
+  ['console', 'Console inclinado'],
+  ['classic', 'Pedestal clássico'],
+  ['mushroom', 'Parada de emergência'],
+  ['arcade', 'Fliperama'],
+  ['clock', 'Torre do relógio'],
+];
+
+function pbMats() {
+  envMap();
+  return {
+    dark: metal(0x2b2e33, { roughness: 0.45 }),
+    steel: metal(0x9a9ea6, { roughness: 0.28 }),
+    chrome: metal(0xd8dce2, { roughness: 0.12, metalness: 1 }),
+    white: plastic(0xe9e9e4),
+    black: plastic(0x1c1d20, { roughness: 0.6 }),
+  };
+}
+function stripesMat(rx, ry) {
+  const t = hazardStripe();
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  return new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 });
+}
+const ringOf = (n, r, y, geo, mat, parent, out) => {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(Math.cos(a) * r, y, Math.sin(a) * r);
+    m.rotation.y = -a + Math.PI / 2;
+    parent.add(m);
+    out?.push(m);
+  }
+};
+
+// ---- cabeças (no espaço da cabeça, "para cima" é +y)
+function headClassic(M) {
+  const head = new THREE.Group();
+  head.add(new THREE.Mesh(new THREE.LatheGeometry([[0, -0.05], [0.17, -0.05], [0.185, -0.03], [0.185, 0.0], [0.17, 0.02], [0, 0.02]].map(([r, y]) => new THREE.Vector2(r, y)), 48), M.white));
+  const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.112, 0.014, 10, 48).rotateX(Math.PI / 2), M.dark);
+  bezel.position.y = 0.022;
+  head.add(bezel);
+  const onMat = glow(new THREE.Color(2.4, 0.3, 0.12));
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x3a1210, roughness: 0.5 });
+  const segs = [];
+  ringOf(12, 0.15, 0.021, new THREE.BoxGeometry(0.034, 0.008, 0.014), offMat, head, segs);
+  const cap = new THREE.Group();
+  const capMat = new THREE.MeshPhysicalMaterial({ color: 0xd2261a, emissive: 0x7a0c05, emissiveIntensity: 0.6, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05, envMap: ENV, envMapIntensity: 0.9 });
+  const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.098, 0.1, 0.03, 40), capMat);
+  skirt.position.y = 0.035;
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.098, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+  dome.scale.y = 0.45;
+  dome.position.y = 0.05;
+  cap.add(skirt, dome);
+  head.add(cap);
+  return { head, cap, segs, onMat, offMat, capMat };
+}
+function headMushroom(M) {
+  const head = new THREE.Group();
+  // caixa preta com colar amarelo de emergência
+  const box = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.1, 0.34, 3, 0.025), M.black);
+  box.position.y = -0.04;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.16, 0.025, 40), plastic(0xf2c200, { roughness: 0.45 }));
+  collar.position.y = 0.022;
+  head.add(box, collar);
+  const onMat = glow(new THREE.Color(2.6, 1.4, 0.15));
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x3a2a08, roughness: 0.5 });
+  const segs = [];
+  ringOf(10, 0.152, 0.036, new THREE.BoxGeometry(0.03, 0.006, 0.012), offMat, head, segs);
+  const cap = new THREE.Group();
+  const capMat = new THREE.MeshPhysicalMaterial({ color: 0xc81d12, emissive: 0x6a0904, emissiveIntensity: 0.5, roughness: 0.3, clearcoat: 0.7, envMap: ENV, envMapIntensity: 0.6 });
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 24), M.dark);
+  stem.position.y = 0.06;
+  const mush = new THREE.Mesh(new THREE.SphereGeometry(0.13, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+  mush.scale.y = 0.5;
+  mush.position.y = 0.085;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.128, 0.012, 8, 40).rotateX(Math.PI / 2), capMat);
+  rim.position.y = 0.088;
+  cap.add(stem, mush, rim);
+  head.add(cap);
+  return { head, cap, segs, onMat, offMat, capMat };
+}
+function headConsole(M) {
+  const head = new THREE.Group();
+  const panel = new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.07, 0.32, 3, 0.02), M.dark);
+  panel.position.y = -0.03;
+  const face = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.004, 0.28), plastic(0x15181c, { roughness: 0.3 }));
+  face.position.y = 0.006;
+  head.add(panel, face);
+  const onMat = glow(new THREE.Color(0.25, 2.2, 2.6));
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x0c2a30, roughness: 0.5 });
+  // barra de tempo: 12 traços em linha na frente do botão, e duas faixas nas bordas
+  const segs = [];
+  for (let i = 0; i < 12; i++) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.006, 0.016), offMat);
+    m.position.set(-0.15 + i * 0.0273, 0.01, 0.11);
+    head.add(m);
+    segs.push(m);
+  }
+  const lamps = [];
+  for (const x of [-0.205, 0.205]) {
+    const st = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.28), offMat);
+    st.position.set(x, 0.01, 0);
+    head.add(st);
+    lamps.push(st);
+  }
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.01, 8, 40).rotateX(Math.PI / 2), M.steel);
+  ring.position.set(0, 0.012, -0.02);
+  head.add(ring);
+  const cap = new THREE.Group();
+  const capMat = new THREE.MeshPhysicalMaterial({ color: 0x9ff4ff, emissive: 0x0a6a7a, emissiveIntensity: 0.6, roughness: 0.15, clearcoat: 1, envMap: ENV, envMapIntensity: 0.8 });
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.075, 0.03, 40), capMat);
+  disc.position.set(0, 0.022, -0.02);
+  cap.add(disc);
+  head.add(cap);
+  return { head, cap, segs, lamps, onMat, offMat, capMat };
+}
+function headArcade(M) {
+  const head = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.03, 48), M.black);
+  top.position.y = -0.015;
+  const bezel = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.018, 12, 48).rotateX(Math.PI / 2), M.chrome);
+  bezel.position.y = 0.005;
+  head.add(top, bezel);
+  const onMat = glow(new THREE.Color(2.4, 0.4, 1.6));
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x2a0f22, roughness: 0.5 });
+  const segs = [];
+  ringOf(12, 0.18, 0.004, new THREE.CylinderGeometry(0.011, 0.011, 0.008, 10), offMat, head, segs);
+  const cap = new THREE.Group();
+  // cúpula transparente com um miolo aceso por dentro (sem transmissão: fica leve)
+  const capMat = new THREE.MeshPhysicalMaterial({ color: 0xff3a6a, emissive: 0x7a0a28, emissiveIntensity: 0.7, roughness: 0.05, transparent: true, opacity: 0.55, clearcoat: 1, envMap: ENV, envMapIntensity: 1.2, depthWrite: false });
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.1, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+  dome.scale.y = 0.75;
+  dome.position.y = 0.01;
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.045, 20, 12), glow(new THREE.Color(2.2, 0.5, 1.2)));
+  core.position.y = 0.03;
+  cap.add(dome, core);
+  head.add(cap);
+  return { head, cap, segs, onMat, offMat, capMat };
+}
+function headClock(M) {
+  const head = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.06, 40), M.dark);
+  base.position.y = -0.03;
+  head.add(base);
+  // anel de vidro em volta da cabeça, com as 12 marcas do relógio por dentro
+  const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.09, 48, 1, true), new THREE.MeshPhysicalMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.25, roughness: 0.05, clearcoat: 1, envMap: ENV, side: THREE.DoubleSide, depthWrite: false }));
+  glass.position.y = 0.0;
+  const rimA = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.01, 8, 48).rotateX(Math.PI / 2), M.steel);
+  rimA.position.y = 0.045;
+  const rimB = rimA.clone();
+  rimB.position.y = -0.045;
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.012, 0.014), M.steel);
+    spoke.position.set(Math.cos(a) * 0.16, -0.045, Math.sin(a) * 0.16);
+    spoke.rotation.y = -a;
+    head.add(spoke);
+  }
+  head.add(glass, rimA, rimB);
+  const onMat = glow(new THREE.Color(0.4, 1.4, 2.8));
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x0f1c2e, roughness: 0.5 });
+  const segs = [];
+  ringOf(12, 0.188, 0.0, new THREE.BoxGeometry(0.024, 0.06, 0.006), offMat, head, segs);
+  const cap = new THREE.Group();
+  const capMat = new THREE.MeshPhysicalMaterial({ color: 0xf2f2ee, emissive: 0x16304a, emissiveIntensity: 0.5, roughness: 0.2, clearcoat: 1, envMap: ENV, envMapIntensity: 0.8 });
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.1, 0.025, 40), capMat);
+  disc.position.y = 0.012;
+  const dot = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.006, 24), glow(new THREE.Color(0.4, 1.4, 2.8)));
+  dot.position.y = 0.027;
+  cap.add(disc, dot);
+  head.add(cap);
+  return { head, cap, segs, onMat, offMat, capMat };
+}
+
+// ---- suportes de pedestal: devolvem onde a cabeça vai (posição e inclinação) e lâmpadas extras
+function standClassic(g, M) {
+  const base = new THREE.Mesh(new THREE.LatheGeometry([[0, 0], [0.34, 0], [0.35, 0.02], [0.33, 0.07], [0.24, 0.09], [0.2, 0.12], [0, 0.12]].map(([r, y]) => new THREE.Vector2(r, y)), 48), M.dark);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.336, 0.346, 0.04, 48, 1, true), stripesMat(6, 0.25));
+  band.position.y = 0.035;
+  g.add(base, band);
+  ringOf(8, 0.29, 0.082, new THREE.CylinderGeometry(0.014, 0.014, 0.012, 6), M.steel, g);
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.95, 20), M.steel);
+  col.position.y = 0.58;
+  const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.5, 28), M.white);
+  sleeve.position.y = 0.52;
+  g.add(col, sleeve);
+  for (const y of [0.29, 0.76]) {
+    const r = new THREE.Mesh(new THREE.TorusGeometry(0.086, 0.012, 8, 28).rotateX(Math.PI / 2), M.dark);
+    r.position.y = y;
+    g.add(r);
+  }
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.1, -0.2), new THREE.Vector3(0, 0.3, -0.12), new THREE.Vector3(0, 0.7, -0.11), new THREE.Vector3(0, 1.0, -0.06)]), 24, 0.016, 8), M.black));
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.05, 0.1, 20), M.dark);
+  neck.position.y = 1.02;
+  g.add(neck);
+  return { y: 1.07, tilt: 0.42 };
+}
+function standMushroom(g, M) {
+  const foot = new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.06, 0.5, 2, 0.02), M.dark);
+  foot.position.y = 0.03;
+  g.add(foot);
+  for (const [x, z] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) {
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.015, 6), M.steel);
+    b.position.set(x, 0.065, z);
+    g.add(b);
+  }
+  // coluna quadrada com painéis de alerta na frente e atrás
+  const post = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.9, 0.18, 2, 0.02), plastic(0x3a3d42, { roughness: 0.5 }));
+  post.position.y = 0.51;
+  g.add(post);
+  for (const z of [0.092, -0.092]) {
+    const pan = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.55), stripesMat(1, 3));
+    pan.position.set(0, 0.48, z);
+    if (z < 0) pan.rotation.y = Math.PI;
+    g.add(pan);
+  }
+  // lâmpada sinalizadora âmbar no alto, atrás da cabeça
+  const lampMat = new THREE.MeshStandardMaterial({ color: 0x3a2a08, roughness: 0.4 });
+  const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.1, 20), lampMat);
+  lamp.position.set(0, 1.18, -0.13);
+  const lampCap = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.052, 0.02, 20), M.dark);
+  lampCap.position.set(0, 1.24, -0.13);
+  const lampPole = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.2, 8), M.steel);
+  lampPole.position.set(0, 1.04, -0.13);
+  g.add(lamp, lampCap, lampPole);
+  return { y: 1.0, tilt: 0.0, lamps: [lamp] };
+}
+function standConsole(g, M) {
+  // púlpito: corpo afunilado escuro com faixa ciano e tampo inclinado
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.26, 0.9, 4, 1).rotateY(Math.PI / 4), M.dark);
+  body.position.y = 0.45;
+  g.add(body);
+  const trim = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.235, 0.03, 4, 1, true).rotateY(Math.PI / 4), glow(new THREE.Color(0.2, 1.6, 2.0)));
+  trim.position.y = 0.2;
+  const trim2 = trim.clone();
+  trim2.scale.setScalar(0.82);
+  trim2.position.y = 0.72;
+  g.add(trim, trim2);
+  const foot = new THREE.Mesh(new RoundedBoxGeometry(0.48, 0.04, 0.48, 2, 0.015), M.steel);
+  foot.position.y = 0.02;
+  g.add(foot);
+  return { y: 0.98, tilt: 0.62 };
+}
+function standArcade(g, M) {
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, 0.82, 40), M.black);
+  body.position.y = 0.41;
+  g.add(body);
+  for (const y of [0.06, 0.8]) {
+    const r = new THREE.Mesh(new THREE.TorusGeometry(0.235, 0.015, 8, 40).rotateX(Math.PI / 2), M.chrome);
+    r.position.y = y;
+    g.add(r);
+  }
+  // duas listras brancas de fliperama descendo pela frente
+  for (const x of [-0.05, 0.05]) {
+    const st = new THREE.Mesh(new THREE.PlaneGeometry(0.035, 0.7), plastic(0xf2f2ee));
+    st.position.set(x, 0.43, 0.236);
+    g.add(st);
+  }
+  return { y: 0.85, tilt: 0.0 };
+}
+function standClock(g, M) {
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.24, 0.08, 40), M.dark);
+  base.position.y = 0.04;
+  g.add(base);
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.2, 16), M.steel);
+  rod.position.y = 0.68;
+  g.add(rod);
+  // aletas finas subindo pela haste
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.9, 0.07), M.dark);
+    fin.position.set(Math.cos(a) * 0.06, 0.56, Math.sin(a) * 0.06);
+    fin.rotation.y = -a;
+    g.add(fin);
+  }
+  return { y: 1.3, tilt: 0.0 };
+}
+
+const PUSH_HEADS = { classic: headClassic, mushroom: headMushroom, console: headConsole, arcade: headArcade, clock: headClock };
+const PUSH_STANDS = { classic: standClassic, mushroom: standMushroom, console: standConsole, arcade: standArcade, clock: standClock };
+
+export function pushButtonModel(wall = false, look = 'console') {
+  const M = pbMats();
+  const g = new THREE.Group();
+  const H = (PUSH_HEADS[look] ?? headClassic)(M);
+  let lamps = H.lamps ?? [];
+  if (!wall) {
+    const st = (PUSH_STANDS[look] ?? standClassic)(g, M);
+    H.head.position.y = st.y;
+    H.head.rotation.x = st.tilt;
+    lamps = lamps.concat(st.lamps ?? []);
+  } else {
+    // placa de parede: branca com moldura escura e quatro parafusos; o botão aponta para +z
+    const plate = new THREE.Mesh(new RoundedBoxGeometry(0.5, 0.5, 0.05, 3, 0.03), M.white);
+    plate.position.z = 0.025;
+    const frame = new THREE.Mesh(new RoundedBoxGeometry(0.56, 0.56, 0.03, 3, 0.04), M.dark);
+    frame.position.z = 0.012;
+    g.add(frame, plate);
+    for (const [x, y] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) {
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.012, 6).rotateX(Math.PI / 2), M.steel);
+      bolt.position.set(x, y, 0.053);
+      g.add(bolt);
+    }
+    H.head.position.z = 0.06;
+    H.head.rotation.x = Math.PI / 2;
+  }
+  g.add(H.head);
+  return { group: g, cap: H.cap, segs: H.segs, lamps, onMat: H.onMat, offMat: H.offMat, capMat: H.capMat };
+}
+
 export function floorButton() {
   const g = new THREE.Group();
   const baseMat = metal(0x4a4d53, { roughness: 0.5 });

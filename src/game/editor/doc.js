@@ -6,7 +6,7 @@
 //
 // Os tipos (elements.js) só chamam a API do World: o jogo roda o nível sem tratamento especial.
 
-import { ELEMENTS } from './elements.js';
+import { ELEMENTS, PUSH_TYPES } from './elements.js';
 import { buildChamber, autoLights, newChamber } from './chamber.js';
 import { tl } from '../i18n.js';
 
@@ -109,10 +109,18 @@ export function compile(doc, index = 0) {
       buildChamber(w, doc.chamber);
       if (doc.cfg.autoLight !== false) autoLights(w, doc.chamber);
       let spawned = false;
+      // botões de apertar: o item ligado pode reagir do seu jeito (pmode/ptime) em vez do modo do botão
+      const pushSigs = new Set(doc.items.filter((i) => PUSH_TYPES.has(i.type) && i.opens).map((i) => i.opens));
       for (const it of doc.items) {
         const T = ELEMENTS[it.type];
         if (!T) continue;
-        T.build(w, it, ctx);
+        let bi = it;
+        for (const f of T.params ?? []) {
+          if (f.t !== 'sig' || f.k === 'opens' || !pushSigs.has(it[f.k])) continue;
+          if (it.pmode) bi = { ...bi, [f.k]: w.pushSig(it[f.k], it.pmode, it.ptime ?? 4) };
+          else w.pushUsed?.add(it[f.k]);
+        }
+        T.build(w, bi, ctx);
         if (it.type === 'spawn') spawned = true;
       }
       if (!spawned) data.spawn = [0, 0, 0, 0];

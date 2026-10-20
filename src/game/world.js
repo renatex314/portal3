@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { tl } from './i18n.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { floorButton, envMap } from './models.js';
+import { floorButton, envMap, pushButtonModel } from './models.js';
 import * as TX from './textures.js';
 import { lavaMaterial, lavaEmbers, updateLava } from './lava.js';
 
@@ -357,6 +357,11 @@ export class World {
     this.solids = [];
     this.hazards = [];
     this.lavaLights = [];
+    this.pushButtons = []; // botões de apertar (E)
+    // modo escolhido por item ligado (editor): sinal derivado → { base, mode, time }; e os sinais
+    // que algum item ainda lê do jeito do próprio botão
+    this.pushModes = new Map();
+    this.pushUsed = new Set();
     this.triggers = [];
     this.doors = [];
     this.buttons = [];
@@ -1164,6 +1169,51 @@ export class World {
     return btn;
   }
 
+  /**
+   * Botão de apertar (E). `mode` 'timer': liga por `time` s (o anel de luzes vai apagando);
+   * 'toggle': cada aperto liga ou desliga. Pedestal (com corpo sólido) virado para `yaw`, ou
+   * `wall`: preso na parede, com a frente para `dir`.
+   */
+  pushButton(x, y, z, opens, { mode = 'timer', time = 4, wall = false, dir = [0, 0, 1], yaw = 0, look = 'console' } = {}) {
+    const m = pushButtonModel(wall, look);
+    const g = m.group;
+    g.position.set(x, y, z);
+    if (wall) g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...dir).normalize());
+    else g.rotation.y = yaw;
+    this.group.add(g);
+    g.updateMatrixWorld(true);
+    if (!wall) this.box(x - 0.18, y, z - 0.18, x + 0.18, y + 0.85, z + 0.18, 'metal').mesh.visible = false; // a coluna é sólida
+    const B = { pos: m.cap.getWorldPosition(new THREE.Vector3()), opens, mode, time, on: mode === 'unlatch', left: 0, press: 0, model: m, group: g };
+    this.pushButtons.push(B);
+    return B;
+  }
+
+  /** sinal derivado para um item que reage ao botão do seu jeito (`mode`, `time`), no lugar do modo do botão */
+  pushSig(sig, mode, time = 4) {
+    const id = `${sig}~${mode}~${time}`;
+    this.pushModes.set(id, { base: sig, mode, time });
+    return id;
+  }
+
+  /** os canais do botão: um por modo pedido pelos itens ligados ({ sig, mode, time, on, left }) */
+  pushChans(B) {
+    return (B.chans ??= [...this.pushModes].filter(([, v]) => v.base === B.opens).map(([sig, v]) => ({ sig, mode: v.mode, time: v.time, on: v.mode === 'unlatch', left: 0 })));
+  }
+
+  /** aperta o botão: no modo de tempo, liga (ou recomeça a contagem); alternado, inverte; e cada canal do seu jeito */
+  pressButton(B) {
+    B.press = 1;
+    for (const S of [B, ...this.pushChans(B)]) {
+      if (S.mode === 'toggle') S.on = !S.on;
+      else if (S.mode === 'latch') S.on = true; // fica ligado de vez (apertar de novo não desliga)
+      else if (S.mode === 'unlatch') S.on = false; // começa ligado; apertou, desliga de vez
+      else {
+        S.on = true;
+        S.left = S.time;
+      }
+    }
+  }
+
   /** elevador de saída (tubo de vidro iluminado) + gatilho de fim de fase */
   exitElevator(x, y, z, flipped = false, { era = null } = {}) {
     const g = new THREE.Group();
@@ -1362,6 +1412,41 @@ export class World {
   // ------------------------------------------------------------------ laser
   /** emissor de laser na parede/chão (`dir` = para onde o feixe sai) */
   /** emissor de laser; `sig`: só liga enquanto esse sinal estiver ligado (botão, receptor…) */
+  /**
+   * Emissor de ponte de luz (como as do Portal 2): projeta uma passarela de luz sólida em linha
+   * reta, que atravessa portais (e os temporais, como o laser — frontier.js). `sig`: só liga com
+   * o sinal. Fica na lista dos lasers com `bridge` = id do modelo (BRIDGE_LOOKS).
+   */
+  lightBridge(x, y, z, dir, { sig = null, look = 'veios' } = {}) {
+    const d = new THREE.Vector3(...dir).normalize();
+    const n = Math.abs(d.y) < 0.7 ? new THREE.Vector3(0, 1, 0).addScaledVector(d, -d.y).normalize() : new THREE.Vector3(1, 0, 0).addScaledVector(d, -d.x).normalize();
+    const side = new THREE.Vector3().crossVectors(n, d).normalize(); // (n × d: base com a mão certa, senão a carcaça sai espelhada para dentro da parede)
+    const M = materials();
+    const g = new THREE.Group();
+    // carcaça larga presa na parede, com a fenda de luz e as duas guias laterais
+    const back = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.7, 0.16), M.frame);
+    back.position.z = 0.08;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.42, 0.34), M.dark);
+    body.position.set(0, 0.0, 0.25);
+    const lensMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.5, 1.9, 2.6), toneMapped: false });
+    const slit = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.06, 0.02), lensMat);
+    slit.position.set(0, 0.0, 0.425);
+    g.add(back, body, slit);
+    for (const sx of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.56, 0.44), M.frame);
+      rail.position.set(sx * 1.2, 0, 0.26);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.4, 0.03), lensMat);
+      lamp.position.set(sx * 1.2, 0, 0.49);
+      g.add(rail, lamp);
+    }
+    g.position.set(x, y, z);
+    g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, n, d));
+    this.group.add(g);
+    const L = { pos: new THREE.Vector3(x, y, z).addScaledVector(d, 0.45), dir: d, group: g, lensMat, sig, off: !!sig, bridge: look || 'veios' }; // (bridge = modelo da ponte)
+    this.lasers.push(L);
+    return L;
+  }
+
   laser(x, y, z, dir, { sig = null } = {}) {
     const d = new THREE.Vector3(...dir).normalize();
     const M = materials();
@@ -1916,6 +2001,26 @@ export class World {
 
   update(t, dt) {
     for (const f of this.anim) f(t, dt);
+    // botões de apertar: contagem, o botão afundando e o anel de luzes
+    for (const B of this.pushButtons) {
+      const chans = this.pushChans(B);
+      for (const S of [B, ...chans])
+        if (S.mode === 'timer' && S.on) {
+          S.left -= dt;
+          if (S.left <= 0) S.on = false;
+        }
+      B.press = Math.max(0, B.press - dt * 4);
+      const m = B.model;
+      m.cap.position.y = -0.028 * Math.min(1, B.press * 2.5);
+      // as luzes mostram o canal que está valendo (o modo do botão só conta se algum item o usa)
+      const shown = !chans.length || this.pushUsed.has(B.opens) ? [B, ...chans] : chans;
+      const S = shown.find((c) => c.on && c.mode === 'timer') ?? shown.find((c) => c.on) ?? B;
+      const on = S.on;
+      const lit = S.mode !== 'timer' ? (on ? 12 : 0) : on ? Math.ceil((S.left / S.time) * 12) : 0;
+      m.segs.forEach((seg, i) => (seg.material = i < lit ? m.onMat : m.offMat));
+      for (const l of m.lamps) l.material = on && (S.mode !== 'timer' || Math.sin(t * 10) > -0.3) ? m.onMat : m.offMat;
+      m.capMat.emissiveIntensity = on ? 1.8 + 0.4 * Math.sin(t * 8) : 0.6;
+    }
     updateLava(t);
     for (const L of this.lavaLights) {
       if (!L.intensity) continue; // apagada pela época (inEra)
@@ -1932,7 +2037,8 @@ export class World {
       const path = d.path ?? _path.set(0, 0, 0);
       if (!d.path) path[d.axis] = d.dist;
       const before = d.open;
-      const sp = d.target < d.open && d.speedBack ? d.speedBack : d.speed;
+      const sp = d.instant ? Infinity : d.target < d.open && d.speedBack ? d.speedBack : d.speed;
+      d.instant = false;
       d.open += Math.sign(d.target - d.open) * Math.min(Math.abs(d.target - d.open), dt * sp);
       d.delta.copy(path).multiplyScalar(d.open - before);
       d.offset.copy(path).multiplyScalar(d.open);

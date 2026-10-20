@@ -9,7 +9,8 @@
 // Nada aqui sabe de editor: é só o que o jogo precisa para construir cada peça.
 
 import * as THREE from 'three';
-import { portalGun } from '../models.js';
+import { portalGun, PUSH_LOOKS } from '../models.js';
+import { BRIDGE_LOOKS } from '../frontier.js';
 
 const D2R = Math.PI / 180;
 
@@ -40,6 +41,21 @@ const num = (k, label, d, o = {}) => ({ k, label, t: 'num', d, ...o });
 const sig = (k, label, d = '') => ({ k, label, t: 'sig', d });
 const dir = (d) => ({ k: 'dir', label: 'Direção', t: 'select', o: DIRS, d });
 const v3 = (k, label, d) => ({ k, label, t: 'v3', d });
+/** os botões de apertar (o item ligado a eles pode escolher como reage: pmode/ptime) */
+export const PUSH_TYPES = new Set(['pushButton', 'wallButton']);
+export const PUSH_MODES = [
+  ['timer', 'Liga por um tempo (tique-taque)'],
+  ['toggle', 'Liga e desliga (interruptor)'],
+  ['latch', 'Liga e fica ligado'],
+  ['unlatch', 'Desliga e fica desligado'],
+];
+/** botão de apertar (E): o sinal, o modo e quanto tempo fica ligado */
+const pushParams = () => [
+  sig('opens', 'Sinal que liga'),
+  { k: 'look', label: 'Modelo', t: 'select', o: PUSH_LOOKS, d: 'console' },
+  { k: 'mode', label: 'Ao apertar (padrão)', t: 'select', o: PUSH_MODES, d: 'timer' },
+  num('time', 'Tempo ligado (s, padrão)', 4, { min: 0.5, step: 0.5 }),
+];
 /** tipo do cubo: comum, refletor de laser (o feixe sai pela face marcada) ou especial (coração) */
 export const CUBE_KINDS = [
   ['normal', 'Comum'],
@@ -163,6 +179,33 @@ export const ELEMENTS = {
       w.button(it.p[0], it.p[1], it.p[2], it.opens || null, { hold: it.hold || 0 });
     },
   },
+  pushButton: {
+    label: 'Botão de apertar (pedestal)',
+    group: 'Mecanismos',
+    place: 'floor',
+    color: 0xff5a4a,
+    shape: 'point',
+    rot: 'yaw',
+    hit: [0.7, 1.2, 0.7],
+    lift: 0.6,
+    params: pushParams(),
+    build(w, it) {
+      w.pushButton(it.p[0], it.p[1], it.p[2], it.opens || null, { mode: it.mode, time: it.time, yaw: (it.yaw ?? 0) * D2R, look: it.look });
+    },
+  },
+  wallButton: {
+    label: 'Botão de apertar (parede)',
+    group: 'Mecanismos',
+    place: 'wall',
+    color: 0xff5a4a,
+    shape: 'point',
+    hit: [0.55, 0.55, 0.3],
+    lift: 0,
+    params: [dir('+x'), ...pushParams()],
+    build(w, it) {
+      w.pushButton(it.p[0], it.p[1], it.p[2], it.opens || null, { mode: it.mode, time: it.time, wall: true, dir: dirVec(it.dir), look: it.look });
+    },
+  },
   door: {
     label: 'Porta (célula inteira)',
     group: 'Mecanismos',
@@ -282,7 +325,20 @@ export const ELEMENTS = {
     lift: 0.1,
     params: [dir('+x'), sig('sig', 'Sinal que liga (vazio = sempre ligado)')],
     build(w, it) {
-      w.laser(it.p[0], it.p[1], it.p[2], dirVec(it.dir), { sig: it.sig || null });
+      w.laser(it.p[0], it.p[1], it.p[2], dirVec(it.dir), { sig: it.sig || null, look: it.look });
+    },
+  },
+  lightBridge: {
+    label: 'Ponte de luz',
+    group: 'Energia e luz',
+    place: 'wall',
+    color: 0x6fe0ff,
+    shape: 'point',
+    hit: [2.4, 0.6, 0.5],
+    lift: 0,
+    params: [dir('+x'), { k: 'look', label: 'Modelo', t: 'select', o: BRIDGE_LOOKS, d: 'veios' }, sig('sig', 'Sinal que liga (vazio = sempre ligada)')],
+    build(w, it) {
+      w.lightBridge(it.p[0], it.p[1], it.p[2], dirVec(it.dir), { sig: it.sig || null, look: it.look });
     },
   },
   laserCatcher: {
