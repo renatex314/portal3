@@ -127,7 +127,7 @@ export class Chronos {
     return {
       doors: world.doors.map((d) => [d.open, d.target, d.wait ?? 0]),
       buttons: world.buttons.map((b) => [b.pressed, b.count ?? 0]),
-      pushButtons: (world.pushButtons ?? []).map((b) => [b.on, b.left, (b.chans ?? []).map((c) => [c.on, c.left])]),
+      pushButtons: (world.pushButtons ?? []).map((b) => [b.on, b.left, (world.pushChans?.(b) ?? []).map((c) => [c.on, c.left])]),
       catchers: world.catchers.map((c) => c.active),
       lasersOff: world.lasers.map((L) => !!L.off), // (ligado ou não naquele instante: o feixe do passado depende disso)
       incin: world.incinerators.map((i) => i.active),
@@ -266,9 +266,10 @@ export class Chronos {
     (world.pushButtons ?? []).forEach((b, k) => {
       b.on = !!snap.pushButtons?.[k]?.[0];
       b.left = snap.pushButtons?.[k]?.[1] ?? 0;
-      (b.chans ?? []).forEach((c, j) => {
+      (world.pushChans?.(b) ?? []).forEach((c, j) => {
         const v = snap.pushButtons?.[k]?.[2]?.[j];
-        c.on = !!v?.[0];
+        // (gravação sem este canal: o estado do começo — "desliga e fica desligado" começa ligado)
+        c.on = v ? !!v[0] : c.mode === 'unlatch';
         c.left = v?.[1] ?? 0;
       });
     });
