@@ -1035,7 +1035,7 @@ function loadLevel(i, silent = false) {
   document.body.dataset.relogio = 'play';
   $('clock').hidden = !relogio;
   $('keys').textContent = relogio
-    ? 'Esquerdo/Q: portal ciano · Direito: portal vermelho (parado: no passado) · 2: parar/continuar o tempo · Rodinha parado: voltar mais/menos · Meio: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Esc: pausa'
+    ? 'Esquerdo/Q: portal ciano · Direito/F: portal vermelho (parado: no passado) · Setas: olhar · 2: parar/continuar o tempo · Rodinha/Z/X parado: voltar mais/menos · Meio/G: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Enter: jogar · Esc: pausa'
     : KEYS_TEXT;
   cycle = data.cycle ? { ...data.cycle, i: 0, t: data.cycle.every } : null;
   if (cycle) portals.placeFixed(cycle.which, ...cycleSpot(0));
@@ -1483,7 +1483,13 @@ function updateCrosshair() {
 }
 
 // ------------------------------------------------------------------ entrada
-const KEYS = { KeyW: 'f', ArrowUp: 'f', KeyS: 'b', ArrowDown: 'b', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
+const KEYS = { KeyW: 'f', KeyS: 'b', KeyA: 'l', KeyD: 'r' };
+// só no teclado: as setas olham (como o mouse), F é o portal vermelho, Q + F juntos carregam o campo,
+// G liga o tempo lento, Z/X dão zoom (com o tempo parado, escolhem quantos segundos voltar)
+const LOOK_KEYS = { ArrowLeft: 'l', ArrowRight: 'r', ArrowUp: 'u', ArrowDown: 'd' };
+const lookKeys = { l: false, r: false, u: false, d: false, vx: 0, vy: 0 };
+const scrubKeys = { in: false, out: false };
+const FIRE_KEYS = { KeyQ: 0, KeyF: 2 }; // (como os botões do mouse: 0 = esquerdo, 2 = direito)
 window.addEventListener('keydown', (e) => {
   if (e.code === 'F5' && testingMine) {
     e.preventDefault();
@@ -1491,7 +1497,23 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (KEYS[e.code]) input[KEYS[e.code]] = true;
+  // Enter volta a jogar (trava o mouse) — dá para jogar sem mouse nenhum
+  if (e.code === 'Enter' && running && !completed && !editing && document.pointerLockElement !== canvas && (document.activeElement === document.body || document.activeElement === canvas)) {
+    e.preventDefault();
+    lock();
+    return;
+  }
   if (!running || paused) return;
+  if (LOOK_KEYS[e.code]) {
+    lookKeys[LOOK_KEYS[e.code]] = true;
+    e.preventDefault();
+  }
+  if (e.code in FIRE_KEYS && !e.repeat) fireDown(FIRE_KEYS[e.code]);
+  if (e.code === 'KeyG' && !e.repeat) toggleSlowmo();
+  if (e.code === 'KeyZ' || e.code === 'KeyX') {
+    if (relogio?.paused) scrubKeys[e.code === 'KeyZ' ? 'in' : 'out'] = true;
+    else zoomStep(e.code === 'KeyZ');
+  }
   if (e.code === 'Space') {
     input.jump = true;
     e.preventDefault();
@@ -1503,12 +1525,15 @@ window.addEventListener('keydown', (e) => {
   if (e.ctrlKey) e.preventDefault(); // agachado: sem atalhos do navegador (Ctrl+S, Ctrl+D…)
   if (e.code === 'KeyE') use();
   if (e.code === 'KeyR') loadLevel(levelIdx);
-  if (e.code === 'KeyQ') held ? release(true) : shoot('blue');
   if (e.code === 'KeyT' && !e.repeat) timeTravel();
   if (e.code === 'Digit2' && !e.repeat && relogio) relogio.pause();
 });
 window.addEventListener('keyup', (e) => {
   if (KEYS[e.code]) input[KEYS[e.code]] = false;
+  if (LOOK_KEYS[e.code]) lookKeys[LOOK_KEYS[e.code]] = false;
+  if (e.code in FIRE_KEYS) fireUp(FIRE_KEYS[e.code]);
+  if (e.code === 'KeyZ') scrubKeys.in = false;
+  if (e.code === 'KeyX') scrubKeys.out = false;
   if (e.code === 'Space') input.jump = false;
   if (e.code === 'ControlLeft' || e.code === 'ControlRight' || e.code === 'KeyC') input.crouch = false;
 });
@@ -1528,24 +1553,30 @@ document.addEventListener('mousemove', (e) => {
     GUN.look.y += e.movementY;
   }
 });
+/** apertou o "botão" de tiro (0 = ciano, 2 = vermelho), pelo mouse ou pelo teclado (Q/F) */
+function fireDown(button) {
+  mouseHeld[button] = true;
+  // segurando um objeto: o ciano arremessa (e não sai portal)
+  if (button === 0 && held) return release(true);
+  // os dois juntos: carga do campo de dilatação (o portal que esperava não sai)
+  if (mouseHeld[0] && mouseHeld[2]) {
+    pendingShot = null;
+    return;
+  }
+  if (button === 2 && held) return;
+  // o portal sai num instante (ou ao soltar): dá tempo de o outro botão chegar junto
+  pendingShot = { which: button === 0 ? 'blue' : 'orange', at: performance.now() };
+}
+function fireUp(button) {
+  mouseHeld[button] = false;
+  if (pendingShot && pendingShot.which === (button === 0 ? 'blue' : 'orange')) firePending();
+}
 canvas.addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== canvas) {
     if (running && !completed) lock();
     return;
   }
-  if (e.button === 0 || e.button === 2) {
-    mouseHeld[e.button] = true;
-    // segurando um objeto: o botão esquerdo arremessa (e não sai portal)
-    if (e.button === 0 && held) return release(true);
-    // os dois botões juntos: carga do campo de dilatação (o portal que esperava não sai)
-    if (mouseHeld[0] && mouseHeld[2]) {
-      pendingShot = null;
-      return;
-    }
-    if (e.button === 2 && held) return;
-    // o portal sai num instante (ou ao soltar): dá tempo de o outro botão chegar junto
-    pendingShot = { which: e.button === 0 ? 'blue' : 'orange', at: performance.now() };
-  }
+  if (e.button === 0 || e.button === 2) fireDown(e.button);
   if (e.button === 1) {
     e.preventDefault();
     toggleSlowmo();
@@ -1553,11 +1584,13 @@ canvas.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('mouseup', (e) => {
-  if (e.button !== 0 && e.button !== 2) return;
-  mouseHeld[e.button] = false;
-  if (pendingShot && pendingShot.which === (e.button === 0 ? 'blue' : 'orange')) firePending();
+  if (e.button === 0 || e.button === 2) fireUp(e.button);
 });
-window.addEventListener('blur', () => (mouseHeld[0] = mouseHeld[2] = false));
+window.addEventListener('blur', () => {
+  mouseHeld[0] = mouseHeld[2] = false;
+  lookKeys.l = lookKeys.r = lookKeys.u = lookKeys.d = false;
+  scrubKeys.in = scrubKeys.out = false;
+});
 // zoom pela rodinha: para cima liga e aproxima; para baixo afasta e, no mínimo, desliga.
 // A rolagem é somada até um "degrau" (o trackpad manda dezenas de eventos pequenos)
 let wheelSum = 0;
@@ -1577,19 +1610,47 @@ window.addEventListener(
     while (Math.abs(wheelSum) >= 60) {
       const zoomIn = wheelSum < 0;
       wheelSum -= Math.sign(wheelSum) * 60;
-      if (zoomIn) {
-        if (!ZOOM.on) {
-          ZOOM.on = true;
-          ZOOM.level = Math.max(ZOOM.level, 2);
-        } else ZOOM.level = clamp(ZOOM.level * 1.25, 1.5, 8);
-      } else if (ZOOM.on) {
-        if (ZOOM.level <= 1.6) ZOOM.on = false;
-        else ZOOM.level = clamp(ZOOM.level / 1.25, 1.5, 8);
-      }
+      zoomStep(zoomIn);
     }
   },
   { passive: false },
 );
+/** um degrau de zoom (roda ou Z/X): aproximando liga; afastando, no mínimo, desliga */
+function zoomStep(zoomIn) {
+  if (zoomIn) {
+    if (!ZOOM.on) {
+      ZOOM.on = true;
+      ZOOM.level = Math.max(ZOOM.level, 2);
+    } else ZOOM.level = clamp(ZOOM.level * 1.25, 1.5, 8);
+  } else if (ZOOM.on) {
+    if (ZOOM.level <= 1.6) ZOOM.on = false;
+    else ZOOM.level = clamp(ZOOM.level / 1.25, 1.5, 8);
+  }
+}
+/** a cada quadro: olhar pelas setas (acelera um pouco, para mirar fino e virar rápido) e,
+ *  com o tempo parado, Z/X escolhendo quantos segundos voltar */
+function keyboardFrame(dt) {
+  if (!running || paused || completed || viewOverride) {
+    lookKeys.vx = lookKeys.vy = 0;
+    return;
+  }
+  const s = camera.fov / 75; // (com zoom, mais fino, como o mouse)
+  const wx = (lookKeys.r ? 1 : 0) - (lookKeys.l ? 1 : 0);
+  const wy = (lookKeys.d ? 1 : 0) - (lookKeys.u ? 1 : 0);
+  const ease = (v, w) => (w ? v + (w - v) * Math.min(1, dt * 6) : 0);
+  lookKeys.vx = ease(lookKeys.vx, wx);
+  lookKeys.vy = ease(lookKeys.vy, wy);
+  // até ~150°/s de lado e ~100°/s para cima/baixo (em "pixels" de mouse: 0,0022 rad cada)
+  const px = (2.6 * dt) / 0.0022;
+  const py = (1.75 * dt) / 0.0022;
+  if (lookKeys.vx || lookKeys.vy) {
+    player.look(lookKeys.vx * px * s, lookKeys.vy * py * s);
+    GUN.look.x += lookKeys.vx * px * 0.5;
+    GUN.look.y += lookKeys.vy * py * 0.5;
+  }
+  if (relogio?.paused && (scrubKeys.in || scrubKeys.out)) relogio.scrubBy(((scrubKeys.in ? 1 : 0) - (scrubKeys.out ? 1 : 0)) * 4 * dt);
+  else scrubKeys.in = scrubKeys.out = false;
+}
 // botão do meio não abre a rolagem automática do navegador
 window.addEventListener('auxclick', (e) => e.button === 1 && e.preventDefault());
 
@@ -1865,6 +1926,8 @@ document.addEventListener('pointerlockchange', () => {
   $('room-map-label').textContent = mp() ? 'Mapa da sala (muda para todos):' : 'Mapa:';
   document.body.classList.toggle('playing', locked);
   for (const k of Object.keys(input)) input[k] = false;
+  lookKeys.l = lookKeys.r = lookKeys.u = lookKeys.d = false;
+  scrubKeys.in = scrubKeys.out = false;
 });
 // o navegador recusou travar o mouse (ex.: o clique "expirou" enquanto a campanha
 // original carregava o mapa): mostra a pausa, e o "Continuar" trava de novo
@@ -2986,6 +3049,7 @@ function frame() {
     if (manualStep) {
       player.applyCamera(0);
     } else if (!paused && !completed) {
+      keyboardFrame(dt);
       updateSlowmo(dt);
       tick(dt, dt * SLOW.k, t);
     } else if (SLOW.on) toggleSlowmo(false);

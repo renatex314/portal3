@@ -226,9 +226,10 @@ No menu, **🛠 Editor de níveis** (ou **＋ Novo nível** em *Meus níveis*). 
 
 A trajetória e o alcance são **estimativas** do centro do corpo com a física do jogo (validadas contra o voo real de uma placa: pouso a ≤ 0,1 m); não incluem funis nem o jogador mudando de direção no ar.
 
-Controles: mouse para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito portal laranja,
-botão do meio tempo lento, `Z` (segurar) zoom — a rodinha ajusta o aumento —, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
-segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa. Precisa de teclado e mouse.
+Controles: mouse (ou as setas) para olhar, `W A S D`, botão esquerdo (ou `Q`) portal azul, direito (ou `F`) portal laranja,
+os dois juntos (`Q` + `F`) carregam o campo de dilatação, botão do meio (ou `G`) tempo lento, rodinha (ou `Z`/`X`) zoom, `Espaço` pula, `E` pega/solta (cubo ou torreta) ou desliga torreta por trás, botão esquerdo
+(ou `Q`) segurando um objeto arremessa, `T` viaja no tempo (série Fronteira), `R` reinicia, `Esc` pausa, `Enter` volta a jogar.
+Dá para jogar só com o teclado: com o tempo parado (série Experimento), `Z`/`X` escolhem quantos segundos voltar.
 Progresso salvo no navegador; `jogo.html?todas` libera todas as câmaras e testes.
 
 Visual: texturas procedurais com relevo e rugosidade (paredes, pisos e tetos diferentes, chapa
