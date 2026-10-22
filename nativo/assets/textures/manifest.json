@@ -1,0 +1,51 @@
+{
+ "whiteWall": {
+  "repeat": 0.5,
+  "map": "textures/whiteWall_map.png",
+  "normal": "textures/whiteWall_normal.png",
+  "rough": "textures/whiteWall_rough.png"
+ },
+ "whiteFloor": {
+  "repeat": 0.5,
+  "map": "textures/whiteFloor_map.png",
+  "normal": "textures/whiteFloor_normal.png",
+  "rough": "textures/whiteFloor_rough.png"
+ },
+ "metalWall": {
+  "repeat": 0.5,
+  "map": "textures/metalWall_map.png",
+  "normal": "textures/metalWall_normal.png",
+  "rough": "textures/metalWall_rough.png"
+ },
+ "metalFloor": {
+  "repeat": 1,
+  "map": "textures/metalFloor_map.png",
+  "normal": "textures/metalFloor_normal.png",
+  "rough": "textures/metalFloor_rough.png"
+ },
+ "ceiling": {
+  "repeat": 0.5,
+  "map": "textures/ceiling_map.png",
+  "normal": "textures/ceiling_normal.png",
+  "rough": "textures/ceiling_rough.png"
+ },
+ "rock": {
+  "repeat": 1,
+  "map": "textures/rock_map.png",
+  "normal": "textures/rock_normal.png"
+ },
+ "doorPanel": {
+  "repeat": 1,
+  "map": "textures/doorPanel_map.png",
+  "normal": "textures/doorPanel_normal.png"
+ },
+ "moonGround": {
+  "repeat": 0.25,
+  "map": "textures/moonGround_map.png",
+  "normal": "textures/moonGround_normal.png"
+ },
+ "hazardStripe": {
+  "repeat": 1,
+  "map": "textures/hazardStripe_map.png"
+ }
+}

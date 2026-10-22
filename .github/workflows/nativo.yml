@@ -1,0 +1,70 @@
+name: Versão nativa (Windows e Mac)
+
+on:
+  push:
+    branches: [master]
+    paths: ['nativo/**', 'public/music/**', 'public/sfx/**', 'public/vozes/**', '.github/workflows/nativo.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nativo
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            exe: nativo/target/release/portal3.exe
+          - os: macos-latest
+            name: mac-arm64
+            exe: nativo/target/release/portal3
+            kind: mac
+          - os: macos-13
+            name: mac-intel
+            exe: nativo/target/release/portal3
+            kind: mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nativo
+      - run: cargo build --release --bin portal3
+        working-directory: nativo
+      - name: empacotar
+        shell: bash
+        run: |
+          nativo/pacote/empacotar.sh "${{ matrix.exe }}" "dist/LaboratorioAntipoda" ${{ matrix.kind }}
+          cd dist
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a -tzip "../LaboratorioAntipoda-${{ matrix.name }}.zip" LaboratorioAntipoda > /dev/null
+          else
+            ditto -c -k --keepParent "LaboratorioAntipoda/Laboratorio Antipoda.app" "../LaboratorioAntipoda-${{ matrix.name }}.zip"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaboratorioAntipoda-${{ matrix.name }}
+          path: LaboratorioAntipoda-${{ matrix.name }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: publicar na versão "nativo"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view nativo >/dev/null 2>&1 || gh release create nativo --prerelease --title "Versão nativa (Windows e Mac)" --notes "Builds automáticos da versão nativa (Bevy). A campanha original precisa da sua cópia do Portal."
+          gh release upload nativo LaboratorioAntipoda-*.zip --clobber

@@ -1,0 +1,30 @@
+[package]
+name = "portal3"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ab_glyph = "0.2.32"
+bevy = "0.20"
+bevy_egui = "0.43"
+web-audio-api = "1.7"
+gltf = { version = "1", default-features = false, features = ["utils", "import", "extras", "names", "KHR_materials_unlit"] }
+rand = "0.9"
+rapier3d = { version = "0.36.1", features = ["parallel"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+rfd = "0.15"
+tungstenite = "0.24"
+flate2 = "1"
+
+# dependências otimizadas mesmo no modo de desenvolvimento (o motor e a física ficam rápidos);
+# o código do jogo compila rápido com otimização leve
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

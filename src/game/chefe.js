@@ -199,6 +199,7 @@ function buildBoss(w, S, lights) {
 
   // ---------------------------------------------------------------- crânio (coordenadas locais; olha para +z)
   const skull = new THREE.Group();
+  skull.name = 'skull';
   skull.position.copy(SK);
   boss.add(skull);
   const cran = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 48), bone);
@@ -226,15 +227,16 @@ function buildBoss(w, S, lights) {
   nose.scale.set(0.75, 1.3, 1);
   nose.position.set(0, -2.9, 5.99);
   skull.add(nose);
-  const eyeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.15, 0.1), toneMapped: false });
+  const eyeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 0.15, 0.1), toneMapped: false, name: 'eye' });
   const eyes = [-1, 1].map((s) => {
     const e = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 14), eyeMat);
+    e.name = `eye_${s < 0 ? 0 : 1}`;
     e.position.set(2.35 * s, -0.3, 5.1);
     skull.add(e);
     return e;
   });
   // portas das têmporas (de onde saem as bolas que vão para as paredes)
-  const portMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 0.5, 0.3), toneMapped: false });
+  const portMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 0.5, 0.3), toneMapped: false, name: 'port' });
   for (const s of [-1, 1]) {
     const port = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.14, 10, 32), portMat);
     port.position.set(5.95 * s, 0.4, -0.5);
@@ -257,6 +259,7 @@ function buildBoss(w, S, lights) {
   }
   // mandíbula: gira em torno do eixo x que passa pelas articulações
   const jaw = new THREE.Group();
+  jaw.name = 'jaw';
   const pivot = new THREE.Vector3(0, -2.6, 0.8);
   jaw.position.copy(pivot);
   skull.add(jaw);
@@ -397,6 +400,7 @@ function buildBoss(w, S, lights) {
     const g = mergeInto(list);
     if (!g) return;
     const m = new THREE.Mesh(g, (veinMats[key] = veinMaterial(color, U, amp, grow, retract)));
+    m.name = `vein_${key}`;
     m.frustumCulled = false;
     boss.add(m);
   };
@@ -434,6 +438,7 @@ function buildBoss(w, S, lights) {
       m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
       m.visible = false;
       m.userData.u = u;
+      m.name = `strap_${straps.length}`;
       boss.add(m);
       straps.push(m);
     }

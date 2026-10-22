@@ -110,6 +110,7 @@ export function dressHall(w, { skull, shoulders }) {
     }
   const ledGeo = new THREE.BoxGeometry(0.16, 0.12, 0.06);
   const leds = new THREE.InstancedMesh(ledGeo, new THREE.MeshBasicMaterial({ toneMapped: false }), racks.length);
+  leds.name = 'leds';
   const m4 = new THREE.Matrix4();
   const col = new THREE.Color();
   racks.forEach((p, i) => {
@@ -134,9 +135,11 @@ export function dressHall(w, { skull, shoulders }) {
       blades.add(bl);
     }
     blades.position.z = 0.12;
+    blades.name = `fan_${fans.length}`;
     g.add(blades);
     root.add(g);
     fans.push({ blades, spd: 1.2 + R() * 1.4 });
+    blades.userData.spd = fans[fans.length - 1].spd;
   }
   // faixa de aviso e cano vertical dos dois lados da porta
   for (const s of [-1, 1]) {
@@ -230,6 +233,8 @@ export function dressHall(w, { skull, shoulders }) {
   ]) {
     const b = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.1, 0.2), toneMapped: false }));
     b.position.set(x, 33.6, z);
+    b.name = `beacon_${beacons.length}`;
+    b.userData.ph = ph;
     root.add(b);
     beacons.push({ b, ph });
   }
