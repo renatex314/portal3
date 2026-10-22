@@ -2,8 +2,10 @@
 # monta o jogo para distribuir: o executável + assets (com as músicas, efeitos e vozes da versão web)
 #   pacote/empacotar.sh <executável> <pasta de saída> [mac]
 set -eu
+# (caminhos absolutos antes de entrar na pasta nativo/)
+exe="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+mkdir -p "$2"; out="$(cd "$2" && pwd)"; kind="${3:-}"
 cd "$(dirname "$0")/.."
-exe="$1"; out="$2"; kind="${3:-}"
 rm -rf "$out"; mkdir -p "$out"
 if [ "$kind" = mac ]; then
   app="$out/Laboratorio Antipoda.app"
