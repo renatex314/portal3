@@ -39,6 +39,23 @@ jobs:
           workspaces: nativo
       - run: cargo build --release --bin portal3
         working-directory: nativo
+      - name: teste rápido no Windows (abre o jogo por 40 s e guarda o que ele escreveu)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          export RUST_BACKTRACE=1 PORTAL3_MUTE=1
+          ./nativo/target/release/portal3.exe > smoke.log 2>&1 &
+          pid=$!
+          sleep 40
+          if kill -0 $pid 2>/dev/null; then echo "AINDA RODANDO depois de 40 s (ok)"; kill $pid; else wait $pid; echo "SAIU com código $?"; fi
+          grep -iE "panicked|error|adapter|backend" smoke.log | head -40 || true
+          tail -40 smoke.log
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: smoke-log-windows
+          path: smoke.log
       - name: empacotar
         shell: bash
         run: |
