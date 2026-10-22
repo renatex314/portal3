@@ -232,7 +232,9 @@ export class Chronos {
       const q = prev?.[k];
       if (q && (q.gone !== !!p.gone || (!p.gone && p.pos.distanceTo(q.p) > 0.05))) pm.push(k);
     });
-    return { gap: true, pm };
+    const fz = this.frozenPath?.length > 1 ? this.frozenPath : null;
+    this.frozenPath = null;
+    return { gap: true, pm, ...(fz ? { fz } : {}) };
   }
 
   indexAt(t) {
@@ -350,11 +352,31 @@ export class Chronos {
   pause(on = !this.paused) {
     if (on === this.paused || this.sweep) return;
     this.paused = on;
+    if (on) {
+      this.frozenPath = [];
+      this.trackFrozen();
+    }
     if (!on) this.gap = true;
     if (on) this.delta = this.deltaGoal = THREE.MathUtils.clamp(this.delta, MIN_DELTA, Math.max(MIN_DELTA, this.maxDelta()));
     this.setFreeze(on);
     this.setHolo(on);
     this.ctx.fx.pause?.(on);
+  }
+
+  /** com o tempo parado: o caminho que você anda (um ponto a cada ~25 cm, e se estava pisando em algo) */
+  trackFrozen() {
+    const { player, portals } = this.ctx;
+    const path = (this.frozenPath ??= []);
+    const last = path[path.length - 1];
+    if (last && last.p.distanceTo(player.pos) < 0.25 && last.grounded === !!player.grounded) return;
+    if (path.length > 4000) return; // (andando muito tempo parado: o começo já basta)
+    path.push({
+      p: player.pos.clone(),
+      up: player.upSign,
+      grounded: !!player.grounded,
+      // atravessando um portal: a caixa do corpo entra na parede dele, não é obstrução
+      inMouth: !!(portals?.mouths(player.pos, true, 0.5).length || player.cooldown > -0.4),
+    });
   }
 
   /** na pausa os cubos/torretas ficam fixos no lugar (ainda colidem); o que você segura continua solto */
@@ -444,6 +466,7 @@ export class Chronos {
     }
     if (this.paused) {
       this.syncFreeze();
+      this.trackFrozen();
       this.smoothDelta(this.ctx.dtReal?.());
       this.holoUpdate();
       this.syncAll();
@@ -2028,73 +2051,111 @@ export class Chronos {
 
   // ------------------------------------------------------------------ paradoxo
   checkParadox(dt) {
-    const { world, energy, player } = this.ctx;
+    const { player } = this.ctx;
     for (const c of this.clones) {
+      // o caminho que ele andou com o tempo parado: conferido inteiro no instante em que o tempo parou
+      const fz = this.checkFrozenPaths(c);
+      if (fz) {
+        this.rollback(c.cp, fz.why, fz.at);
+        return;
+      }
       const pose = this.clonePose(c);
       if (!pose || pose.jumped || this.tw < c.born + 0.25 || this.tw > c.end - 0.05) continue;
-      const half = player.half;
-      const min = pose.p.clone().sub(half);
-      const max = pose.p.clone().add(half);
       const test = (key, bad, limit, why) => {
         c.bad[key] = bad ? (c.bad[key] ?? 0) + dt : 0;
         return c.bad[key] > limit ? why : null;
       };
+      const h = this.poseProblems(pose, player.half);
       let why = null;
-      // sólido (porta/parede/plataforma) ou cubo no caminho do seu passado
-      let solid = false;
-      for (const b of world.solids) {
-        if (pose.inMouth || b.solid === false) continue;
-        if (overlap(min, max, b.min, b.max, 0.14)) {
-          solid = true;
-          break;
-        }
-      }
-      why ??= test('solid', solid, 0.1, 'algo bloqueou o caminho do seu passado');
-      let cube = false;
-      for (const p of this.props()) {
-        if (p.gone || p.held || this.driven.has(p)) continue;
-        if (overlap(min, max, p.pos.clone().addScaledVector(new V3(1, 1, 1), -0.3), p.pos.clone().addScaledVector(new V3(1, 1, 1), 0.3), 0.08)) cube = true;
-      }
-      why ??= test('cube', cube, 0.1, 'um objeto ficou no caminho do seu passado');
-      // perigos
-      let hz = false;
-      for (const h of [...world.hazards, ...world.incinerators]) if (overlap(min, max, h.min, h.max, 0.05)) hz = true;
-      why ??= test('hazard', hz, 0.05, 'o seu passado caiu num perigo');
-      // bola de energia no caminho do clone
-      let ball = false;
-      for (const p of energy.pellets) {
-        const q = p.pos.clone().clamp(min, max);
-        if (q.distanceTo(p.pos) < 0.34) ball = true;
-      }
-      why ??= test('ball', ball, 0.03, 'uma bola de energia atingiu o seu passado');
-      // o chão em que você pisava sumiu
-      if (pose.grounded && pose.up > 0) {
-        const feet = pose.p.clone().add(new V3(0, -half.y + 0.25, 0));
-        // a sola inteira, não só o centro: na beirada (de uma ponte de 2 m, por exemplo) o centro
-        // fica para fora e o corpo ainda está apoiado
-        const hx = half.x - 0.05;
-        const hz = half.z - 0.05;
-        const down = new V3(0, -1, 0);
-        const hit =
-          [[0, 0], [hx, hz], [-hx, hz], [hx, -hz], [-hx, -hz]].some(([x, z]) => world.raycast(feet.clone().add(new V3(x, 0, z)), down, 0.75)) ||
-          // (a ponte de luz não para raios — tiros e lasers a atravessam —, mas é chão: conta à parte)
-          world.solids.some((b) => b.bridge && feet.x + hx > b.min.x && feet.x - hx < b.max.x && feet.z + hz > b.min.z && feet.z - hz < b.max.z && b.max.y <= feet.y + 0.05 && b.max.y >= feet.y - 0.75);
-        const under = (q, top) => Math.abs(q.x - pose.p.x) < 0.5 && Math.abs(q.z - pose.p.z) < 0.5 && Math.abs(q.y + top - (pose.p.y - half.y)) < 0.5;
-        // em cima de um cubo — real ou o duplo de um cubo mandado ao passado (enquanto ele existe na história,
-        // o real fica escondido e quem sustenta é o duplo)
-        const onProp =
-          this.props().some((p) => !p.gone && under(p.pos, 0.3)) ||
-          (this.doubles ?? []).some((d) => {
-            const st = this.doubleAt(d, this.tw);
-            return st && under(st.p, d.prop.half?.y ?? 0.3);
-          });
-        why ??= test('floor', !hit && !onProp, 0.35, 'o chão do seu passado sumiu');
-      }
+      why ??= test('solid', h.solid, 0.1, 'algo bloqueou o caminho do seu passado');
+      why ??= test('cube', h.cube, 0.1, 'um objeto ficou no caminho do seu passado');
+      why ??= test('hazard', h.hazard, 0.05, 'o seu passado caiu num perigo');
+      why ??= test('ball', h.ball, 0.03, 'uma bola de energia atingiu o seu passado');
+      why ??= test('floor', h.noFloor, 0.35, 'o chão do seu passado sumiu');
       if (why) {
         this.rollback(c.cp, why, pose.p);
         return;
       }
     }
+  }
+
+  /** o que está errado para o seu passado numa pose (sem tolerância de tempo: quem soma é quem chama) */
+  poseProblems(pose, half) {
+    const { world, energy } = this.ctx;
+    const min = pose.p.clone().sub(half);
+    const max = pose.p.clone().add(half);
+    const out = { solid: false, cube: false, hazard: false, ball: false, noFloor: false };
+    // sólido (porta/parede/plataforma) ou cubo no caminho do seu passado
+    if (!pose.inMouth)
+      for (const b of world.solids) {
+        if (b.solid === false) continue;
+        if (overlap(min, max, b.min, b.max, 0.14)) {
+          out.solid = true;
+          break;
+        }
+      }
+    for (const p of this.props()) {
+      if (p.gone || p.held || this.driven.has(p)) continue;
+      if (overlap(min, max, p.pos.clone().addScaledVector(new V3(1, 1, 1), -0.3), p.pos.clone().addScaledVector(new V3(1, 1, 1), 0.3), 0.08)) out.cube = true;
+    }
+    // perigos
+    for (const h of [...world.hazards, ...world.incinerators]) if (overlap(min, max, h.min, h.max, 0.05)) out.hazard = true;
+    // bola de energia no caminho do clone
+    for (const p of energy.pellets) {
+      const q = p.pos.clone().clamp(min, max);
+      if (q.distanceTo(p.pos) < 0.34) out.ball = true;
+    }
+    // o chão em que você pisava sumiu
+    if (pose.grounded && pose.up > 0) {
+      const feet = pose.p.clone().add(new V3(0, -half.y + 0.25, 0));
+      // a sola inteira, não só o centro: na beirada (de uma ponte de 2 m, por exemplo) o centro
+      // fica para fora e o corpo ainda está apoiado
+      const hx = half.x - 0.05;
+      const hz = half.z - 0.05;
+      const down = new V3(0, -1, 0);
+      const hit =
+        [[0, 0], [hx, hz], [-hx, hz], [hx, -hz], [-hx, -hz]].some(([x, z]) => world.raycast(feet.clone().add(new V3(x, 0, z)), down, 0.75)) ||
+        // (a ponte de luz não para raios — tiros e lasers a atravessam —, mas é chão: conta à parte)
+        world.solids.some((b) => b.bridge && feet.x + hx > b.min.x && feet.x - hx < b.max.x && feet.z + hz > b.min.z && feet.z - hz < b.max.z && b.max.y <= feet.y + 0.05 && b.max.y >= feet.y - 0.75);
+      const under = (q, top) => Math.abs(q.x - pose.p.x) < 0.5 && Math.abs(q.z - pose.p.z) < 0.5 && Math.abs(q.y + top - (pose.p.y - half.y)) < 0.5;
+      // em cima de um cubo — real ou o duplo de um cubo mandado ao passado (enquanto ele existe na história,
+      // o real fica escondido e quem sustenta é o duplo)
+      const onProp =
+        this.props().some((p) => !p.gone && under(p.pos, 0.3)) ||
+        (this.doubles ?? []).some((d) => {
+          const st = this.doubleAt(d, this.tw);
+          return st && under(st.p, d.prop.half?.y ?? 0.3);
+        });
+      out.noFloor = !hit && !onProp;
+    }
+    return out;
+  }
+
+  /**
+   * Tempo parado: você anda sem o relógio andar, então na história o seu passado "pula" do lugar
+   * onde o tempo parou para onde ele voltou a andar. O caminho entre os dois foi gravado
+   * (`fz` no quadro do pulo) e, quando o clone chega nesse instante, é conferido inteiro contra o
+   * mundo de agora — a ponte que você desligou no passado, uma porta que fechou… Devolve { why, at } ou null.
+   */
+  checkFrozenPaths(c) {
+    if (c.fzLast == null || this.tw < c.fzLast - 1e-6) c.fzLast = Math.min(c.fzLast ?? -Infinity, this.tw); // (voltou no tempo: confere de novo)
+    const half = this.ctx.player.half;
+    for (const s of c.script) {
+      if (!s.fz || s.t <= c.fzLast + 1e-6 || s.t > this.tw + 1e-6) continue;
+      c.fzLast = s.t;
+      let gaps = 0;
+      for (const q of s.fz) {
+        const h = this.poseProblems(q, half);
+        const where = q.p.clone();
+        if (h.solid) return { why: 'algo bloqueou o caminho do seu passado (com o tempo parado)', at: where };
+        if (h.cube) return { why: 'um objeto ficou no caminho do seu passado (com o tempo parado)', at: where };
+        if (h.hazard) return { why: 'o seu passado caiu num perigo (com o tempo parado)', at: where };
+        // chão: dois pontos seguidos sem nada embaixo (um só pode ser a borda de um degrau)
+        gaps = h.noFloor ? gaps + 1 : 0;
+        if (gaps >= 2) return { why: 'o chão do seu passado sumiu (com o tempo parado)', at: where };
+      }
+    }
+    return null;
   }
 
   /** o loop colapsa: tudo volta ao instante do salto */

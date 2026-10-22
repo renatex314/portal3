@@ -3,6 +3,10 @@
 
 export const EN = new Map([
   // botões de apertar, ponte de luz e música da sala
+  ["algo bloqueou o caminho do seu passado (com o tempo parado)", "something blocked your past self's path (while time was stopped)"],
+  ["um objeto ficou no caminho do seu passado (com o tempo parado)", "an object got in your past self's way (while time was stopped)"],
+  ["o seu passado caiu num perigo (com o tempo parado)", "your past self fell into a hazard (while time was stopped)"],
+  ["o chão do seu passado sumiu (com o tempo parado)", "your past self's floor vanished (while time was stopped)"],
   ["Verificando a linha do tempo…", "Checking the timeline…"],
   ["o seu passado ainda está agindo: o resto da história roda adiantado antes de sair", "your past self is still acting: the rest of the story runs fast-forward before you leave"],
   ["E — apertar o botão", "E — press the button"],
