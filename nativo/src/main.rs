@@ -26,6 +26,15 @@ fn crash_report() {
 
 fn main() {
     crash_report();
+    // aberto de dentro do .zip (sem extrair) ou longe da pasta "assets": avisa em vez de quebrar
+    if !portal3::mats::asset_dir().join("levels/levels.json").exists() {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Laboratório Antípoda")
+            .set_description("Não encontrei a pasta \"assets\" do jogo.\n\nExtraia o .zip inteiro para uma pasta (botão direito → \"Extrair tudo...\") e abra o portal3.exe de lá, sem tirar ele de perto da pasta \"assets\".")
+            .show();
+        return;
+    }
     App::new()
         .add_plugins(
             DefaultPlugins
