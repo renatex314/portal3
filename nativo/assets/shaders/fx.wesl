@@ -488,9 +488,13 @@ fn shade(in: Out, front: bool) -> vec4<f32> {
         let streak = smoothstep(0.52, 0.85, wisp) * exp(-dd * 4.5);
         var a = (glow * 0.6 + streak * 0.9) * smoothstep(-0.06, 0.03, d);
         a *= 1.0 - smoothstep(GLOW - 0.3, GLOW, length(p));
+        // clarão da abertura: na versão web o bloom largo espalha esse pico pela parede toda;
+        // aqui o próprio halo se abre junto (mais largo e mais forte enquanto o clarão dura)
+        let flash = fx.p0.y;
+        a += flash * exp(-dd * 0.7) * 0.85 * smoothstep(-0.06, 0.03, d) * (1.0 - smoothstep(GLOW - 0.3, GLOW, length(p)));
         a *= min(1.0, fx.p0.x * 1.5);
         let uc = fx.color.rgb;
-        let col = uc * uc * (2.2 + 2.4 * streak + fx.p0.y * 3.0) + uc * streak * 0.6;
+        let col = uc * uc * (2.2 + 2.4 * streak + flash * 6.0) + uc * streak * 0.6 + vec3<f32>(flash * 1.6);
         return vec4<f32>(col, min(1.0, a));
     }
 @if(VERTEX_COLORS) {

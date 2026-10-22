@@ -629,19 +629,8 @@ pub fn menu_system(ecs: &mut Ecs) {
     });
     // desfoque por trás da pausa e do fim de câmara (o backdrop-filter: blur da versão web)
     let blur = matches!(want, Shown::Pause | Shown::Done | Shown::Final);
-    {
-        use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
-        let mut q = ecs.query_filtered::<(Entity, Has<DepthOfField>), With<crate::MainCam>>();
-        if let Ok((cam, has)) = q.single(ecs) {
-            if blur && !has {
-                ecs.entity_mut(cam).insert((
-                    bevy::core_pipeline::prepass::DepthPrepass,
-                    DepthOfField { mode: DepthOfFieldMode::Gaussian, focal_distance: 0.01, aperture_f_stops: 0.02, max_circle_of_confusion_diameter: 16.0, ..default() },
-                ));
-            } else if !blur && has {
-                ecs.entity_mut(cam).remove::<DepthOfField>();
-            }
-        }
+    if let Some(mut st) = ecs.get_resource_mut::<crate::post::PostState>() {
+        st.backdrop = blur;
     }
     // o HUD some nos menus
     let playing = want == Shown::None && !ecs.resource::<Game>().editing;

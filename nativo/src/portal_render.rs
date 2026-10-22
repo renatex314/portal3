@@ -54,6 +54,10 @@ pub struct View {
 pub struct PortalViews {
     pub views: Vec<View>,
     pub size: UVec2,
+    /// quadros em que as vistas desenham mesmo sem portal (fase nova: os shaders delas já ficam
+    /// prontos e o primeiro olhar pelo portal não engasga)
+    pub warm: u32,
+    pub level: Option<usize>,
 }
 
 fn new_image(ecs: &mut Ecs, size: UVec2) -> Handle<Image> {
@@ -125,7 +129,8 @@ fn spawn_view(ecs: &mut Ecs, i: usize, size: UVec2, color: Vec3) -> View {
         DebandDither::Disabled,
         bevy::camera::Exposure { ev100: EV100 },
         Projection::Perspective(PerspectiveProjection { fov: 75f32.to_radians(), near: 0.03, ..default() }),
-        Msaa::Sample4,
+        // (como na versão web: a vista do portal sem MSAA — com 4× ela custava quatro vezes mais)
+        Msaa::Off,
         Transform::default(),
         RenderLayers::from_layers(&[0, own_layer(i), crate::characters::BODY_LAYER, crate::relogio::PRESENT_LAYER]),
         Name::new(format!("câmera do portal {i}")),
@@ -141,7 +146,7 @@ pub fn setup_portal_views(ecs: &mut Ecs) {
     let size = screen_size(ecs);
     let colors: Vec<Vec3> = ecs.resource::<Game>().portals.list.iter().take(2).map(|p| p.color).collect();
     let views = colors.iter().enumerate().map(|(i, c)| spawn_view(ecs, i, size, *c)).collect();
-    ecs.insert_resource(PortalViews { views, size });
+    ecs.insert_resource(PortalViews { views, size, warm: 0, level: None });
 }
 
 /// a abertura com "passar do ponto" (portals.js update)
@@ -202,6 +207,12 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             pv.views.push(v);
         }
         let game = ecs.resource::<Game>();
+        if game.level != pv.level {
+            pv.level = game.level;
+            pv.warm = 4;
+        }
+        let warming = pv.warm > 0;
+        pv.warm = pv.warm.saturating_sub(1);
         let t = game.t;
         let portals: Vec<Portal> = game.portals.list.iter().take(pv.views.len()).cloned().collect();
         let linked: Vec<bool> = (0..portals.len()).map(|i| game.portals.is_linked(i)).collect();
@@ -229,7 +240,8 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             let to = p.center - cam_tr.translation;
             let facing = to.dot(p.normal) < PORTAL_DEPTH; // câmera na frente do portal (ou dentro da caixa)
             let ahead = to.dot(cam_fwd) > -PORTAL_B * 1.5 || to.length() < PORTAL_B * 2.0;
-            let active = shown && linked[i] && facing && ahead;
+            let real = shown && linked[i] && facing && ahead;
+            let active = real || warming;
             let w = 1 - v.write;
             if active {
                 v.write = w;
@@ -270,7 +282,7 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             if !active {
                 continue;
             }
-            let m = transform(p, q);
+            let m = if real { transform(p, q) } else { Mat4::IDENTITY };
             let vt = Transform::from_matrix(m * cam_tr.to_matrix());
             let plane = clip_plane(&vt, q, proj.near);
             e.insert((vt, Projection::Perspective(PerspectiveProjection { near_clip_plane: plane, ..proj.clone() }), RenderTarget::Image(current.into())));

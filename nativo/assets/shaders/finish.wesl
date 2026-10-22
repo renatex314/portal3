@@ -47,6 +47,23 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let r2 = dot(d, d);
     let off = d * r2 * aberr * 8.0 + vec2<f32>(glitch * 0.012, 0.0);
     var c = grade(uv);
+    // pausa / fim de câmara: desfoque gaussiano uniforme (blur(14px) brightness(0.8) da versão web)
+    let back = fx.b.w;
+    if (back > 0.001) {
+        let sigma = 14.0 * size.y / 720.0 * back;
+        var sum = c;
+        var wsum = 1.0;
+        for (var i = 1; i < 64; i++) {
+            let fi = f32(i);
+            let rad = sqrt(fi / 64.0) * sigma * 2.6;
+            let ang = fi * 2.39996;
+            let o = vec2<f32>(cos(ang), sin(ang)) * rad;
+            let w = exp(-(rad * rad) / (2.0 * sigma * sigma));
+            sum += grade(uv + o / size) * w;
+            wsum += w;
+        }
+        return vec4<f32>(to_lin(sum / wsum * mix(1.0, 0.8, back)), 1.0);
+    }
     if (aberr > 1e-5 || glitch > 0.001) {
         c = vec3<f32>(grade(uv + off).r, c.g, grade(uv - off).b);
     }

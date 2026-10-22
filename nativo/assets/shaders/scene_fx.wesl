@@ -15,6 +15,7 @@ struct SceneFx {
     shock2: vec4<f32>,
     lens: vec4<f32>,
     lens2: vec4<f32>,
+    lens3: vec4<f32>,
 };
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -218,7 +219,23 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             let spec = pow(max(dot(rr2, normalize(vec3<f32>(-0.25, 1.0, 0.15))), 0.0), 140.0) + 0.5 * pow(max(dot(rr2, normalize(vec3<f32>(0.3, 1.0, -0.3))), 0.0), 220.0);
             sph += vec3<f32>(1.0) * spec * 2.2 * fade;
             sph += vec3<f32>(0.22, 0.7, 1.0) * pow(fres, 3.0) * 0.45 * fade;
-            col = mix(col, sph, smoothstep(1.0, 0.985, x));
+            // profundidade: o que está na frente da casca esconde a esfera, e perto do contato
+            // com uma superfície ela vai sumindo (o "contato suave" da versão web)
+            var vis = 1.0;
+            if (fx.lens3.w > 0.5) {
+                let ro = fx.cam.xyz;
+                let to_s = wp - ro;
+                let scene_t = length(to_s);
+                let rd = to_s / max(scene_t, 1e-5);
+                let oc = ro - fx.lens3.xyz;
+                let b = dot(oc, rd);
+                let h = b * b - (dot(oc, oc) - rw * rw);
+                if (h >= 0.0) {
+                    let t0 = -b - sqrt(h);
+                    vis = smoothstep(0.0, 0.45, scene_t - t0);
+                }
+            }
+            col = mix(col, sph, smoothstep(1.0, 0.985, x) * vis);
         }
     }
     return vec4<f32>(col, 1.0);

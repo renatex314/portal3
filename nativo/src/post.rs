@@ -51,6 +51,8 @@ pub struct SceneFx {
     pub lens: Vec4,
     /// lente: dentro?
     pub lens2: Vec4,
+    /// centro da esfera do campo no mundo (para a profundidade e o contato suave)
+    pub lens3: Vec4,
 }
 
 impl Default for SceneFx {
@@ -67,6 +69,7 @@ impl Default for SceneFx {
             shock2: Vec4::new(0.03, 1.0, 0.0, 0.0),
             lens: Vec4::ZERO,
             lens2: Vec4::ZERO,
+            lens3: Vec4::ZERO,
         }
     }
 }
@@ -201,6 +204,9 @@ pub struct PostState {
     pub glitch: f32,
     slow_look: f32,
     t: f32,
+    /// desfoque uniforme por trás da pausa e do fim de câmara (o backdrop-filter da versão web)
+    pub backdrop: bool,
+    backdrop_k: f32,
 }
 
 impl PostState {
@@ -263,6 +269,9 @@ fn update_post(
     st.tunnel = (st.tunnel - dt * 1.3).max(0.0);
     let blur_on = game.progress.blur && !game.menu;
     let mut strength = (0.6 + slow * 1.4) * (1.0 + fast * 2.2) + st.tunnel * 3.0;
+    // o rastro é o movimento de um quadro: calibrado em 60 quadros/s (como a versão web numa
+    // tela comum), para não ficar mais curto quando o jogo roda a mais quadros por segundo
+    strength *= ((1.0 / 60.0) / dt.max(1e-4)).clamp(0.5, 4.0);
     if !blur_on {
         strength = 0.0;
     }
@@ -322,6 +331,7 @@ fn update_post(
                 fx.lens = Vec4::new(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, r, fade);
                 // a esfera de verdade: raio no mundo, distância e a escala da projeção
                 fx.lens2 = Vec4::new(0.0, f.r * scale, dist, 0.5 / (pp.fov / 2.0).tan());
+                fx.lens3 = field.center.extend(1.0);
             }
         }
     }
@@ -330,9 +340,10 @@ fn update_post(
     let field_k = f.charge / f.need;
     let dilate = field_k * 0.6;
     st.slow_look += ((if game.slow.on { 1.0 } else { 0.0 }) - st.slow_look) * (dt / 0.3).min(1.0);
+    st.backdrop_k = if st.backdrop { (st.backdrop_k + dt / 0.2).min(1.0) } else { 0.0 };
     let finish = FinishFx {
         a: Vec4::new(st.t, slow * 0.012 + st.warp * st.warp * 0.08 + dilate * 0.005, 0.18 + slow * 0.25 + st.warp * 0.4, 0.035),
-        b: Vec4::new(st.freeze, st.glitch, st.slow_look, 0.0),
+        b: Vec4::new(st.freeze, st.glitch, st.slow_look, st.backdrop_k),
     };
     commands.entity(cam_e).insert(finish);
     let _ = has;

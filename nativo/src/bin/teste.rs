@@ -196,7 +196,16 @@ fn main() {
             let yaw: f32 = arg(&args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.0);
             let pitch: f32 = arg(&args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(0.0);
             let n: usize = arg(&args, "--frames").and_then(|s| s.parse().ok()).unwrap_or(30);
+            let open: Option<f32> = arg(&args, "--open").and_then(|s| s.parse().ok());
             for _ in 0..n.max(1) {
+                // portal congelado num ponto da abertura (comparação com a versão web)
+                if let Some(o) = open {
+                    let mut g = h.game();
+                    for p in g.portals.list.iter_mut() {
+                        p.open = (o - 4.5 / 60.0).max(0.0);
+                        p.age = o / 4.5 - 1.0 / 60.0;
+                    }
+                }
                 if let Some(e) = eye {
                     let mut g = h.game();
                     g.player.pos = e - Vec3::new(0.0, g.player.eye_off, 0.0);
@@ -205,6 +214,14 @@ fn main() {
                     g.player.pitch = pitch;
                 }
                 h.update();
+            }
+            if args.iter().any(|a| a == "--probe") {
+                let g = h.world().resource::<Game>();
+                let o = g.player.eye();
+                let d = Quat::from_euler(EulerRot::YXZ, g.player.yaw, g.player.pitch, 0.0) * Vec3::NEG_Z;
+                if let Some(hit) = g.world.raycast(o, d, 100.0) {
+                    println!("alvo {:.3},{:.3},{:.3} normal {:.3},{:.3},{:.3}", hit.point.x, hit.point.y, hit.point.z, hit.normal.x, hit.normal.y, hit.normal.z);
+                }
             }
             let out = arg(&args, "--out").unwrap_or("shot.png");
             h.shot(out);
