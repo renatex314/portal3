@@ -80,7 +80,7 @@ impl Game {
         self.load(ecs, i);
         self.running = false;
         // (o jogo não anda no editor: os modelos dos objetos vão já para o lugar deles)
-        self.props.sync(ecs, &self.world.phys);
+        self.props.sync(ecs, &self.world.phys, &self.portals);
         self.editor_apply_ceil(ecs);
     }
 

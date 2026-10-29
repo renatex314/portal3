@@ -1230,11 +1230,12 @@ impl GameWorld {
     // ------------------------------------------------------------------ botões
     /// botão de piso; `hold` > 0: depois de solto o sinal continua ligado por `hold` s
     pub fn button(&mut self, ecs: &mut Ecs, x: f32, y: f32, z: f32, opens: Option<String>, hold: f32) -> usize {
-        let (g, named) = glb::spawn_model(ecs, "floor_button");
+        let (g, named, mats) = glb::spawn_model_full(ecs, "floor_button");
         ecs.entity_mut(g).insert((Transform::from_xyz(x, y, z), ChildOf(self.root())));
         let plate = named.get("plate").copied();
         let plate_mat = plate.and_then(|p| glb::unique_material(ecs, p));
-        let lights_mat = named.get("lights").copied().and_then(|p| glb::unique_material(ecs, p));
+        // (o anel de luzes é um material com nome no modelo, não uma peça)
+        let lights_mat = named.get("lights").copied().and_then(|p| glb::unique_material(ecs, p)).or_else(|| mats.get("lights").cloned());
         let spin = named.get("spin").copied();
         self.buttons.push(FloorButton { pos: Vec3::new(x, y, z), opens, pressed: false, hold, count: 0.0, group: g, plate, plate_mat, lights_mat, spin, v: 0.0, k: 0.0, c: 0.0 });
         self.buttons.len() - 1

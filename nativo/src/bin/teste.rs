@@ -17,6 +17,10 @@ use portal3::input::{Controls, Key};
 use portal3::{game::{Game, GameEvent}, HeadlessTarget, MainCam};
 use std::time::Duration;
 
+thread_local! {
+    static INVARIANTS: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
 pub struct Harness {
     apps: SubApps,
     pub target: Handle<Image>,
@@ -59,6 +63,15 @@ impl Harness {
     pub fn update(&mut self) {
         self.apps.update();
         let _ = self.apps.main.world().resource::<RenderDevice>().wgpu_device().poll(PollType::Wait { submission_index: None, timeout: None });
+        // as regras da linha do tempo, a cada quadro de todo cenário (cada uma avisada uma vez)
+        if let Some(g) = self.apps.main.world().get_resource::<Game>() {
+            for v in g.ch_invariants() {
+                let key: String = v.chars().filter(|c| !c.is_ascii_digit() && *c != '.').collect();
+                if INVARIANTS.with(|s| s.borrow_mut().insert(key)) {
+                    println!("FALHA invariante: {v}");
+                }
+            }
+        }
     }
 
     pub fn frames(&mut self, n: usize) {
@@ -173,10 +186,263 @@ fn v3(s: &str) -> Vec3 {
     Vec3::new(v[0], v[1], v[2])
 }
 
+/// portal pelo raio (como o tiro), com Δ no vermelho temporal
+fn place_portal(h: &mut Harness, which: usize, origin: Vec3, dir: Vec3, delta: f32) -> bool {
+    h.world().resource_scope(|_, mut g: Mut<Game>| {
+        let g = &mut *g;
+        let ok = g.portals.try_place(&g.world, which, origin, dir, false).ok;
+        if delta > 0.0 {
+            g.portals.list[which].delta = delta;
+            g.portals.list[which].placed_tw = g.relogio.as_ref().map(|c| c.tw);
+        }
+        ok
+    })
+}
+
+/// salta pelo ciano (o jogador vai para a boca dele) e fica num canto longe das bolas
+fn jump_blue(h: &mut Harness, rest: Vec3) -> bool {
+    h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+        let g = &mut *g;
+        g.player.pos = g.portals.list[0].center + g.portals.list[0].normal * 0.5 - Vec3::Y * 0.15;
+        let ok = g.ch_jump(ecs, 0);
+        g.player.pos = rest;
+        ok
+    })
+}
+
+fn tw(h: &mut Harness) -> f32 {
+    h.game().relogio.as_ref().map(|c| c.tw).unwrap_or(0.0)
+}
+
+/// conta os paradoxos (e mostra o motivo) nos eventos do quadro
+fn paradoxes(h: &mut Harness) -> u32 {
+    let t = tw(h);
+    let mut n = 0;
+    for e in std::mem::take(&mut h.game().events) {
+        if let GameEvent::Paradox(why, _) = e {
+            println!("  tw {t:.2} paradoxo: {why}");
+            n += 1;
+        }
+    }
+    n
+}
+
+/// fase 604: bola na sala 2 vai ao passado pelo ciano (parede leste) e sai do vermelho Δ s antes na
+/// sala 1; depois de mandar, salta para antes disso. Devolve (instante e lugar da entrada no ciano)
+fn ball_loop_then_jump(h: &mut Harness, delta: f32) -> Option<(f32, Vec3)> {
+    h.frames(30);
+    h.game().player.pos = Vec3::new(8.0, 0.92, 12.0);
+    h.frames(60 * 12);
+    let ok = place_portal(h, 0, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 0.0) && place_portal(h, 1, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, delta);
+    check(ok, "portais (ciano onde a bola bate, vermelho temporal na sala 1)", &mut 0);
+    let mut sent = None;
+    for _ in 0..60 * 12 {
+        h.update();
+        paradoxes(h);
+        let g = h.game();
+        if let Some(c) = g.ch_linha().and_then(|l| l.compromissos.first()) {
+            sent = Some((c.t, c.onde));
+            break;
+        }
+    }
+    let (t1, at) = sent?;
+    h.frames(60);
+    if !jump_blue(h, Vec3::new(0.0, 0.92, 12.0)) {
+        return None;
+    }
+    println!("bola mandada em {t1:.2}; chegada do salto {:.2}", tw(h));
+    Some((t1, at))
+}
+
+/// depois do salto (o mundo refeito no quadro seguinte), tira do mundo as bolas da história (a que foi ao
+/// passado inclusive) e desliga os lançadores; ficam só as mais velhas (os voos no passado)
+fn remove_young_balls(h: &mut Harness) {
+    h.frames(2);
+    h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+        let g = &mut *g;
+        let elder: Vec<u64> = g.ch_linha().map(|l| l.voos.iter().map(|v| v.uid).collect()).unwrap_or_default();
+        let mut i = g.energy.pellets.len();
+        while i > 0 {
+            i -= 1;
+            if !elder.contains(&g.energy.pellets[i].uid) {
+                g.energy.kill_pub(ecs, &mut g.world, i);
+            }
+        }
+        for l in &mut g.world.launchers {
+            l.done = true;
+            l.pellet = None;
+        }
+    });
+}
 fn main() {
+    // modo de teste desde a primeira linha: os níveis, o progresso e os diagnósticos vão para arquivos
+    // próprios, nunca os de quem joga (o cenário do editor apagava os níveis de verdade antes do harness)
+    unsafe { std::env::set_var("PORTAL3_MUTE", "1") };
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("shot");
     match cmd {
+        // desempenho: tempo de carga da fase e milissegundos por quadro (sem janela; a GPU é a daqui)
+        "perf" => {
+            let level: i64 = arg(&args, "--level").and_then(|s| s.parse().ok()).unwrap_or(1);
+            let t0 = std::time::Instant::now();
+            let (rw, rh) = std::env::var("PORTAL3_RES").ok().and_then(|v| v.split_once('x').map(|(a, b)| (a.parse().unwrap_or(1280), b.parse().unwrap_or(720)))).unwrap_or((1280, 720));
+            let mut h = Harness::new(rw, rh, Some(level));
+            h.update();
+            println!("abertura + 1º quadro: {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+            let mut worst = 0.0f64;
+            let mut total = 0.0f64;
+            let mut all: Vec<f64> = vec![];
+            let t1 = std::time::Instant::now();
+            if let Some(ps) = arg(&args, "--portals") {
+                for item in ps.split(';').filter(|s| !s.is_empty()) {
+                    let (w, v) = item.split_once(':').unwrap();
+                    let v: Vec<f32> = v.split(',').map(|x| x.parse().unwrap()).collect();
+                    let which = if w == "b" { 0 } else { 1 };
+                    let mut g = h.game();
+                    let g = &mut *g;
+                    g.portals.place_fixed(&g.world, which, Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5]), Vec3::Y);
+                }
+            }
+            let look_yaw: Option<f32> = arg(&args, "--yaw").and_then(|s| s.parse().ok());
+            let look_pitch: Option<f32> = arg(&args, "--pitch").and_then(|s| s.parse().ok());
+            let look_eye = arg(&args, "--eye").map(v3);
+            for i in 0..std::env::var("PORTAL3_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(240) {
+                if let Some(p) = look_pitch {
+                    h.game().player.pitch = p;
+                }
+                if let Some(y) = look_yaw {
+                    h.game().player.yaw = y;
+                }
+                if args.iter().any(|a| a == "--sweep") {
+                    // gira devagar de um lado ao outro: os portais entram e saem da vista
+                    h.game().player.yaw = (i as f32 * 0.02).sin() * 2.2;
+                }
+                if let Some(e) = look_eye {
+                    let mut g = h.game();
+                    g.player.pos = e - Vec3::new(0.0, g.player.eye_off, 0.0);
+                    g.player.vel = Vec3::ZERO;
+                }
+                let t = std::time::Instant::now();
+                h.update();
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                if i < 6 {
+                    println!("  quadro {i}: {ms:.0} ms");
+                }
+                if i >= 30 {
+                    worst = worst.max(ms);
+                    total += ms;
+                    all.push(ms);
+                }
+            }
+            all.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let med = all.get(all.len() / 2).copied().unwrap_or(0.0);
+            let spikes = all.iter().filter(|&&m| m > med * 2.0 + 2.0).count();
+            println!("médio {:.1} ms · mediana {:.1} · pior {:.0} ms · picos (>2× a mediana) {} de {} · total {:.1} s", total / all.len().max(1) as f64, med, worst, spikes, all.len(), t1.elapsed().as_secs_f64());
+            std::process::exit(0);
+        }
+        // entrar numa fase vindo do menu: o que cada quadro custa logo depois do clique
+        // atravessar portais numa fase (--level): abre o ciano e o vermelho pelo raio a partir da partida
+        // (em volta, na altura do olho) e passa por eles várias vezes, medindo os quadros perto da travessia
+        "perf-travessia" => {
+            let level: i64 = arg(&args, "--level").and_then(|s| s.parse().ok()).unwrap_or(7);
+            let mut h = Harness::new(1280, 720, Some(level));
+            h.frames(60 * 2);
+            // procura duas paredes que aceitem portal, girando em volta da partida
+            let (eye, ok) = h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                let eye = g.player.eye();
+                let mut got = [false, false];
+                for k in 0..24 {
+                    let a = k as f32 / 24.0 * std::f32::consts::TAU;
+                    let dir = Vec3::new(a.sin(), -0.05, a.cos());
+                    let which = if got[0] { 1 } else { 0 };
+                    if got[which] {
+                        break;
+                    }
+                    if let Some(hit) = g.world.raycast(eye, dir, 60.0) {
+                        if hit.dist > 4.0 && g.portals.try_place(&g.world, which, eye, dir, false).ok {
+                            if which == 1 && g.portals.list[1].center.distance(g.portals.list[0].center) < 6.0 {
+                                g.portals.list[1].remove();
+                                continue;
+                            }
+                            got[which] = true;
+                        }
+                    }
+                }
+                (eye, got[0] && got[1])
+            });
+            let (cb, co) = {
+                let g = h.game();
+                (g.portals.list[0].center, g.portals.list[1].center)
+            };
+            println!("portais: {ok} · ciano {cb:.1} vermelho {co:.1}");
+            if !ok {
+                std::process::exit(1);
+            }
+            let _ = eye;
+            let mut all = vec![];
+            for round in 0..6 {
+                // na frente do ciano (ou do vermelho, em rodadas alternadas), correndo para ele
+                let k = round % 2;
+                {
+                    let mut g = h.game();
+                    let p = &g.portals.list[k];
+                    let (c, n) = (p.center, p.normal);
+                    let start = c + n * 4.0 - Vec3::Y * 0.2;
+                    g.player.pos = start;
+                    g.player.vel = -n * 12.0;
+                    // ENCARAR: já olhando para o portal (a vista dele é desenhada antes de chegar)
+                    if std::env::var("ENCARAR").is_ok() {
+                        g.player.yaw = (n.x).atan2(n.z);
+                        g.player.pitch = 0.0;
+                    }
+                }
+                let mut times = vec![];
+                let mut tp_at = None;
+                for f in 0..90usize {
+                    let before = h.game().player.pos;
+                    let t = std::time::Instant::now();
+                    h.update();
+                    let ms = t.elapsed().as_secs_f64() * 1000.0;
+                    times.push(ms);
+                    if ms > 40.0 {
+                        println!("    quadro {f}: {ms:.0} ms");
+                    }
+                    if tp_at.is_none() && h.game().player.pos.distance(before) > 2.0 {
+                        tp_at = Some(f);
+                    }
+                }
+                let around: Vec<f64> = match tp_at {
+                    Some(f) => times[f.saturating_sub(3)..(f + 10).min(times.len())].to_vec(),
+                    None => vec![],
+                };
+                let mut sorted = times.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let med = sorted[sorted.len() / 2];
+                let peak = around.iter().cloned().fold(0.0, f64::max);
+                println!("  rodada {round}: travessia no quadro {tp_at:?} · mediana {med:.1} ms · pior perto da travessia {peak:.1} ms · quadros {:?}", around.iter().map(|x| x.round() as i64).collect::<Vec<_>>());
+                all.push((med, peak));
+            }
+            std::process::exit(0);
+        }
+        "perf-entrar" => {
+            let level: usize = arg(&args, "--level").and_then(|s| s.parse().ok()).unwrap_or(1);
+            let t0 = std::time::Instant::now();
+            let mut h = Harness::new(1280, 720, None);
+            for i in 0..8 {
+                let t = std::time::Instant::now();
+                h.update();
+                println!("  menu, quadro {i}: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+            }
+            println!("abertura até o menu: {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+            h.game().start_level(level);
+            for i in 0..12 {
+                let t = std::time::Instant::now();
+                h.update();
+                println!("  fase {level}, quadro {i}: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+            }
+            std::process::exit(0);
+        }
         "shot" => {
             let level: i64 = arg(&args, "--level").and_then(|s| s.parse().ok()).unwrap_or(1);
             let mut h = Harness::new(1280, 720, Some(level));
@@ -191,6 +457,12 @@ fn main() {
                     let g = &mut *g;
                     g.portals.place_fixed(&g.world, which, Vec3::new(v[0], v[1], v[2]), Vec3::new(v[3], v[4], v[5]), Vec3::Y);
                 }
+            }
+            if args.iter().any(|a| a == "--slow") {
+                h.game().toggle_slow(Some(true));
+            }
+            if args.iter().any(|a| a == "--stop") {
+                h.tap(Key::StopTime);
             }
             let eye = arg(&args, "--eye").map(v3);
             let yaw: f32 = arg(&args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.0);
@@ -767,11 +1039,24 @@ fn main() {
             check(jumped && clones == 1, "entrar no ciano salta para o passado e deixa um clone", &mut fails);
             check(tw1 < tw0, "o mundo voltou no tempo", &mut fails);
             check(pos.distance(Vec3::new(-5.5, 0.92, -15.0)) < 3.0, "você sai no vermelho, perto da porta", &mut fails);
-            h.frames(30);
+            // o vermelho que a sua versão do futuro abriu aparece no passado como vermelho de estática
+            h.update();
+            let st = {
+                let g = h.game();
+                g.portals.statics.iter().find(|p| p.placed).map(|p| p.center)
+            };
+            println!("vermelho de estática: {st:?}");
+            check(st.is_some_and(|c| c.distance(Vec3::new(-5.5, 1.6, -15.9)) < 1.5), "no passado aparece o vermelho de estática onde ele foi aberto", &mut fails);
+            {
+                h.aim(Vec3::new(-5.5, 1.6, -15.9));
+                h.shot("relogio-estatica.png");
+            }
+            // (sem o "rebobinar", o mundo anda desde a chegada: o tempo até o clone sair do botão é curto)
+            h.frames(10);
             check(!h.game().relogio.as_ref().unwrap().paused, "o tempo volta a andar", &mut fails);
             let feet = h.game().relogio.as_ref().unwrap().feet();
             println!("pés dos clones {feet:?}");
-            h.frames(30);
+            h.frames(5);
             let held = h.game().world.buttons[0].pressed;
             let door = h.game().world.doors[0].open;
             println!("botão {held} · porta {door:.2}");
@@ -977,6 +1262,760 @@ fn main() {
             check(hits > 0 && min_h < 100.0, "a torreta do passado vê você pelo vermelho e as balas saem do ciano", &mut fails);
             std::process::exit(if fails > 0 { 1 } else { 0 });
         }
+        // o vermelho de estática (o temporal que a sua versão passada ainda vai abrir): voltando para
+        // antes dele (dois laços), a bola que bate ali entra e sai pelo ciano Δ s depois, como da primeira vez
+        "relogio-bola-volta" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.game().player.pos = Vec3::new(8.0, 0.92, 12.0);
+            h.frames(60 * 12);
+            let place = |h: &mut Harness, which: usize, origin: Vec3, dir: Vec3, delta: f32| -> bool {
+                h.world().resource_scope(|_, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    let ok = g.portals.try_place(&g.world, which, origin, dir, false).ok;
+                    if delta > 0.0 {
+                        g.portals.list[which].delta = delta;
+                        g.portals.list[which].placed_tw = g.relogio.as_ref().map(|c| c.tw);
+                    }
+                    ok
+                })
+            };
+            let jump = |h: &mut Harness| -> bool {
+                h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    g.player.pos = g.portals.list[0].center + g.portals.list[0].normal * 0.5 - Vec3::Y * 0.15;
+                    let ok = g.ch_jump(ecs, 0);
+                    g.player.pos = Vec3::new(0.0, 0.92, 12.0);
+                    ok
+                })
+            };
+            let tw = |h: &mut Harness| h.game().relogio.as_ref().unwrap().tw;
+            // 1º laço: vermelho Δ 8 s na parede leste da sala 2 (onde a bola bate), ciano na sala 1
+            let a = place(&mut h, 1, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 8.0);
+            let b = place(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0);
+            check(a && b, "portais do 1º laço", &mut fails);
+            let t_open = tw(&mut h);
+            h.frames(60 * 2);
+            check(jump(&mut h), "1º salto (8 s)", &mut fails);
+            // 2º laço: um par com Δ 4 s leva para antes de o vermelho do 1º laço existir
+            h.frames(10);
+            let b = place(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0);
+            let a = place(&mut h, 1, Vec3::new(-8.0, 1.3, 1.5), Vec3::NEG_X, 4.0);
+            check(a && b, "portais do 2º laço", &mut fails);
+            check(jump(&mut h), "2º salto (4 s)", &mut fails);
+            let arrive = tw(&mut h);
+            println!("vermelho do 1º laço aberto em {t_open:.2} (estática a partir de {:.2}); chegada do 2º salto {arrive:.2}", t_open - 8.0);
+            let near_o = |p: Vec3| p.x > 10.5 && (p.z + 12.0).abs() < 1.0 && (p.y - 1.2).abs() < 1.2;
+            let (mut bounces, mut pops, mut out) = (0, 0, 0);
+            let mut seen_static = false;
+            h.game().events.clear();
+            for k in 0..60 * 12 {
+                h.update();
+                let t = tw(&mut h);
+                let stat = h.game().portals.statics.iter().any(|s| s.placed && s.delta > 0.0 && near_o(s.center));
+                seen_static |= stat;
+                for e in std::mem::take(&mut h.game().events) {
+                    match e {
+                        GameEvent::Energy(portal3::energy::EnergyEvent::Bounce(p)) if near_o(p) => {
+                            if stat {
+                                bounces += 1;
+                            }
+                            println!("  {k} tw {t:.2} quicou no vermelho em {p:.2} (estática {stat})");
+                        }
+                        GameEvent::Energy(portal3::energy::EnergyEvent::Pop(p)) if near_o(p) => {
+                            pops += 1;
+                            println!("  {k} tw {t:.2} entrou no vermelho em {p:.2} (estática {stat})");
+                        }
+                        GameEvent::Energy(portal3::energy::EnergyEvent::Launch(p)) if p.z > -5.5 => {
+                            out += 1;
+                            println!("  {k} tw {t:.2} saiu pelo ciano em {p:.2}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            check(seen_static, "o vermelho de estática aparece no passado", &mut fails);
+            check(bounces == 0, "com a estática lá, a bola não quica na parede", &mut fails);
+            check(pops > 0, "ela entra no vermelho de estática", &mut fails);
+            check(out > 0, "e sai pelo ciano Δ s depois", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // a bola vai ao passado pelo ciano; voltando no tempo, ela entra no ciano de novo (laço fechado):
+        // nada de "a esfera não chegou ao ciano"
+        // outra bola cumpre o compromisso: voltando no tempo, a bola que foi ao passado não vem, mas
+        // outra entra no mesmo ciano na mesma hora — as bolas são iguais, o laço fecha com ela
+        "linha-outra-bola" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            let Some((t1, at)) = ball_loop_then_jump(&mut h, 4.0) else {
+                check(false, "a bola vai ao passado e o salto acontece", &mut fails);
+                std::process::exit(1);
+            };
+            // a bola daquela vez não existe mais (nem os lançadores)
+            remove_young_balls(&mut h);
+            let mut n = 0;
+            let mut injected = false;
+            while tw(&mut h) < t1 + 3.0 {
+                h.update();
+                n += paradoxes(&mut h);
+                if !injected && tw(&mut h) >= t1 - 0.3 {
+                    injected = true;
+                    h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                        let g = &mut *g;
+                        let blue = (0..g.portals.list.len()).find(|&i| g.portals.list[i].placed && g.portals.list[i].delta == 0.0 && g.portals.list[i].center.distance(at) < 2.0).unwrap();
+                        let ev = portal3::energy::EnergyEvent::ToPast { blue, pos: at + Vec3::Y * 0.3, vel: Vec3::X * 6.0, life: 20.0, from: None, uid: 4242 };
+                        g.ch_energy_event(ecs, &ev);
+                    });
+                }
+            }
+            let g = h.game();
+            let l = g.ch_linha().unwrap();
+            println!("compromisso {:?}; voos {}", l.compromissos[0].estado, l.voos.len());
+            check(n == 0, "sem paradoxo", &mut fails);
+            check(matches!(l.compromissos[0].estado, portal3::relogio::linha::Estado::Cumprido(_)), "a outra bola cumpre o compromisso", &mut fails);
+            check(l.voos.len() == 1 && l.voos[0].ativo, "ela não vai ao passado de novo (o voo de antes continua)", &mut fails);
+            drop(g);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // compromisso quebrado sem dependentes: a bola não volta a entrar no ciano e nada dependia do voo
+        // dela no passado — ele some da história, sem paradoxo
+        "linha-apagar" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            let Some((t1, _)) = ball_loop_then_jump(&mut h, 4.0) else {
+                check(false, "a bola vai ao passado e o salto acontece", &mut fails);
+                std::process::exit(1);
+            };
+            remove_young_balls(&mut h);
+            let mut n = 0;
+            let mut elder_seen = false;
+            while tw(&mut h) < t1 + 2.5 {
+                h.update();
+                n += paradoxes(&mut h);
+                let g = h.game();
+                let uid = g.ch_linha().unwrap().voos[0].uid;
+                elder_seen |= g.energy.pellets.iter().any(|p| p.uid == uid);
+            }
+            let g = h.game();
+            let l = g.ch_linha().unwrap();
+            let uid = l.voos[0].uid;
+            println!("compromisso {:?}; voo ativo {} pegou {:?}", l.compromissos[0].estado, l.voos[0].ativo, l.voos[0].cons.pegou);
+            check(elder_seen, "a bola mais velha voava no passado depois do salto", &mut fails);
+            check(n == 0, "sem paradoxo", &mut fails);
+            check(l.compromissos[0].estado == portal3::relogio::linha::Estado::Quebrado && !l.voos[0].ativo, "o compromisso quebra e o voo some da história", &mut fails);
+            check(!g.energy.pellets.iter().any(|p| p.uid == uid), "a bola mais velha não está mais no mundo", &mut fails);
+            drop(g);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // outro cubo igual faz o papel do que o seu passado usou: você tira o cubo do lugar antes de a sua
+        // versão passada pegá-lo, mas deixa outro igual ali — sem paradoxo
+        "linha-substituto" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            let a_home = Vec3::new(6.0, 0.0, 12.0);
+            let (a, b) = h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(8.0, 0.92, 12.0);
+                let a = g.props.add_cube(ecs, &mut g.world, a_home.x, a_home.y, a_home.z, false, false, 0.0);
+                let b = g.props.add_cube(ecs, &mut g.world, 2.0, 0.0, 9.0, false, false, 0.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                }
+                (a, b)
+            });
+            h.frames(60 * 3);
+            let a_pos = h.game().props.list[a].pos;
+            h.aim(a_pos);
+            h.update();
+            h.tap(Key::Use);
+            check(h.game().held == Some(a), "o jogador pega o cubo A", &mut fails);
+            let t_pick = tw(&mut h);
+            h.frames(60);
+            h.tap(Key::Use);
+            h.frames(60);
+            let delta = (tw(&mut h) - t_pick) + 1.5;
+            let ok = place_portal(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0) && place_portal(&mut h, 1, Vec3::new(-8.0, 1.3, 1.5), Vec3::NEG_X, delta);
+            check(ok, "portais para voltar antes de pegar o cubo", &mut fails);
+            check(jump_blue(&mut h, Vec3::new(4.0, 0.92, 6.0)), "salto", &mut fails);
+            h.frames(3);
+            println!("pegou em {t_pick:.2}; chegada {:.2}", tw(&mut h));
+            // tira o A do lugar (pega e larga longe) e põe o B onde o A estava
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.held = Some(a);
+                g.props.list[a].held = true;
+            });
+            h.frames(3);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.release(false);
+                g.props.list[a].place(&mut g.world.phys, Vec3::new(0.0, 0.31, 3.0), None, None);
+                g.held = Some(b);
+                g.props.list[b].held = true;
+            });
+            h.frames(3);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.release(false);
+                g.props.list[b].place(&mut g.world.phys, a_pos, None, None);
+            });
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            let mut n = 0;
+            while tw(&mut h) < t_pick + 1.5 {
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let g = h.game();
+            let ch = g.relogio.as_ref().unwrap();
+            println!("substitutos {} · voltas desfeitas {} · B em {:.2}", ch.stand_ins, ch.rollbacks - r0, g.props.list[b].pos);
+            check(n == 0 && ch.rollbacks == r0, "sem paradoxo", &mut fails);
+            check(ch.stand_ins >= 1, "o cubo B fez o papel do A", &mut fails);
+            check(g.props.list[b].pos.distance(a_pos) > 0.5, "a sua versão passada pegou o B", &mut fails);
+            drop(g);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // o laser mandado ao passado: voltando no tempo, a versão passada o manda de novo pelo ciano dela
+        // e ele sai do vermelho dela. Se o laser deixa de entrar no ciano (desligado): paradoxo só se o
+        // feixe do passado ligou um receptor sozinho ("ancora"); sem consequência, a emissão some ("apagar")
+        "linha-laser-ancora" | "linha-laser-apagar" => {
+            let mut fails = 0;
+            let ancora = cmd == "linha-laser-ancora";
+            let mut h = Harness::new(640, 360, Some(400));
+            h.frames(10);
+            h.game().ch_start();
+            h.game().player.pos = Vec3::new(0.0, 0.92, 11.0);
+            h.frames(60 * 3);
+            let frame = |h: &mut Harness, which: usize, c: Vec3, n: Vec3, delta: f32| -> bool {
+                let mut g = h.game();
+                let g = &mut *g;
+                let solid = (0..g.world.solids.len()).find(|&i| {
+                    let b = &g.world.solids[i];
+                    let q = c - n * 0.05;
+                    q.cmpgt(b.min).all() && q.cmplt(b.max).all()
+                });
+                g.portals.list[which].set_frame(c, n, Vec3::Y, solid);
+                g.portals.list[which].delta = delta;
+                g.portals.list[which].placed_tw = g.relogio.as_ref().map(|c| c.tw);
+                solid.is_some()
+            };
+            // 1º laço: o laser entra no ciano (parede x = 20) e vai ao passado; ele sai do vermelho Δ 2 s
+            // antes, na parede do fundo: na frente do receptor ("ancora") ou longe dele
+            let back = if ancora { Vec3::new(6.0, 1.2, 14.0) } else { Vec3::new(-6.0, 1.2, 14.0) };
+            let ok = frame(&mut h, 0, Vec3::new(20.0, 1.2, 6.0), Vec3::NEG_X, 0.0) && frame(&mut h, 1, back, Vec3::NEG_Z, 2.0);
+            let t_open = tw(&mut h);
+            h.frames(60 * 3);
+            let j1 = jump_blue(&mut h, Vec3::new(0.0, 0.92, 11.0));
+            // 2º laço: um par com Δ 4 s leva para antes de o feixe sair do vermelho do 1º laço
+            h.frames(5);
+            let ok2 = frame(&mut h, 0, Vec3::new(-2.0, 1.2, 14.0), Vec3::NEG_Z, 0.0) && frame(&mut h, 1, Vec3::new(-10.0, 1.2, 14.0), Vec3::NEG_Z, 4.0);
+            let j2 = jump_blue(&mut h, Vec3::new(0.0, 0.92, 11.0));
+            println!("vermelho do 1º laço em {t_open:.2} (o feixe sai dele de {:.2}); chegada do 2º salto {:.2}", t_open - 2.0, tw(&mut h));
+            check(ok && ok2 && j1 && j2, "dois laços", &mut fails);
+            // o feixe do passado sai do vermelho da versão passada
+            let mut lit = false;
+            while tw(&mut h) < t_open - 2.0 + 1.0 {
+                h.update();
+                paradoxes(&mut h);
+            }
+            {
+                let g = h.game();
+                let l = g.ch_linha().unwrap();
+                lit = lit || l.emissoes.iter().any(|e| !e.liga.is_empty());
+                println!("emissões {} · alguma ligou o receptor: {lit}", l.emissoes.len());
+                check(l.emissoes.len() > 30, "o laser mandado ao passado está na linha do tempo (as emissões)", &mut fails);
+            }
+            check(lit == ancora, if ancora { "o feixe do passado liga o receptor (âncora)" } else { "o feixe do passado não liga nada" }, &mut fails);
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            // o laser deixa de entrar no ciano (desligado antes da hora das entradas)
+            for l in &mut h.game().world.lasers {
+                l.off = true;
+            }
+            let mut n = 0;
+            while tw(&mut h) < t_open + 1.0 && h.game().relogio.as_ref().unwrap().rollbacks == r0 {
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let r1 = h.game().relogio.as_ref().unwrap().rollbacks;
+            println!("paradoxos {n} · voltas desfeitas {}", r1 - r0);
+            if ancora {
+                check(r1 > r0, "sem o laser, o receptor que só ele ligava no passado: paradoxo (o loop se desfaz)", &mut fails);
+            } else {
+                check(n == 0 && r1 == r0, "sem consequência: a emissão some da história, sem paradoxo", &mut fails);
+                let g = h.game();
+                let l = g.ch_linha().unwrap();
+                check(l.compromissos.iter().any(|c| c.estado == portal3::relogio::linha::Estado::Quebrado) && l.emissoes.iter().any(|e| !e.ativo), "compromissos de laser quebrados e emissões apagadas", &mut fails);
+            }
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // um cubo mandado ao passado pelo ciano; voltando para antes, o laço tem de fechar: o mesmo cubo
+        // entra de novo ("mesmo"), outro igual entra no lugar dele ("outro") ou nenhum ("apagar": o duplo
+        // não apertou nada, então some da história, sem paradoxo)
+        "linha-duplo-mesmo" | "linha-duplo-outro" | "linha-duplo-apagar" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            // os dois cubos existem desde o começo da história
+            let (k, other) = h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(8.0, 0.92, 12.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                    l.pellet = None;
+                }
+                let k = g.props.add_cube(ecs, &mut g.world, 6.0, 0.0, -12.0, false, false, 0.0);
+                let o = g.props.add_cube(ecs, &mut g.world, 4.0, 0.0, -9.0, false, false, 0.0);
+                (k, o)
+            });
+            h.frames(60 * 4);
+            let ok = place_portal(&mut h, 0, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 0.0) && place_portal(&mut h, 1, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 3.0);
+            check(ok, "portais (ciano na sala 2, vermelho Δ 3 s na sala 1)", &mut fails);
+            h.frames(60);
+            // joga o cubo no ciano
+            {
+                let mut g = h.game();
+                let g = &mut *g;
+                g.props.list[k].place(&mut g.world.phys, Vec3::new(10.6, 1.0, -12.0), None, Some(Vec3::new(5.0, 0.5, 0.0)));
+            }
+            let mut sent = None;
+            for _ in 0..120 {
+                h.update();
+                if let Some(c) = h.game().ch_linha().and_then(|l| l.compromissos.first().cloned()) {
+                    sent = Some(c);
+                    break;
+                }
+            }
+            let Some(c0) = sent else {
+                check(false, "o cubo vai ao passado", &mut fails);
+                std::process::exit(1);
+            };
+            let end = h.game().ch_linha().unwrap().duplos[0].fim().unwrap().0;
+            println!("cubo mandado em {:.2}; o duplo chega em {end:.2}", c0.t);
+            h.frames(30);
+            check(jump_blue(&mut h, Vec3::new(0.0, 0.92, 12.0)), "salto para antes", &mut fails);
+            h.frames(3);
+            let t_arr = tw(&mut h);
+            println!("chegada {t_arr:.2}");
+            // "mesmo": o cubo segue a gravação (o trilho) e entra de novo no ciano na hora. Nos outros,
+            // você o pega (sai do trilho) e o larga longe; em "outro", joga um cubo igual no ciano na hora
+            if cmd != "linha-duplo-mesmo" {
+                h.world().resource_scope(|_, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    g.held = Some(k);
+                    g.props.list[k].held = true;
+                });
+                h.frames(3);
+                h.world().resource_scope(|_, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    g.release(false);
+                    g.props.list[k].place(&mut g.world.phys, Vec3::new(0.0, 0.31, -9.0), None, None);
+                });
+            }
+            if cmd == "linha-duplo-outro" {
+                // o outro cubo também sai do trilho (você o pega e larga)
+                h.world().resource_scope(|_, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    g.held = Some(other);
+                    g.props.list[other].held = true;
+                });
+                h.frames(3);
+                h.game().release(false);
+            }
+            let mut thrown = cmd != "linha-duplo-outro";
+            let mut n = 0;
+            while tw(&mut h) < c0.t + 2.0 {
+                if !thrown && tw(&mut h) >= c0.t - 0.25 {
+                    thrown = true;
+                    let mut g = h.game();
+                    let g = &mut *g;
+                    g.props.list[other].place(&mut g.world.phys, Vec3::new(10.6, 1.0, -12.0), None, Some(Vec3::new(5.0, 0.5, 0.0)));
+                }
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let g = h.game();
+            let l = g.ch_linha().unwrap();
+            let est = l.compromissos[0].estado;
+            println!("compromisso {est:?} · duplos {} (ativo {}) · cubo {:.2} · outro {:.2}", l.duplos.len(), l.duplos[0].ativo, g.props.list[k].pos, g.props.list[other].pos);
+            check(n == 0, "sem paradoxo", &mut fails);
+            check(l.duplos.len() == 1, "nenhum duplo novo (o laço fecha com o que já existia)", &mut fails);
+            match cmd {
+                "linha-duplo-mesmo" => {
+                    check(matches!(est, portal3::relogio::linha::Estado::Cumprido(_)), "o mesmo cubo cumpre o compromisso", &mut fails);
+                    check(g.props.list[k].pos.distance(end) < 1.0, "e segue de onde o duplo chegou", &mut fails);
+                }
+                "linha-duplo-outro" => {
+                    check(matches!(est, portal3::relogio::linha::Estado::Cumprido(_)), "o outro cubo cumpre o compromisso", &mut fails);
+                    check(g.props.list[other].pos.distance(end) < 1.0, "e é ele que segue de onde o duplo chegou", &mut fails);
+                }
+                _ => {
+                    check(est == portal3::relogio::linha::Estado::Quebrado && !l.duplos[0].ativo, "o compromisso quebra e o duplo some da história", &mut fails);
+                }
+            }
+            drop(g);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // o seu passado pega um cubo com o tempo parado; depois do salto você mexe nele e o deixa no
+        // mesmo lugar: ele está onde o seu passado o encontrou — sem paradoxo
+        "linha-parado" | "linha-parado-longe" => {
+            let mut fails = 0;
+            // "longe": você o deixa a 2 m de onde estava — aí sim é paradoxo
+            let longe = cmd == "linha-parado-longe";
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            let a_home = Vec3::new(6.0, 0.0, 12.0);
+            let a = h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(8.0, 0.92, 12.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                    l.pellet = None;
+                }
+                g.props.add_cube(ecs, &mut g.world, a_home.x, a_home.y, a_home.z, false, false, 0.0)
+            });
+            h.frames(60 * 3);
+            let a_pos = h.game().props.list[a].pos;
+            // tempo parado: pega o cubo, anda e larga em outro lugar
+            h.tap(Key::StopTime);
+            h.aim(a_pos);
+            h.update();
+            h.tap(Key::Use);
+            check(h.game().held == Some(a), "com o tempo parado, o passado pega o cubo", &mut fails);
+            let t_freeze = tw(&mut h);
+            for _ in 0..40 {
+                h.game().player.pos.z -= 0.06;
+                h.update();
+            }
+            h.tap(Key::Use);
+            h.frames(10);
+            let moved = h.game().props.list[a].pos;
+            h.tap(Key::StopTime);
+            h.frames(60 * 2);
+            println!("cubo em {a_pos:.2}, levado (tempo parado em {t_freeze:.2}) para {moved:.2}");
+            check(moved.distance(a_pos) > 1.0, "o cubo foi levado para outro lugar", &mut fails);
+            let delta = tw(&mut h) - t_freeze + 1.5;
+            let ok = place_portal(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0) && place_portal(&mut h, 1, Vec3::new(-8.0, 1.3, 1.5), Vec3::NEG_X, delta);
+            check(ok && jump_blue(&mut h, Vec3::new(4.0, 0.92, 6.0)), "salto para antes", &mut fails);
+            h.frames(3);
+            // você mexe no cubo e o deixa no mesmo lugar
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.held = Some(a);
+                g.props.list[a].held = true;
+            });
+            h.frames(3);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.release(false);
+                let to = if longe { a_pos + Vec3::new(-2.0, 0.0, 0.0) } else { a_pos };
+                g.props.list[a].place(&mut g.world.phys, to, None, None);
+            });
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            let mut n = 0;
+            while tw(&mut h) < t_freeze + 1.5 {
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let g = h.game();
+            let r1 = g.relogio.as_ref().unwrap().rollbacks;
+            println!("paradoxos {n} · voltas desfeitas {} · cubo {:.2}", r1 - r0, g.props.list[a].pos);
+            if longe {
+                check(r1 > r0, "o cubo não está onde o seu passado o encontrou: paradoxo", &mut fails);
+            } else {
+                check(n == 0 && r1 == r0, "o cubo está onde o seu passado o encontrou: sem paradoxo", &mut fails);
+                check(g.props.list[a].pos.distance(moved) < 0.8, "e o seu passado o leva para onde levou", &mut fails);
+            }
+            drop(g);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // com o tempo parado, você entra correndo (muito rápido, VEL m/s, OFF fora do centro) no ciano temporal:
+        // o caminho andado com o tempo parado não pode acusar "algo bloqueou" na boca do portal
+        "linha-parado-rapido" => {
+            let mut fails = 0;
+            let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(2.0, 0.92, -12.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                    l.pellet = None;
+                }
+            });
+            h.frames(60 * 4);
+            h.tap(Key::StopTime);
+            // CHAO: o ciano no chão (você cai nele de cima); senão, na parede
+            let chao = std::env::var("CHAO").is_ok();
+            let blue = if chao { place_portal(&mut h, 0, Vec3::new(2.0, 3.0, -12.0), Vec3::NEG_Y, 0.0) } else { place_portal(&mut h, 0, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 0.0) };
+            let ok = blue && place_portal(&mut h, 1, Vec3::new(8.0, 1.3, -16.5), Vec3::X, 2.0);
+            check(ok, "portais (ciano e vermelho Δ 2 s, com o tempo parado)", &mut fails);
+            let (vel, off) = (f("VEL", 30.0), f("OFF", 0.3));
+            let n0 = h.game().relogio.as_ref().unwrap().clones.len();
+            let mut jumped = false;
+            for _ in 0..120 {
+                {
+                    let mut g = h.game();
+                    if !jumped && chao {
+                        g.player.vel = Vec3::new(0.0, -vel, 0.0);
+                        if g.player.pos.y < 2.0 && g.player.pos.y > 0.5 {
+                            g.player.pos = Vec3::new(2.0 + off, 8.0, -12.0 + off * 0.5);
+                        }
+                    } else if !jumped {
+                        g.player.vel = Vec3::new(vel, 0.0, 0.0);
+                        if g.player.pos.x < 3.0 {
+                            g.player.pos = Vec3::new(3.0, 0.92, -12.0 + off);
+                        }
+                    }
+                }
+                h.update();
+                jumped = h.game().relogio.as_ref().unwrap().clones.len() > n0;
+                if jumped {
+                    break;
+                }
+            }
+            check(jumped, "entrou no ciano correndo com o tempo parado (salto)", &mut fails);
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            let mut n = 0;
+            for _ in 0..60 * 4 {
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let r1 = h.game().relogio.as_ref().unwrap().rollbacks;
+            println!("paradoxos {n} · voltas desfeitas {}", r1 - r0);
+            check(n == 0 && r1 == r0, "sem paradoxo de caminho na boca do portal", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // com o tempo parado você abre um par de portais na parede e passa por ele correndo; depois volta no
+        // tempo para antes disso: a sua versão passada refaz o caminho (pelo par dela) sem "algo bloqueou"
+        "linha-parado-portal" => {
+            let mut fails = 0;
+            let vel = std::env::var("VEL").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(30.0);
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(2.0, 0.92, -12.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                    l.pellet = None;
+                }
+            });
+            h.frames(60 * 4);
+            let t_pause = tw(&mut h);
+            h.tap(Key::StopTime);
+            // o par normal (Δ 0) na parede branca, com o tempo parado
+            let ok = place_portal(&mut h, 0, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 0.0) && place_portal(&mut h, 1, Vec3::new(8.0, 1.3, -16.5), Vec3::X, 0.0);
+            check(ok, "portais na parede com o tempo parado", &mut fails);
+            let mut crossed = false;
+            for _ in 0..90 {
+                {
+                    let mut g = h.game();
+                    if !crossed {
+                        g.player.vel = Vec3::new(vel, 0.0, 0.0);
+                    }
+                }
+                h.update();
+                let p = h.game().player.pos;
+                if !crossed && (p.z + 16.5).abs() < 1.5 {
+                    crossed = true;
+                }
+            }
+            check(crossed, "passou pelo portal correndo com o tempo parado", &mut fails);
+            h.tap(Key::StopTime);
+            h.frames(60 * 2);
+            // volta para antes da pausa
+            let delta = tw(&mut h) - t_pause + 1.0;
+            let ok2 = place_portal(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0) && place_portal(&mut h, 1, Vec3::new(-8.0, 1.3, 1.5), Vec3::NEG_X, delta);
+            check(ok2 && jump_blue(&mut h, Vec3::new(0.0, 0.92, 4.0)), "salto para antes da pausa", &mut fails);
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            let mut n = 0;
+            while tw(&mut h) < t_pause + 2.0 {
+                h.update();
+                n += paradoxes(&mut h);
+            }
+            let r1 = h.game().relogio.as_ref().unwrap().rollbacks;
+            println!("paradoxos {n} · voltas desfeitas {}", r1 - r0);
+            check(n == 0 && r1 == r0, "a sua versão passada refaz o caminho pelo portal sem paradoxo", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // o contrário: com o tempo parado você anda por um caminho; voltando no tempo, uma parede aparece no
+        // meio dele — aí sim "algo bloqueou o caminho do seu passado (com o tempo parado)"
+        "linha-parado-bloqueio" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = Vec3::new(2.0, 0.92, -12.0);
+                for l in &mut g.world.launchers {
+                    l.done = true;
+                    l.pellet = None;
+                }
+            });
+            h.frames(60 * 4);
+            let t_pause = tw(&mut h);
+            h.tap(Key::StopTime);
+            for _ in 0..40 {
+                h.game().player.vel = Vec3::new(5.0, 0.0, 0.0);
+                h.update();
+            }
+            h.tap(Key::StopTime);
+            h.frames(60 * 2);
+            let delta = tw(&mut h) - t_pause + 1.0;
+            let ok = place_portal(&mut h, 0, Vec3::new(-8.0, 1.3, 6.0), Vec3::NEG_X, 0.0) && place_portal(&mut h, 1, Vec3::new(-8.0, 1.3, 1.5), Vec3::NEG_X, delta);
+            check(ok && jump_blue(&mut h, Vec3::new(0.0, 0.92, 4.0)), "salto para antes da pausa", &mut fails);
+            // uma parede no meio do caminho que você andou com o tempo parado
+            h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.world.add_box(ecs, 4.0, 0.0, -14.0, 4.6, 3.0, -10.0, "metal", true, false, true);
+            });
+            let r0 = h.game().relogio.as_ref().unwrap().rollbacks;
+            let mut why = vec![];
+            while tw(&mut h) < t_pause + 2.0 && h.game().relogio.as_ref().unwrap().rollbacks == r0 {
+                h.update();
+                for e in std::mem::take(&mut h.game().events) {
+                    if let GameEvent::Paradox(w, _) = e {
+                        why.push(w);
+                    }
+                }
+            }
+            println!("paradoxos {why:?}");
+            check(why.iter().any(|w| w.contains("bloqueou") && w.contains("tempo parado")), "a parede no caminho andado com o tempo parado: paradoxo", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // o holograma do passado aparece com o tempo parado e some (inteiro, com o seu eu do passado) quando
+        // o tempo volta a andar
+        "holograma" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.game().player.pos = Vec3::new(2.0, 0.92, -12.0);
+            h.frames(60 * 3);
+            for _ in 0..30 {
+                h.game().player.vel = Vec3::new(4.0, 0.0, 0.0);
+                h.update();
+            }
+            h.tap(Key::StopTime);
+            h.frames(10);
+            let vis = |h: &mut Harness| -> (bool, bool) {
+                let ents = h.game().ch_holo_entities();
+                let Some((root, me)) = ents else { return (false, false) };
+                let w = h.world();
+                let on = |e: Entity| w.get::<Visibility>(e).is_some_and(|v| *v != Visibility::Hidden);
+                (on(root), me.is_some_and(on))
+            };
+            let (r1, m1) = vis(&mut h);
+            println!("parado: holograma {r1} · eu do passado {m1}");
+            check(r1 && m1, "com o tempo parado, o holograma e o seu eu do passado aparecem", &mut fails);
+            h.tap(Key::StopTime);
+            h.frames(10);
+            let (r2, m2) = vis(&mut h);
+            println!("andando: holograma {r2} · eu do passado {m2}");
+            check(!r2 && !m2, "com o tempo andando, os dois somem", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        "relogio-bola-laco" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(604));
+            h.frames(30);
+            h.game().player.pos = Vec3::new(8.0, 0.92, 12.0);
+            let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(d);
+            h.frames((60.0 * f("PRE", 12.0)) as usize);
+            let place = |h: &mut Harness, which: usize, origin: Vec3, dir: Vec3, delta: f32| -> bool {
+                h.world().resource_scope(|_, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    let ok = g.portals.try_place(&g.world, which, origin, dir, false).ok;
+                    if delta > 0.0 {
+                        g.portals.list[which].delta = delta;
+                        g.portals.list[which].placed_tw = g.relogio.as_ref().map(|c| c.tw);
+                    }
+                    ok
+                })
+            };
+            let d = f("DELTA", 4.0);
+            // SWAP: vermelho onde a bola bate e ciano na sala 1 (a bola sai do ciano, volta e entra nele)
+            let swap = std::env::var("SWAP").is_ok();
+            let (wa, wb) = if swap { (1, 0) } else { (0, 1) };
+            let b = place(&mut h, wa, Vec3::new(8.0, 1.3, -12.0), Vec3::X, if swap { d } else { 0.0 });
+            let a = place(&mut h, wb, Vec3::new(-8.0, 1.3, f("OZ", 6.0)), Vec3::NEG_X, if swap { 0.0 } else { d });
+            check(a && b, "portais (ciano onde a bola bate, vermelho temporal na sala 1)", &mut fails);
+            let mut paradox = 0;
+            let mut count = |h: &mut Harness, tag: &str| {
+                let tw = h.game().relogio.as_ref().unwrap().tw;
+                for e in std::mem::take(&mut h.game().events) {
+                    if let GameEvent::Paradox(why, _) = e {
+                        println!("  {tag} tw {tw:.2} paradoxo: {why}");
+                        paradox += 1;
+                    }
+                }
+            };
+            // espera a bola ir ao passado (aparece na sala 1) e mais AFTER s; salta logo depois
+            let mut sent_at = None;
+            for _ in 0..(60.0 * f("WAIT", 8.0)) as usize {
+                h.update();
+                count(&mut h, "antes");
+                let tw = h.game().relogio.as_ref().unwrap().tw;
+                if sent_at.is_none() && h.game().energy.pellets.iter().any(|p| p.pos.z > -5.5) {
+                    sent_at = Some(tw);
+                }
+                if sent_at.is_some_and(|t| tw > t + f("AFTER", 1.0)) {
+                    break;
+                }
+            }
+            println!("a bola chegou na sala 1 em {sent_at:?}");
+            let ok = h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.player.pos = g.portals.list[0].center + g.portals.list[0].normal * 0.5 - Vec3::Y * 0.15;
+                let ok = g.ch_jump(ecs, 0);
+                g.player.pos = Vec3::new(0.0, 0.92, 12.0);
+                ok
+            });
+            check(ok, "salto", &mut fails);
+            let mut room1_after = false;
+            for _ in 0..(60.0 * (d + 3.0)) as usize {
+                h.update();
+                count(&mut h, "depois");
+                let tw = h.game().relogio.as_ref().unwrap().tw;
+                if sent_at.is_some_and(|t| tw > t + 0.3 && tw < t + 0.8) && h.game().energy.pellets.iter().any(|p| p.pos.z > -5.5) {
+                    room1_after = true;
+                }
+            }
+            if !swap && sent_at.is_some() {
+                check(room1_after, "voltando, a bola que voava no passado continua lá", &mut fails);
+            }
+            check(paradox == 0, "sem paradoxo falso", &mut fails);
+            // a mesma bola entra no ciano duas vezes seguidas (voltou do passado e entrou de novo):
+            // as duas vão ao passado (a segunda não é a "repetição" da primeira)
+            if !swap {
+                let ok = place(&mut h, 0, Vec3::new(8.0, 1.3, -12.0), Vec3::X, 0.0) && place(&mut h, 1, Vec3::new(-8.0, 1.3, f("OZ", 6.0)), Vec3::NEG_X, d);
+                check(ok, "portais de novo", &mut fails);
+                h.frames(5);
+                let n_room1 = |g: &Game| g.energy.pellets.iter().filter(|p| p.pos.z > -5.5).count();
+                let (n0, n1, n2) = h.world().resource_scope(|ecs, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    g.energy.reset(ecs);
+                    for l in &mut g.world.launchers {
+                        l.done = true;
+                    }
+                    let c = g.portals.list.iter().position(|p| p.placed && p.delta == 0.0 && p.center.x > 10.0);
+                    let Some(c) = c else { return (9, 9, 9) };
+                    let n = g.portals.list[c].normal;
+                    let at = g.portals.list[c].center + n * 0.1;
+                    let ev = portal3::energy::EnergyEvent::ToPast { blue: c, pos: at, vel: -n * 6.0, life: 20.0, from: None, uid: 777 };
+                    let n0 = n_room1(g);
+                    g.ch_energy_event(ecs, &ev);
+                    let n1 = n_room1(g);
+                    g.relogio.as_mut().unwrap().tw += 0.3;
+                    g.ch_energy_event(ecs, &ev);
+                    (n0, n1, n_room1(g))
+                });
+                println!("bolas na sala 1: {n0} → {n1} → {n2}");
+                check(n1 == n0 + 1 && n2 == n1 + 1, "a mesma bola entrando no ciano de novo vai ao passado de novo", &mut fails);
+            }
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
         // fase 601: o campo de dilatação entra na linha do tempo; voltando para antes dele, a sua versão
         // do passado o cria de novo na mesma hora e no mesmo lugar
         "relogio-campo" => {
@@ -1046,6 +2085,284 @@ fn main() {
             }
             println!("reapareceu: {burst:?}");
             check(matches!(burst, Some((t, 1, Some(false))) if (t - t0).abs() < 0.1), "na hora em que foi criado, a sua versão do passado o cria de novo", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // o seu passado pega um cubo que, nesta história, já caiu no vermelho e foi para o futuro: paradoxo
+        "relogio-cubo-paradoxo" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(600));
+            h.frames(30);
+            let k = {
+                let mut k = 0;
+                h.world().resource_scope(|w, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    k = g.props.add_cube(w, &mut g.world, -7.4, 0.4, 5.0, false, false, 0.0);
+                });
+                k
+            };
+            h.frames(60 * 6); // o cubo fica parado na história
+            // pega o cubo e solta no mesmo lugar: o seu passado tem essa ação gravada
+            h.game().player.pos = Vec3::new(-5.6, 0.92, 5.0);
+            h.game().player.vel = Vec3::ZERO;
+            h.frames(4);
+            let cube_pos = h.game().props.list[k].pos;
+            h.aim(cube_pos);
+            h.update();
+            h.tap(Key::Use);
+            h.frames(50);
+            check(h.game().held == Some(k), "o jogador pega o cubo", &mut fails);
+            h.tap(Key::Use); // solta
+            h.frames(100);
+            h.game().player.pos = Vec3::new(0.0, 0.92, 6.0);
+            h.frames(80);
+            // tempo parado: o laranja no passado (de antes de pegar o cubo), mirando o cubo; o ciano no presente
+            h.tap(Key::StopTime);
+            h.game().ch_scrub_by(-100.0);
+            let tw = h.game().relogio.as_ref().unwrap().tw;
+            h.game().ch_scrub_by(tw - 3.0);
+            h.frames(40);
+            h.shoot_at(Key::FireBlue, Vec3::new(7.95, 1.09, 5.0));
+            h.shoot_at(Key::FireOrange, cube_pos);
+            let d = h.game().portals.list[1].delta;
+            println!("Δ {d:.2} (tw {tw:.2})");
+            h.tap(Key::StopTime);
+            h.frames(90);
+            let moved = h.game().props.list[k].pos.x > 3.0;
+            check(moved, "o cubo sai pelo ciano do presente", &mut fails);
+            // tira o cubo da frente do ciano e entra nele: o passado volta
+            h.world().resource_scope(|_, mut g: Mut<Game>| {
+                let g = &mut *g;
+                g.props.list[k].place(&mut g.world.phys, Vec3::new(3.0, 0.31, 8.5), None, Some(Vec3::ZERO));
+            });
+            h.game().player.pos = Vec3::new(5.5, 0.92, 5.0);
+            h.aim(Vec3::new(7.9, 0.92, 5.0));
+            h.game().player.pitch = 0.0;
+            h.game().events.clear();
+            h.controls().f = true;
+            let mut jumped = false;
+            let mut why: Option<String> = None;
+            for _ in 0..60 * 14 {
+                h.update();
+                let (jump_now, par) = {
+                    let g = h.game();
+                    (g.events.iter().any(|e| matches!(e, GameEvent::TimeJump(_))), g.events.iter().find_map(|e| if let GameEvent::Paradox(w, _) = e { Some(w.clone()) } else { None }))
+                };
+                if jump_now {
+                    jumped = true;
+                    h.controls().f = false;
+                }
+                if par.is_some() {
+                    why = par;
+                    break;
+                }
+            }
+            h.controls().f = false;
+            println!("saltou {jumped}; paradoxo: {why:?}");
+            check(jumped, "o jogador salta para o passado pelo ciano", &mut fails);
+            check(why.as_deref().is_some_and(|w| w.contains("cubo que já tinha entrado no vermelho")), "o seu passado usa o cubo que foi para o futuro: paradoxo", &mut fails);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // sequência de efeitos para comparar com a versão web: parado, tiro azul (110, 250, 500 ms depois),
+        // tempo lento, tiro vermelho com o tempo lento
+        "fx-seq" => {
+            let mut h = Harness::new(1280, 720, Some(1));
+            h.frames(60 * 7);
+            let place = |h: &mut Harness| {
+                let mut g = h.game();
+                let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+                g.player.pos = Vec3::new(f("BX", -2.0), 0.95, f("BZ", 3.5));
+                g.player.vel = Vec3::ZERO;
+                g.player.yaw = f("BYAW", 1.5708);
+                g.player.pitch = 0.0;
+            };
+            let pre = arg(&args, "--pre").unwrap_or("fxn").to_string();
+            place(&mut h);
+            h.frames(24);
+            h.shot(&format!("{pre}-idle.png"));
+            h.controls().pressed.push(Key::FireBlue);
+            h.update();
+            let mut t = 1;
+            for (name, ms) in [("f1", 110.0f32), ("f2", 250.0), ("f3", 500.0)] {
+                let n = (ms / 16.67).round() as usize - t;
+                for _ in 0..n {
+                    place(&mut h);
+                    h.update();
+                }
+                t += n;
+                h.shot(&format!("{pre}-{name}.png"));
+            }
+            h.frames(72);
+            h.game().toggle_slow(Some(true));
+            for _ in 0..54 {
+                place(&mut h);
+                h.update();
+            }
+            h.shot(&format!("{pre}-slow.png"));
+            h.controls().pressed.push(Key::FireOrange);
+            for _ in 0..18 {
+                place(&mut h);
+                h.update();
+            }
+            h.shot(&format!("{pre}-slowfire.png"));
+            std::process::exit(0);
+        }
+        // tiro azul quadro a quadro (comparação com a versão web): "fx-quadros --pre x --n 3,6,9"
+        "fx-quadros" => {
+            let mut h = Harness::new(1280, 720, Some(1));
+            h.frames(60 * 7);
+            let place = |h: &mut Harness| {
+                let mut g = h.game();
+                let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+                g.player.pos = Vec3::new(f("BX", -2.0), 0.95, f("BZ", 3.5));
+                g.player.vel = Vec3::ZERO;
+                g.player.yaw = f("BYAW", 1.5708);
+                g.player.pitch = 0.0;
+            };
+            let pre = arg(&args, "--pre").unwrap_or("sn").to_string();
+            let list: Vec<usize> = arg(&args, "--n").unwrap_or("3,6,9,12,18,30,60").split(',').filter_map(|v| v.parse().ok()).collect();
+            for _ in 0..30 {
+                place(&mut h);
+                h.update();
+            }
+            if std::env::var("SLOWBOLT").is_ok() {
+                h.game().toggle_slow(Some(true));
+                for _ in 0..40 {
+                    place(&mut h);
+                    h.update();
+                }
+            }
+            h.shot(&format!("{pre}-s0.png"));
+            h.controls().pressed.push(Key::FireBlue);
+            h.controls().released.push(Key::FireBlue);
+            let mut done = 0;
+            for f in list {
+                while done < f {
+                    place(&mut h);
+                    h.update();
+                    done += 1;
+                }
+                h.shot(&format!("{pre}-s{f}.png"));
+            }
+            std::process::exit(0);
+        }
+        // andar em cima de uma plataforma que se move: o jogador precisa ficar parado em relação a ela
+        "plataforma" => {
+            let mut fails = 0;
+            for (level, start, label) in [(107i64, Vec3::new(0.0, 0.93, -3.5), "plataforma horizontal"), (108, Vec3::new(5.6, 0.93, 2.5), "plataforma vertical"), (200, Vec3::new(0.0, 0.93, 0.5), "pistão diagonal")] {
+                let mut h = Harness::new(640, 360, Some(level));
+                h.frames(30);
+                // a plataforma que se move (o primeiro "door" que anda: o jogador está em cima dela)
+                // (a plataforma da fase 200 vai e volta: espera ela voltar ao começo e põe o jogador no meio dela)
+                let start = if level == 200 {
+                    let mut at = start;
+                    for _ in 0..60 * 12 {
+                        h.update();
+                        let g = h.game();
+                        let d = &g.world.doors[0];
+                        if d.open < 0.03 && d.target < 0.5 {
+                            let b = &g.world.solids[d.solid];
+                            at = Vec3::new((b.min.x + b.max.x) * 0.5, b.max.y + g.player.half.y + 0.02, (b.min.z + b.max.z) * 0.5);
+                            break;
+                        }
+                    }
+                    at
+                } else {
+                    start
+                };
+                h.game().player.pos = start;
+                h.game().player.vel = Vec3::ZERO;
+                h.frames(10);
+                let (mut worst_dy, mut worst_slip, mut airborne, mut n) = (0.0f32, 0.0f32, 0, 0);
+                let mut rel0: Option<Vec3> = None;
+                let mut max_vy = 0.0f32;
+                for i in 0..60 * 8 {
+                    h.update();
+                    let g = h.game();
+                    let p = g.player.pos;
+                    // a plataforma sob os pés: a caixa que andou e está mais perto do jogador
+                    let feet = p.y - g.player.half.y;
+                    let under = g.world.doors.iter().map(|d| &g.world.solids[d.solid]).filter(|b| p.x > b.min.x - 0.4 && p.x < b.max.x + 0.4 && p.z > b.min.z - 0.4 && p.z < b.max.z + 0.4 && (b.max.y - feet).abs() < 0.6).min_by(|a, b| (a.max.y - feet).abs().total_cmp(&(b.max.y - feet).abs()));
+                    if level == 200 && (230..330).contains(&i) && i % 4 == 0 && std::env::var("PORTAL3_DEBUG2").is_ok() {
+                        let d = &g.world.doors[0];
+                        let b = &g.world.solids[d.solid];
+                        println!("  [{i}] open={:.3} tgt={:.0} delta={:?} plat_top={:.2} centro=({:.2},{:.2}) jogador=({:.2},{:.2},{:.2}) chão={:?} ground={:?} vy={:.2}", d.open, d.target, d.delta, b.max.y, (b.min.x + b.max.x) * 0.5, (b.min.z + b.max.z) * 0.5, p.x, p.y, p.z, g.player.grounded, g.player.ground, g.player.vel.y);
+                    }
+                    if i % 60 == 0 && std::env::var("PORTAL3_DEBUG").is_ok() {
+                        let moving: Vec<String> = g.world.doors.iter().map(|d| format!("{:.2}", d.open)).collect();
+                        println!("  [{label}] t={}s pos={p:?} chão={:?} doors={moving:?} sob={}", i / 60, g.player.grounded, under.is_some());
+                    }
+                    let Some(b) = under else { continue };
+                    let rel = p - (b.min + b.max) * 0.5;
+                    if i < 30 {
+                        rel0 = Some(rel);
+                        continue;
+                    }
+                    n += 1;
+                    if !g.player.grounded {
+                        airborne += 1;
+                    }
+                    let r0 = rel0.unwrap();
+                    worst_dy = worst_dy.max((rel.y - r0.y).abs());
+                    worst_slip = worst_slip.max(Vec3::new(rel.x - r0.x, 0.0, rel.z - r0.z).length());
+                    max_vy = max_vy.max(g.player.vel.y.abs());
+                }
+                println!("{label}: quadros {n} · no ar {airborne} · maior variação de altura {worst_dy:.3} m · maior deslize {worst_slip:.3} m · |vy| máx {max_vy:.1}");
+                check(n > 0 && airborne * 20 < n && worst_dy < 0.06 && worst_slip < 0.25, &format!("{label}: o jogador acompanha a plataforma sem tremer nem escorregar"), &mut fails);
+            }
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
+        // um cubo que estava no passado onde o vermelho abre: cai no portal e sai pelo ciano
+        "relogio-cubo" => {
+            let mut fails = 0;
+            let mut h = Harness::new(640, 360, Some(600));
+            h.frames(30);
+            // um cubo no chão, encostado na parede branca da esquerda (x = −8)
+            let k = {
+                let mut k = 0;
+                h.world().resource_scope(|w, mut g: Mut<Game>| {
+                    let g = &mut *g;
+                    k = g.props.add_cube(w, &mut g.world, -7.4, 0.4, 5.0, false, false, 0.0);
+                });
+                k
+            };
+            h.frames(60 * 4); // a história guarda o cubo parado
+            h.tap(Key::StopTime);
+            h.game().ch_scrub_by(-100.0);
+            h.game().ch_scrub_by(2.0);
+            h.frames(40);
+            let before = h.game().props.list[k].pos;
+            println!("cubo antes: {before:?}");
+            // ciano no presente (parede da direita) e vermelho no passado, mirando o cubo
+            h.game().player.pos = Vec3::new(0.0, 0.92, 6.0);
+            h.frames(2);
+            h.shoot_at(Key::FireBlue, Vec3::new(7.95, 1.4, 5.0));
+            let eye = h.game().player.eye();
+            let _ = eye;
+            h.shoot_at(Key::FireOrange, before);
+            let (placed, delta) = {
+                let g = h.game();
+                (g.portals.list[1].placed, g.portals.list[1].delta)
+            };
+            println!("vermelho aberto: {placed} (Δ {delta:.2}) em {:?}", h.game().portals.list[1].center);
+            check(placed && delta > 0.5, "mirar no cubo do passado abre o vermelho temporal junto dele", &mut fails);
+            h.tap(Key::StopTime);
+            h.frames(90);
+            let after = h.game().props.list[k].pos;
+            let blue = h.game().portals.list[0].center;
+            println!("cubo depois: {after:?} (ciano em {blue:?})");
+            check(after.distance(before) > 5.0 && after.distance(blue) < 3.5, "o cubo do passado sai pelo ciano do presente", &mut fails);
+            // a história: depois de ele cair no portal, o cubo não está mais lá (nem ao olhar nem ao voltar)
+            let (gone_mid, gone_n, total) = {
+                let g = h.game();
+                let ch = g.relogio.as_ref().unwrap();
+                let (tp, d) = (g.portals.list[1].placed_tw.unwrap_or(ch.tw), g.portals.list[1].delta);
+                // do instante mostrado pelo vermelho quando abriu até o momento em que ele foi aberto
+                let after_enter: Vec<_> = ch.samples.iter().filter(|s| s.t > tp - d + 0.3 && s.t < tp - 0.3).collect();
+                let gone = after_enter.iter().filter(|s| s.w.props.get(k).is_some_and(|p| p.gone)).count();
+                (after_enter.len(), gone, ch.samples.len())
+            };
+            println!("amostras depois da queda: {gone_mid}, com o cubo ausente: {gone_n} (de {total})");
+            check(gone_mid > 5 && gone_n == gone_mid, "na história o cubo some a partir do instante em que caiu no portal", &mut fails);
             std::process::exit(if fails > 0 { 1 } else { 0 });
         }
         // fase 400 com o relógio ligado: o laser pelo par temporal
@@ -1323,6 +2640,43 @@ fn main() {
         }
         // editor de níveis: abre um nível novo, abre células, põe botão + porta ligados e um cubo,
         // desfaz/refaz, testa (o nível vira fase jogável) e volta, sai (aparece em Meus níveis)
+        // abre um nível do editor salvo em arquivo (NIVEL=caminho) e anda alguns segundos, medindo cada quadro
+        "nivel" => {
+            let mut fails = 0;
+            let path = std::env::var("NIVEL").expect("NIVEL=arquivo.json");
+            let txt = std::fs::read_to_string(&path).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+            let doc = portal3::editor::doc::Doc::normalize(&v).unwrap();
+            let mut h = Harness::new(1280, 720, None);
+            h.frames(10);
+            let i = {
+                let mut g = h.game();
+                let n = g.levels.len();
+                let def = doc.compile(n);
+                g.levels.push(def);
+                n
+            };
+            let t0 = std::time::Instant::now();
+            h.game().start_level(i);
+            let mut worst = 0.0f64;
+            for k in 0..240 {
+                let t = std::time::Instant::now();
+                h.update();
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                worst = worst.max(ms);
+                if k < 8 || ms > 200.0 {
+                    let g = h.game();
+                    println!("  quadro {k}: {ms:.0} ms · rodando {} · menu {} · fase {:?}", g.running, g.menu, g.level);
+                }
+            }
+            let g = h.game();
+            println!("total {:.1} s · pior quadro {worst:.0} ms · rodando {} · jogador {:.2}", t0.elapsed().as_secs_f64(), g.running, g.player.pos);
+            check(g.running && !g.menu, "a fase abre e anda", &mut fails);
+            drop(g);
+            h.shot("nivel.png");
+            h.frames(3);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
         "editor" => {
             let mut fails = 0;
             portal3::editor::store::clear();
@@ -1668,18 +3022,53 @@ fn main() {
             std::process::exit(if fails > 0 { 1 } else { 0 });
         }
         // a esfera do campo de dilatação vista de fora (para comparar com a versão web)
+        // cubo parado na boca do ciano no chão: a metade que passou aparece saindo do vermelho
+        "cubo-portal" => {
+            let mut fails = 0;
+            let mut h = Harness::new(1280, 720, Some(2));
+            h.frames(30);
+            let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+            let (ok_b, ok_o) = {
+                let mut g = h.game();
+                let g = &mut *g;
+                let b = g.portals.try_place(&g.world, 0, Vec3::new(-4.0, 1.5, -3.0), Vec3::NEG_Y, false).ok;
+                let o = g.portals.try_place(&g.world, 1, Vec3::new(-4.0, 1.2, f("OOZ", -9.0)), Vec3::new(f("OX", -1.0), 0.0, f("OZ", 0.0)).normalize(), false).ok;
+                (b, o)
+            };
+            check(ok_b && ok_o, "os dois portais abrem", &mut fails);
+            let (c, oc, on) = { let g = h.game(); (g.portals.list[0].center, g.portals.list[1].center, g.portals.list[1].normal) };
+            println!("ciano {c:.2} vermelho {oc:.2} n {on:.2}");
+            for _ in 0..40 {
+                {
+                    let mut g = h.game();
+                    let g = &mut *g;
+                    g.props.list[0].place(&mut g.world.phys, c + Vec3::Y * f("CUBEY", 0.05), Some(Quat::from_rotation_y(0.4)), None);
+                    let eye = oc + on * f("DIST", 3.0) + Vec3::Y * 0.4 + on.cross(Vec3::Y) * f("SIDE", 1.2);
+                    g.player.pos = eye - Vec3::new(0.0, g.player.eye_off, 0.0);
+                    g.player.vel = Vec3::ZERO;
+                }
+                h.aim(oc);
+                h.update();
+            }
+            let tw = h.game().props.list[0].twin.is_some();
+            check(tw, "a cópia aparece no vermelho", &mut fails);
+            h.shot(&std::env::var("CSHOT").unwrap_or("cubo-portal.png".into()));
+            h.frames(3);
+            std::process::exit(if fails > 0 { 1 } else { 0 });
+        }
         "campo-vista" => {
             let mut h = Harness::new(1280, 720, Some(1));
             h.frames(30);
             {
                 let mut g = h.game();
                 g.field.active.push(portal3::game::FieldInst { center: Vec3::new(0.0, 0.92, 0.0), left: 18.0, own: true });
-                g.player.pos = Vec3::new(0.0, 0.95, 7.0);
-                g.player.yaw = 0.0;
+                let f = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+                g.player.pos = Vec3::new(f("CX", 0.0), 0.95, f("CZ", 7.0));
+                g.player.yaw = f("CYAW", 0.0);
                 g.player.pitch = -0.05;
             }
             h.frames(5);
-            h.shot("campo-n.png");
+            h.shot(&std::env::var("CSHOT").unwrap_or("campo-n.png".into()));
             std::process::exit(0);
         }
         // multiplayer: o servidor da versão web, um jogador de mentira (node) e a versão nativa na mesma sala

@@ -40,9 +40,9 @@ pub enum EnergyEvent {
     Caught(usize),
     Pop(Vec3),
     HitPlayer,
-    /// bateu no laranja temporal (aberto no passado): sai pelo ciano Δ s depois (o relógio cuida)
-    IntoPast { orange: usize, pos: Vec3, vel: Vec3, life: f32, from: Option<usize>, uid: u64 },
-    /// entrou no ciano temporal: vai para o passado (o relógio simula o voo)
+    /// bateu num vermelho temporal (o seu, o de uma versão passada ou o de estática): sai pelo ciano
+    /// Δ s depois (o relógio cuida). `key` = centro do vermelho
+    IntoOrange { key: Vec3, delta: f32, pos: Vec3, vel: Vec3, life: f32, from: Option<usize>, uid: u64 },
     ToPast { blue: usize, pos: Vec3, vel: Vec3, life: f32, from: Option<usize>, uid: u64 },
 }
 
@@ -144,13 +144,18 @@ impl Energy {
             })
             .collect();
         let light = ecs.spawn((point_light(crate::mats::hex(0xffa040), 6.0, 6.0), Transform::from_translation(pos), ChildOf(w.root()))).id();
-        self.uid_seq += 1;
-        let uid = self.uid_seq;
+        let uid = self.new_uid();
         self.pellets.push(Pellet { uid, pos, vel, life, from, group, shell, sprite, trail, hist: vec![pos; TRAIL], light, cooldown: 0.0 });
         self.pellets.len() - 1
     }
 
     /// tira a bola `i` (o relógio refazendo o mundo)
+    /// identidade nova (nunca repete)
+    pub fn new_uid(&mut self) -> u64 {
+        self.uid_seq += 1;
+        self.uid_seq
+    }
+
     pub fn kill_pub(&mut self, ecs: &mut Ecs, w: &mut GameWorld, i: usize) {
         self.kill(ecs, w, i);
     }
@@ -328,14 +333,10 @@ impl Energy {
                         (l.x / PORTAL_A).powi(2) + (l.y / PORTAL_B).powi(2) <= 1.0
                     })
                 });
-                // o laranja temporal (aberto no passado): a bola entra e sai pelo ciano Δ s depois
+                // um vermelho temporal (aberto no passado): a bola entra e sai pelo ciano Δ s depois
                 if let (Some(h), false, true) = (&hit, into_portal, self.temporal) {
-                    let o = portals.list.iter().enumerate().position(|(qi, q)| {
-                        let l = q.local(h.point);
-                        q.placed && q.delta > 0.0 && portals.is_linked(qi) && l.z.abs() < 0.1 && (l.x / PORTAL_A).powi(2) + (l.y / PORTAL_B).powi(2) <= 1.0
-                    });
-                    if let Some(o) = o {
-                        entered = Some(EnergyEvent::IntoPast { orange: o, pos: p.pos, vel: p.vel, life: p.life, from: p.from, uid: p.uid });
+                    if let Some((key, delta)) = portals.temporal_orange_at(h.point) {
+                        entered = Some(EnergyEvent::IntoOrange { key, delta, pos: p.pos, vel: p.vel, life: p.life, from: p.from, uid: p.uid });
                         break;
                     }
                 }

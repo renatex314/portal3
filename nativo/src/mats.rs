@@ -144,17 +144,48 @@ fn textured(t: &TexSet, color: Color, rough: f32, metal: f32) -> StandardMateria
 pub fn build_mats(images: &mut Assets<Image>, materials: &mut Assets<StandardMaterial>) -> Mats {
     let dir = asset_dir().join("textures");
     let manifest: serde_json::Value = std::fs::read_to_string(dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let mut tex = HashMap::new();
+    // decodifica os PNGs (e monta os mipmaps) em paralelo: é a maior parte do tempo de abertura
+    struct Job {
+        name: String,
+        slot: usize,
+        path: String,
+        srgb: bool,
+        rough: bool,
+    }
+    let mut jobs: Vec<Job> = vec![];
+    let mut repeats = HashMap::new();
     if let Some(obj) = manifest.as_object() {
         for (name, v) in obj {
-            let get = |k: &str, srgb: bool, rough: bool| -> Option<Image> { v.get(k).and_then(|p| p.as_str()).and_then(|p| load_png(&asset_dir().join(p), srgb, rough)) };
-            let set = TexSet {
-                map: get("map", true, false).map(|i| images.add(i)),
-                normal: get("normal", false, false).map(|i| images.add(i)),
-                rough: get("rough", false, true).map(|i| images.add(i)),
-                repeat: v.get("repeat").and_then(|r| r.as_f64()).unwrap_or(1.0) as f32,
-            };
-            tex.insert(name.clone(), set);
+            repeats.insert(name.clone(), v.get("repeat").and_then(|r| r.as_f64()).unwrap_or(1.0) as f32);
+            for (slot, (k, srgb, rough)) in [("map", true, false), ("normal", false, false), ("rough", false, true)].into_iter().enumerate() {
+                if let Some(p) = v.get(k).and_then(|p| p.as_str()) {
+                    jobs.push(Job { name: name.clone(), slot, path: p.to_string(), srgb, rough });
+                }
+            }
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<(usize, Option<Image>)>> = Default::default();
+    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8);
+    std::thread::scope(|sc| {
+        for _ in 0..workers {
+            sc.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(j) = jobs.get(i) else { break };
+                let img = load_png(&asset_dir().join(&j.path), j.srgb, j.rough);
+                done.lock().unwrap().push((i, img));
+            });
+        }
+    });
+    let mut loaded: HashMap<usize, Option<Image>> = done.into_inner().unwrap().into_iter().collect();
+    let mut tex: HashMap<String, TexSet> = HashMap::new();
+    for (i, j) in jobs.iter().enumerate() {
+        let h = loaded.remove(&i).flatten().map(|im| images.add(im));
+        let t = tex.entry(j.name.clone()).or_insert_with(|| TexSet { repeat: repeats[&j.name], ..default() });
+        match j.slot {
+            0 => t.map = h,
+            1 => t.normal = h,
+            _ => t.rough = h,
         }
     }
     let t = |n: &str| tex.get(n).cloned().unwrap_or_default();

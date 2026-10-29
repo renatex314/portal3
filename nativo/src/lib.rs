@@ -29,6 +29,7 @@ pub mod physics;
 pub mod player;
 pub mod portal_render;
 pub mod portals;
+pub mod quality;
 pub mod post;
 pub mod props;
 pub mod relogio;
@@ -40,7 +41,6 @@ pub mod world;
 
 use bevy::camera::RenderTarget;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::GeneratedEnvironmentMapLight;
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::camera::Hdr;
@@ -48,10 +48,6 @@ use bevy::camera::Hdr;
 /// a câmera principal (a do jogador)
 #[derive(Component)]
 pub struct MainCam;
-
-/// o mapa de ambiente (as câmeras dos portais usam o mesmo)
-#[derive(Resource, Clone)]
-pub struct EnvMap(pub Handle<Image>);
 
 /// quando existe: a câmera principal desenha nesta imagem (testes sem janela)
 #[derive(Resource, Clone)]
@@ -63,17 +59,23 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((MaterialPlugin::<fx::Fx>::default(), MaterialPlugin::<lava::LavaMat>::default(), post::PostPlugin))
             .insert_resource(ClearColor(mats::hex(0x101216)))
+            // texturas e malhas novas sobem para a placa de vídeo aos poucos (16 MB por quadro), não todas no mesmo quadro
+            .insert_resource(bevy::render::render_asset::RenderAssetBytesPerFrame::new(16 * 1024 * 1024))
             // (a luz ambiente vem do mapa de ambiente; a global padrão do Bevy estouraria a imagem)
             .insert_resource(bevy::light::GlobalAmbientLight { brightness: 0.0, ..default() })
             .init_resource::<glb::Models>()
             .init_resource::<lava::LavaShared>()
             .init_resource::<mats::SmallTex>()
             .init_resource::<fx::FxClock>()
+            .init_resource::<env::BakedEnv>()
+            .init_resource::<quality::QualityState>()
             .init_resource::<input::Controls>()
-            .add_systems(Startup, (setup_assets, setup_camera, game::setup_game).chain())
+            .add_systems(Startup, (setup_assets, setup_camera, game::setup_game, env::start_bake).chain())
+            .add_systems(PreUpdate, (env::bake_env, env::attach_env, quality::apply_quality).chain())
             .add_systems(Update, (game::tick, editor::input::editor_tick, characters::update_characters, portal_render::update_portal_views, gun::update_gun, audio::audio_tick, hud::update_hud, menu::menu_system, fx::tick_fx, editor::panel::attach_context).chain())
             .add_systems(Update, editor::input::draw_gizmos.after(editor::input::editor_tick))
-            .add_systems(PostUpdate, (gun::light_layers, i18n::translate_texts));
+            .add_systems(PostUpdate, (gun::light_layers, i18n::translate_texts))
+            .add_systems(Last, frame_pacing);
         // editor de níveis: a interface em egui (o contexto só existe enquanto ele está aberto) e os contornos em gizmos
         app.add_plugins(bevy_egui::EguiPlugin::default())
             .insert_resource(bevy_egui::EguiGlobalSettings { auto_create_primary_context: false, ..default() })
@@ -86,6 +88,7 @@ impl Plugin for GamePlugin {
 }
 
 fn setup_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    glb::start_preload();
     let m = mats::build_mats(&mut images, &mut materials);
     commands.insert_resource(m);
 }
@@ -111,8 +114,6 @@ pub fn bloom() -> Bloom {
 }
 
 fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>, target: Option<Res<HeadlessTarget>>) {
-    let envmap = env::environment_cubemap(&mut images);
-    commands.insert_resource(EnvMap(envmap.clone()));
     let mut cam = commands.spawn((
         Camera3d::default(),
         Hdr,
@@ -121,15 +122,56 @@ fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>, targe
         bevy::camera::Exposure { ev100: std::env::var("PORTAL3_EV").ok().and_then(|v| v.parse().ok()).unwrap_or(EV100) },
         bevy::render::view::ColorGrading { global: bevy::render::view::ColorGradingGlobal { exposure: GRADE_EV, ..default() }, ..default() },
         bloom(),
-        GeneratedEnvironmentMapLight { environment_map: envmap, intensity: std::env::var("PORTAL3_ENV").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0), ..default() },
-        Msaa::Sample4,
+        env::WantsEnv { gun: false, intensity: std::env::var("PORTAL3_ENV").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0) },
+        if std::env::var("PORTAL3_X_NOMSAA").is_ok() { Msaa::Off } else { Msaa::Sample4 },
         Transform::from_xyz(0.0, 1.6, 4.0),
         MainCam,
         bevy::camera::visibility::RenderLayers::from_layers(&[0, 1, relogio::PRESENT_LAYER]),
         // a profundidade da cena serve ao desfoque de movimento e à névoa de calor
         bevy::core_pipeline::prepass::DepthPrepass,
     ));
+    if std::env::var("PORTAL3_X_NOBLOOM").is_ok() {
+        cam.remove::<Bloom>();
+    }
+    if std::env::var("PORTAL3_X_NOPREPASS").is_ok() {
+        cam.remove::<bevy::core_pipeline::prepass::DepthPrepass>();
+    }
     if let Some(t) = target {
         cam.insert(RenderTarget::Image(t.0.clone().into()));
+    }
+}
+
+/// a janela principal: sem VSync (a imagem aparece assim que fica pronta, os controles respondem
+/// na hora) ou com VSync, como o jogador escolheu; sem VSync o quadro é limitado (padrão 144/s,
+/// PORTAL3_FPS muda, 0 = livre) para não fritar a placa de vídeo à toa
+fn frame_pacing(game: Option<Res<game::Game>>, mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>, mut last: Local<Option<std::time::Instant>>) {
+    let vsync = game.as_ref().is_some_and(|g| g.progress.vsync) || std::env::var("PORTAL3_VSYNC").is_ok();
+    if let Ok(mut w) = windows.single_mut() {
+        let want = if vsync { bevy::window::PresentMode::AutoVsync } else { bevy::window::PresentMode::AutoNoVsync };
+        if w.present_mode != want {
+            w.present_mode = want;
+        }
+    }
+    if vsync {
+        *last = None;
+        return;
+    }
+    let cap: f64 = std::env::var("PORTAL3_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(144.0);
+    if cap > 1.0 {
+        let frame = std::time::Duration::from_secs_f64(1.0 / cap);
+        if let Some(t) = *last {
+            let spent = t.elapsed();
+            if spent < frame {
+                let left = frame - spent;
+                // dorme quase tudo e gira o restante (o sono do sistema erra por ~1 ms)
+                if left > std::time::Duration::from_micros(1500) {
+                    std::thread::sleep(left - std::time::Duration::from_micros(1200));
+                }
+                while t.elapsed() < frame {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+        *last = Some(std::time::Instant::now());
     }
 }

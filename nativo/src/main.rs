@@ -35,13 +35,35 @@ fn main() {
             .show();
         return;
     }
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin { primary_window: Some(Window { title: "Laboratório Antípoda".into(), resolution: (1280u32, 720u32).into(), ..default() }), ..default() })
-                .set(AssetPlugin { file_path: portal3::mats::asset_dir().to_string_lossy().into(), ..default() }),
-        )
-        .add_plugins(portal3::GamePlugin)
-        .add_systems(PreUpdate, portal3::input::read_input.after(bevy::input::InputSystems))
-        .run();
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            // (o desenho do quadro anterior em outra thread dá mais quadros por segundo, mas põe um
+            // quadro inteiro de atraso entre o clique e a imagem: aqui a resposta vem primeiro)
+            .build()
+            .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Laboratório Antípoda".into(),
+                    resolution: (1280u32, 720u32).into(),
+                    present_mode: bevy::window::PresentMode::AutoNoVsync,
+                    // no máximo um quadro na fila da tela
+                    desired_maximum_frame_latency: std::num::NonZeroU32::new(1),
+                    ..default()
+                }),
+                ..default()
+            })
+            .set(AssetPlugin { file_path: portal3::mats::asset_dir().to_string_lossy().into(), ..default() }),
+    );
+    if std::env::var("PORTAL3_PERF").is_ok() {
+        app.add_plugins((bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(), bevy::diagnostic::LogDiagnosticsPlugin::default()));
+        app.add_systems(Last, |time: Res<Time<Real>>, mut n: Local<u32>| {
+            *n += 1;
+            let ms = time.delta_secs_f64() * 1000.0;
+            if ms > 40.0 {
+                eprintln!("[travada] quadro {} levou {ms:.0} ms (t = {:.1} s)", *n, time.elapsed_secs_f64());
+            }
+        });
+    }
+    app.add_plugins(portal3::GamePlugin).add_systems(PreUpdate, portal3::input::read_input.after(bevy::input::InputSystems)).run();
 }

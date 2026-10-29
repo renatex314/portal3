@@ -32,13 +32,17 @@ pub struct Progress {
     pub music: bool,
     pub voice: bool,
     pub blur: bool,
+    /// sincronia vertical: liga evita rasgos na imagem, mas atrasa os controles em um quadro ou mais
+    pub vsync: bool,
+    /// qualidade gráfica (0 baixa, 1 média, 2 alta); vazio = escolhida pela placa de vídeo
+    pub quality: Option<u8>,
     /// idioma dos textos ("pt" ou "en")
     pub lang: String,
 }
 
 impl Default for Progress {
     fn default() -> Self {
-        Progress { unlocked: 1, series: HashMap::new(), best: HashMap::new(), last: None, music: true, voice: true, blur: true, lang: "pt".into() }
+        Progress { unlocked: 1, series: HashMap::new(), best: HashMap::new(), last: None, music: true, voice: true, blur: true, vsync: false, quality: None, lang: "pt".into() }
     }
 }
 
@@ -81,7 +85,8 @@ impl Progress {
 
     /// a câmara está trancada?
     pub fn locked(&self, l: &crate::levels::LevelDef) -> bool {
-        if l.free {
+        // os seus níveis (do editor) nunca ficam trancados: terminar um não destrava o próximo
+        if l.free || l.series.as_deref() == Some("mine") {
             return false;
         }
         match &l.series {
@@ -99,6 +104,8 @@ enum Act {
     Music,
     Voice,
     Blur,
+    Vsync,
+    Quality,
     Lang,
     Resume,
     Restart,
@@ -299,10 +306,14 @@ impl Menus {
         let row = ecs.spawn((Node { column_gap: Val::Px(8.0), row_gap: Val::Px(8.0), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, margin: UiRect::top(Val::Px(10.0)), ..default() }, ChildOf(bx))).id();
         let big = button(ecs, row, Act::Play, Node { padding: UiRect::axes(Val::Px(22.0), Val::Px(12.0)), border: UiRect::all(Val::Px(1.0)), ..default() }, BLUE.with_alpha(0.08), BLUE);
         label(ecs, big, &ui, "▶ Jogar sozinho", 16.0, BLUE, 0.02);
-        for (act, s, on) in [(Act::Music, "♪ Música", progress.music), (Act::Voice, "Narração", progress.voice), (Act::Blur, "Desfoque", progress.blur)] {
+        for (act, s, on) in [(Act::Music, "♪ Música", progress.music), (Act::Voice, "Narração", progress.voice), (Act::Blur, "Desfoque", progress.blur), (Act::Vsync, "VSync", progress.vsync)] {
             let b = button(ecs, row, act, Node { padding: UiRect::axes(Val::Px(13.0), Val::Px(7.0)), border: UiRect::all(Val::Px(1.0)), ..default() }, if on { BLUE.with_alpha(0.08) } else { Color::NONE }, if on { BLUE } else { Color::srgba(1.0, 1.0, 1.0, 0.18) });
             label(ecs, b, &ui, s, 13.0, if on { BLUE } else { INK }, 0.0);
         }
+        // qualidade gráfica (o botão passa por alta, média e baixa)
+        let q = ecs.resource::<crate::quality::QualityState>().current as usize;
+        let b = button(ecs, row, Act::Quality, Node { padding: UiRect::axes(Val::Px(13.0), Val::Px(7.0)), border: UiRect::all(Val::Px(1.0)), ..default() }, Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.18));
+        label(ecs, b, &ui, &format!("Qualidade: {}", crate::quality::NAMES[q.min(2)]), 13.0, INK, 0.0);
         // idioma dos textos (o botão diz o outro idioma)
         let b = button(ecs, row, Act::Lang, Node { padding: UiRect::axes(Val::Px(13.0), Val::Px(7.0)), border: UiRect::all(Val::Px(1.0)), ..default() }, Color::NONE, Color::srgba(1.0, 1.0, 1.0, 0.18));
         let other = if crate::i18n::is_en() { "🌐 Português" } else { "🌐 English" };
@@ -375,29 +386,36 @@ impl Menus {
             (info, g.progress.clone())
         };
         let root = Self::overlay(ecs, cam);
+        // (a pausa da versão web: tela inteira, lista à esquerda, opções à direita, fio de 1 px em x = 120)
+        ecs.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(120.0), top: Val::Px(0.0), bottom: Val::Px(0.0), width: Val::Px(1.0), ..default() }, BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.16)), ChildOf(root)));
         let bx = ecs
             .spawn((
-                Node { width: Val::Percent(100.0), height: Val::Percent(100.0), padding: UiRect::new(Val::Px(80.0), Val::Px(80.0), Val::Px(120.0), Val::Px(56.0)), border: UiRect::left(Val::Px(1.0)), margin: UiRect::left(Val::Px(120.0)), column_gap: Val::Px(120.0), ..default() },
-                BorderColor::all(LINE),
+                Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), padding: UiRect::new(Val::Px(160.0), Val::Px(120.0), Val::Px(120.0), Val::Px(48.0)), justify_content: JustifyContent::SpaceBetween, ..default() },
                 ChildOf(root),
             ))
             .id();
-        let main = ecs.spawn((Node { flex_direction: FlexDirection::Column, width: Val::Px(320.0), ..default() }, ChildOf(bx))).id();
+        let main = ecs.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(8.0), min_width: Val::Px(210.0), max_width: Val::Px(420.0), ..default() }, ChildOf(bx))).id();
         label(ecs, main, &mono, &info.to_uppercase(), 11.0, BLUE, 0.24);
-        let (f, c) = text(&ui, 54.0, INK);
-        ecs.spawn((Node { margin: UiRect::vertical(Val::Px(12.0)), ..default() }, Text::new("Pausado"), f.with_font_weight(FontWeight(300)), c, ChildOf(main)));
+        let (f, c) = text(&ui, 56.0, INK);
+        ecs.spawn((Node { margin: UiRect::bottom(Val::Px(28.0)), ..default() }, Text::new("Pausado"), f.with_font_weight(FontWeight(300)), c, ChildOf(main)));
         Self::opt(ecs, main, &ui, &mono, Act::Resume, "Continuar", "Esc", true, 20.0);
         Self::opt(ecs, main, &ui, &mono, Act::Restart, "Reiniciar câmara", "R", false, 20.0);
         if ecs.resource::<Game>().editor.as_ref().is_some_and(|e| e.testing) {
             Self::opt(ecs, main, &ui, &mono, Act::BackToEditor, "Voltar ao editor", "F5", false, 20.0);
         }
         Self::opt(ecs, main, &ui, &mono, Act::ToMenu, "Voltar ao menu", "", false, 20.0);
-        let opts = ecs.spawn((Node { flex_direction: FlexDirection::Column, width: Val::Px(240.0), ..default() }, ChildOf(bx))).id();
-        label(ecs, opts, &mono, "OPÇÕES", 11.0, MUTED, 0.24);
-        for (act, s, on) in [(Act::Music, "Música", progress.music), (Act::Voice, "Narração", progress.voice), (Act::Blur, "Desfoque de movimento", progress.blur)] {
+        let opts = ecs.spawn((Node { flex_direction: FlexDirection::Column, min_width: Val::Px(244.0), max_width: Val::Px(360.0), ..default() }, ChildOf(bx))).id();
+        let h = label(ecs, opts, &mono, "OPÇÕES", 11.0, Color::srgba(0.957, 0.969, 0.98, 0.6), 0.24);
+        ecs.entity_mut(h).insert(Node { margin: UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(6.0), Val::Px(10.0)), ..default() });
+        for (act, s, on) in [(Act::Music, "Música", progress.music), (Act::Voice, "Narração", progress.voice), (Act::Blur, "Desfoque de movimento", progress.blur), (Act::Vsync, "Sincronia vertical (VSync)", progress.vsync)] {
             let b = Self::opt(ecs, opts, &ui, &mono, act, s, "", false, 16.0);
             label(ecs, b, &mono, if on { "LIGADO" } else { "DESLIGADO" }, 11.0, if on { BLUE } else { Color::srgba(0.957, 0.969, 0.98, 0.45) }, 0.2);
         }
+        let q = ecs.resource::<crate::quality::QualityState>().current as usize;
+        let b = Self::opt(ecs, opts, &ui, &mono, Act::Quality, "Qualidade gráfica", "", false, 16.0);
+        label(ecs, b, &mono, &crate::quality::NAMES[q.min(2)].to_uppercase(), 11.0, BLUE, 0.2);
+        let foot = label(ecs, root, &mono, "LABORATÓRIO ANTÍPODA · NOVA LIMA", 11.0, Color::srgba(0.957, 0.969, 0.98, 0.45), 0.24);
+        ecs.entity_mut(foot).insert(Node { position_type: PositionType::Absolute, left: Val::Px(160.0), bottom: Val::Px(48.0), ..default() });
         self.root = Some(root);
         self.shown = Shown::Pause;
     }
@@ -506,6 +524,7 @@ pub fn menu_system(ecs: &mut Ecs) {
     }
     let mut rebuild = false;
     let mut relang = false;
+    let cur_q = ecs.resource::<crate::quality::QualityState>().current;
     for a in acts {
         let mut g = ecs.resource_mut::<Game>();
         match a {
@@ -526,6 +545,16 @@ pub fn menu_system(ecs: &mut Ecs) {
             }
             Act::Blur => {
                 g.progress.blur = !g.progress.blur;
+                g.progress.save();
+                rebuild = true;
+            }
+            Act::Quality => {
+                g.progress.quality = Some((cur_q + 2) % 3); // alta → média → baixa → alta
+                g.progress.save();
+                rebuild = true;
+            }
+            Act::Vsync => {
+                g.progress.vsync = !g.progress.vsync;
                 g.progress.save();
                 rebuild = true;
             }

@@ -117,6 +117,37 @@ export class Prop {
     this.mesh.visible = !this.gone && !(this.hideUntil > performance.now()); // escondido enquanto se materializa
     this.mesh.quaternion.copy(this.quat);
     this.mesh.position.copy(this.meshOffset).applyQuaternion(this.quat).add(this.pos);
+    this.syncTwin();
+  }
+
+  /** atravessando a boca de um portal, o objeto também aparece saindo do outro (uma cópia só visual) */
+  syncTwin() {
+    const P = this.mesh.visible && this.mesh.parent ? this.portals.straddled(this.pos, this.half ? this.half.length() : 0.5) : null;
+    if (!P) {
+      if (this.twin) this.twin.visible = false;
+      return;
+    }
+    if (!this.twin || this.twin.parent !== this.mesh.parent) {
+      this.twin?.removeFromParent();
+      this.twin = this.mesh.clone();
+      this.twinPairs = [];
+      const src = [];
+      this.mesh.traverse((o) => src.push(o));
+      let k = 0;
+      this.twin.traverse((o) => this.twinPairs.push([src[k++], o]));
+      this.mesh.parent.add(this.twin);
+    }
+    this.mesh.updateMatrix();
+    _m.multiplyMatrices(this.portals.transform(P, P.partner), this.mesh.matrix);
+    _m.decompose(this.twin.position, this.twin.quaternion, this.twin.scale);
+    this.twin.visible = true;
+    for (let i = 1; i < this.twinPairs.length; i++) {
+      const [s, d] = this.twinPairs[i];
+      d.position.copy(s.position);
+      d.quaternion.copy(s.quaternion);
+      d.scale.copy(s.scale);
+      d.visible = s.visible;
+    }
   }
 
   /** teletransporta (respawn, passagem junto com o jogador, rede) */

@@ -27,6 +27,8 @@ pub struct Bolt {
     pub g: Entity,
     core: Entity,
     halo: Entity,
+    glow: Entity,
+    glow_mat: Handle<crate::fx::Fx>,
     trail: Entity,
     spiral: Entity,
     light: Entity,
@@ -77,15 +79,19 @@ impl Bolt {
         let halo_mat = bas_a(ecs, LinearRgba::WHITE, 0.45, true);
         let trail_mat = bas_a(ecs, LinearRgba::WHITE, 0.55, true);
         let spiral_mat = bas_a(ecs, LinearRgba::WHITE, 1.0, true);
-        let core = put(ecs, g, &sphere_geo(0.055, 16, 12), &core_mat, Transform::default());
-        let halo = put(ecs, g, &sphere_geo(0.15, 16, 12), &halo_mat, Transform::default());
+        let core = put(ecs, g, &sphere_geo(0.05, 16, 12), &core_mat, Transform::default());
+        let halo = put(ecs, g, &sphere_geo(0.11, 16, 12), &halo_mat, Transform::default());
+        // brilho: um degradê redondo virado para a câmera, transparente nas bordas (não uma esfera)
+        let glow_mat = crate::world::fx_mat(ecs, crate::fx::Fx::new(crate::fx::kind::SPRITE));
+        let quad = crate::world::mesh_h(ecs, &crate::geo::plane_geo(1.0, 1.0));
+        let glow = put_mesh(ecs, g, quad, glow_mat.clone(), Transform::from_scale(Vec3::splat(0.9)));
         // rastro: cone com a base no núcleo e a ponta para trás (−z)
         let cone = cone_geo(0.06, 1.0, 12).rotate_x(-std::f32::consts::FRAC_PI_2).translate(0.0, 0.0, -0.5);
         let trail = put(ecs, g, &cone, &trail_mat, Transform::default());
         let sm = ecs.resource_mut::<Assets<Mesh>>().add(spiral_mesh());
         let spiral = put_mesh(ecs, g, sm, &spiral_mat, Transform::default());
         let light = ecs.spawn((point_light(Color::WHITE, 0.0, 6.0), Transform::default(), Visibility::Hidden)).id();
-        Bolt { g, core, halo, trail, spiral, light, core_mat, halo_mat, trail_mat, spiral_mat, active: false, from: Vec3::ZERO, to: Vec3::ZERO, t: 0.0, dur: 0.0, done: None }
+        Bolt { g, core, halo, glow, glow_mat, trail, spiral, light, core_mat, halo_mat, trail_mat, spiral_mat, active: false, from: Vec3::ZERO, to: Vec3::ZERO, t: 0.0, dur: 0.0, done: None }
     }
 }
 
@@ -119,8 +125,11 @@ impl Bolts {
     /// dispara de `from` até `to`; um tiro novo da mesma cor substitui o que ainda está voando
     pub fn fire(&mut self, ecs: &mut Ecs, which: usize, c: Vec3, from: Vec3, to: Vec3, done: Landing) {
         let b = &mut self.list[which];
-        set_color(ecs, &b.core_mat, c * 4.0 + Vec3::splat(0.6)); // núcleo quase branco: o bloom acende
-        set_color(ecs, &b.halo_mat, c * 2.2);
+        set_color(ecs, &b.core_mat, c * 6.0 + Vec3::splat(1.0)); // núcleo quase branco: o bloom acende
+        set_color(ecs, &b.halo_mat, c * 1.1);
+        if let Some(mut m) = ecs.resource_mut::<Assets<crate::fx::Fx>>().get_mut(&b.glow_mat) {
+            m.u.color = (c * 1.3).extend(1.0);
+        }
         set_color(ecs, &b.trail_mat, c * 2.6);
         set_color(ecs, &b.spiral_mat, c * 3.2 + Vec3::splat(0.3));
         if let Some(mut l) = ecs.get_mut::<PointLight>(b.light) {
@@ -160,7 +169,11 @@ impl Bolts {
             let pulse = 1.0 + 0.18 * (t * 60.0).sin();
             scale_of(ecs, b.core, Vec3::splat(pulse));
             scale_of(ecs, b.halo, Vec3::splat(1.1 - 0.1 * pulse));
-            let lp = point_light(Color::WHITE, 6.0, 6.0).intensity;
+            scale_of(ecs, b.glow, Vec3::splat(0.9 * (0.95 + 0.05 * pulse)));
+            // perto da parede a luz (que cai com 1/d²) estourava um clarão bem onde o portal abre: ela se
+            // apaga no último metro
+            let left = p.distance(b.to);
+            let lp = point_light(Color::WHITE, 6.0, 6.0).intensity * (left / 1.0).clamp(0.0, 1.0).powi(2);
             if let Some(mut l) = ecs.get_mut::<PointLight>(b.light) {
                 l.intensity = lp;
             }

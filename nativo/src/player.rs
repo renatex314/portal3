@@ -212,7 +212,28 @@ impl Player {
         let prev_center = self.pos;
         let g_up = if g.length_squared() > 0.01 { -g.normalize() } else { up };
         // em cima de uma plataforma/porta que andou: vai junto
-        let plat = if self.up_sign > 0.0 { w.doors.iter().position(|d| Some(Ent::Static(d.solid)) == self.ground) } else { None };
+        // (o controlador nem sempre diz em quê o jogador está pisando: sem isso a plataforma que
+        // anda na diagonal deixava o jogador para trás; então, se ele está no chão e os pés estão
+        // rentes ao topo de uma peça que anda, é nela que ele está)
+        let plat = if self.up_sign > 0.0 {
+            w.doors.iter().position(|d| Some(Ent::Static(d.solid)) == self.ground).or_else(|| {
+                if !self.grounded {
+                    return None;
+                }
+                let feet = self.pos.y - self.half.y;
+                w.doors.iter().position(|d| {
+                    let b = &w.solids[d.solid];
+                    if b.disabled || d.delta.length_squared() < 1e-12 || b.obb.is_some() || b.planes.is_some() {
+                        return false;
+                    }
+                    // o lugar da peça antes de andar neste quadro
+                    let (lo, hi) = (b.min - d.delta, b.max - d.delta);
+                    (hi.y - feet).abs() < 0.14 && self.pos.x > lo.x - 0.05 && self.pos.x < hi.x + 0.05 && self.pos.z > lo.z - 0.05 && self.pos.z < hi.z + 0.05
+                })
+            })
+        } else {
+            None
+        };
         let mut on_plat = None;
         if let Some(pi) = plat {
             if self.vel.dot(g_up) <= 0.05 {
@@ -221,10 +242,9 @@ impl Player {
             }
         }
         // movimento com o controlador: o filtro deixa atravessar a parede de um portal
-        let reach = (self.vel * dt).length();
-        let mouths = portals.mouths(self.pos, true, reach);
         let delta = self.vel * dt;
         let p1 = self.pos + delta;
+        let mouths = portals.mouths_swept(self.pos, p1, true);
         let mn = self.pos.min(p1) - self.half - Vec3::splat(0.05);
         let mx = self.pos.max(p1) + self.half + Vec3::splat(0.05);
         let exclude = on_plat.map(|p| w.doors[p].solid);
@@ -238,10 +258,21 @@ impl Player {
             }
         };
         let mut pos = self.pos;
+        let start = pos;
         let res = phys.move_player(&mut pos, delta, g_up, dt, allow);
         self.pos = pos;
         self.ground = res.ground;
         let mut normals = res.normals;
+        // (o controlador nem sempre lista a parede em que bateu: se andou bem menos do que devia,
+        // a diferença aponta para dentro do obstáculo e a velocidade nessa direção acaba ali)
+        let blocked = delta - (pos - start);
+        // (só paredes e tetos, no ar: no chão o controlador cola o jogador e a diferença é normal)
+        if !res.grounded && blocked.length() > 0.005 && blocked.length() > 0.3 * delta.length() {
+            let n = -blocked.normalize();
+            if n.dot(g_up) < 0.5 {
+                normals.push(n);
+            }
+        }
         if let Some(pi) = on_plat {
             let b = &w.solids[w.doors[pi].solid];
             let over = self.pos.x > b.min.x - self.half.x + 0.05 && self.pos.x < b.max.x + self.half.x - 0.05 && self.pos.z > b.min.z - self.half.z + 0.05 && self.pos.z < b.max.z + self.half.z - 0.05;

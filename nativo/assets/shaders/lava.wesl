@@ -35,17 +35,21 @@ fn l_noise(p: vec2<f32>) -> f32 {
     let u = f * f * (3.0 - 2.0 * f);
     return mix(mix(l_hash(i), l_hash(i + vec2<f32>(1.0, 0.0)), u.x), mix(l_hash(i + vec2<f32>(0.0, 1.0)), l_hash(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
 }
-fn l_fbm(p0: vec2<f32>) -> f32 {
+fn l_fbm_n(p0: vec2<f32>, octaves: i32) -> f32 {
     var s = 0.0;
     var a = 0.5;
     var p = p0;
-    for (var i = 0; i < 5; i++) {
+    var norm = 0.0;
+    for (var i = 0; i < octaves; i++) {
         s += a * l_noise(p);
+        norm += a;
         p = mat2x2<f32>(1.6, 1.2, -1.2, 1.6) * p;
         a *= 0.5;
     }
-    return s;
+    // (com menos oitavas a soma tem de continuar na mesma faixa de valores dos 5 originais: ~0,97)
+    return s * (0.96875 / norm);
 }
+fn l_fbm(p0: vec2<f32>) -> f32 { return l_fbm_n(p0, 5); }
 // (distância ao centro da placa, distância até a borda, sorteio da placa)
 fn l_voro(p: vec2<f32>, t: f32) -> vec3<f32> {
     let i = floor(p);
@@ -81,14 +85,16 @@ fn lava_heat(w: vec3<f32>, nrm: vec3<f32>) -> Heat {
     let p = p2 * 0.55;
     let t = lava.time;
     let flow = vec2<f32>(t * 0.035, t * 0.022);
-    let ww = vec2<f32>(l_fbm(p * 0.6 + flow), l_fbm(p * 0.6 - flow + 7.3));
+    let ww = vec2<f32>(l_fbm_n(p * 0.6 + flow, 3), l_fbm_n(p * 0.6 - flow + 7.3, 3));
     let q = p + (ww - 0.5) * 1.4 + flow * 0.5;
     let v = l_voro(q, t);
-    let n = l_fbm(q * 3.0);
+    let n = l_fbm_n(q * 3.0, 4);
     let aa = fwidth(v.y) * 1.5;
     let crack = 1.0 - smoothstep(0.01, 0.035 + 0.09 * n * n + 0.04 * v.z + aa, v.y);
-    let pool = smoothstep(0.6, 0.8, l_fbm(p * 0.22 + vec2<f32>(-t * 0.01, t * 0.008) + 3.1));
-    var T = max(crack * (0.72 + 0.28 * n), pool * (0.78 + 0.22 * l_fbm(q * 1.5 + t * 0.1)));
+    let pool = smoothstep(0.6, 0.8, l_fbm_n(p * 0.22 + vec2<f32>(-t * 0.01, t * 0.008) + 3.1, 3));
+    var pool_t = 0.0;
+    if (pool > 0.002) { pool_t = pool * (0.78 + 0.22 * l_fbm_n(q * 1.5 + t * 0.1, 3)); }
+    var T = max(crack * (0.72 + 0.28 * n), pool_t);
     T = max(T, (1.0 - smoothstep(0.0, 0.16, v.y)) * 0.3 * (1.0 - 0.7 * v.z));
     // bolhas nas poças
     let bc = p * 1.3;

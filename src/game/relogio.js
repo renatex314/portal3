@@ -21,10 +21,15 @@
 //    dele, porta/cubo na rota, chão que sumiu, destino ocupado, o objeto que ele usou
 //    não está no lugar ou foi tirado dele…) o loop colapsa e você volta ao instante
 //    do salto, com os portais como estavam.
+//  • A LINHA DO TEMPO (linha.js): bolas, objetos e o laser que vão ao passado têm trechos
+//    de vida lá e compromissos (entrar de novo no ciano na hora). Um compromisso que não se
+//    cumpre só é paradoxo se algo dependia do trecho (um receptor, um botão) e nada mais
+//    mantém isso; coisas iguais (bolas, cubos do mesmo modelo) fazem o papel umas das outras.
 
 import * as THREE from 'three';
 import { tl, num } from './i18n.js';
 import { PORTAL_A, PORTAL_B } from './portals.js';
+import { Linha, vooEm, novoDuplo, receptorPorOutra, botaoPorOutro, TOL_T, TOL_LASER, PENDENTE, CUMPRIDO } from './linha.js';
 
 const RATE = 1 / 30; // intervalo entre os quadros guardados (tempo do mundo)
 const KEEP = 120; // segundos de história
@@ -47,6 +52,45 @@ function doorOffset(d, open, out) {
 
 const overlap = (aMin, aMax, bMin, bMax, eps = 0) =>
   aMin.x < bMax.x - eps && aMax.x > bMin.x + eps && aMin.y < bMax.y - eps && aMax.y > bMin.y + eps && aMin.z < bMax.z - eps && aMax.z > bMin.z + eps;
+
+/**
+ * A partir do quadro `from`, a gravação passa a dizer que o seu passado usou o objeto `j` no lugar de
+ * `k` (e o `k` fez o que o `j` fazia): troca os dois em cada foto, no objeto segurado e nos empurrados
+ */
+function swapInScript(script, from, k, j) {
+  const sw = (x) => (x === k ? j : x === j ? k : x);
+  for (let i = from; i < script.length; i++) {
+    const s = script[i];
+    const props = s.w.props.slice();
+    [props[k], props[j]] = [props[j], props[k]];
+    script[i] = { ...s, h: s.h >= 0 ? sw(s.h) : s.h, hm: s.hm?.map(sw), pm: s.pm?.map(sw), w: { ...s.w, props } };
+  }
+}
+
+/**
+ * O corpo (caixa min–max) entra mais de `eps` na peça? Pela forma de verdade: a caixa alinhada aos eixos
+ * de uma peça girada ou convexa (mapas importados, paredes em diagonal, rampas) é bem maior que ela —
+ * perto de uma, no ar, o corpo "encostava" e o seu passado acusava um bloqueio que não existe
+ */
+function solidTouches(b, min, max, eps) {
+  if (!overlap(min, max, b.min, b.max, eps)) return false;
+  let planes = b.planes;
+  if (!planes && b.obb) {
+    planes = [];
+    for (let i = 0; i < 3; i++)
+      for (const sgn of [1, -1]) {
+        const n = new V3(i === 0 ? sgn : 0, i === 1 ? sgn : 0, i === 2 ? sgn : 0).applyQuaternion(b.obb.q);
+        planes.push({ n, d: n.dot(b.obb.c) + b.obb.half.getComponent(i) });
+      }
+  }
+  if (!planes) return true;
+  // a caixa encolhida da folga: separada por algum plano da peça? então não entra nela
+  const a = min.clone().addScalar(eps);
+  const c = max.clone().subScalar(eps);
+  const corners = [];
+  for (const x of [a.x, c.x]) for (const y of [a.y, c.y]) for (const z of [a.z, c.z]) corners.push(new V3(x, y, z));
+  return !planes.some((pl) => corners.every((q) => pl.n.dot(q) > pl.d));
+}
 
 export class Chronos {
   /**
@@ -87,16 +131,24 @@ export class Chronos {
     this.clear();
   }
 
+  /** os duplos dos objetos mandados ao passado: os da linha do tempo */
+  get doubles() {
+    return this.linha?.duplos ?? [];
+  }
+
+  set doubles(v) {
+    if (this.linha) this.linha.duplos = v;
+  }
+
   // ------------------------------------------------------------------ estado
   clear() {
     if (this.frozenProps) this.setFreeze(false);
     for (const d of this.doubles ?? []) this.dropDouble(d);
     this.doubles = [];
-    this.ballDoubles = [];
+    // a linha do tempo das bolas: voos no passado, saídas pelo ciano e compromissos
+    this.linha = new Linha();
     this.pastEntries = [];
-    this.ballQueue = [];
-    this.blueEntries = [];
-    this.loopTw = null;
+    this.standIns = 0;
     for (const c of this.clones ?? []) this.dropClone(c);
     this.paused = false;
     this.tw = 0;
@@ -198,7 +250,7 @@ export class Chronos {
       ...this.gapMoves(),
       ...(this.markArrive ? { arrive: true } : {}),
       // atravessando um portal (a caixa do corpo entra na parede/teto dele): não é obstrução
-      ...(this.ctx.portals?.mouths(player.pos, true, 0.5).length || player.cooldown > -0.4 ? { inMouth: true } : {}),
+      ...(this.nearMouth() ? { inMouth: true } : {}),
       // lasers entrando num azul temporal agora (viram feixes saindo do laranja Δ s antes)
       lz: (this.ctx.beams?.liveEntries ?? []).map((e) => ({ delta: e.delta, at: e.at.clone(), exit: e.exit.clone(), dir: e.dir.clone(), frame: e.frame, bridge: e.bridge || false })),
       w: this.snapshot(),
@@ -363,19 +415,34 @@ export class Chronos {
     this.ctx.fx.pause?.(on);
   }
 
+  /**
+   * o corpo está na boca de um portal (entrando ou saindo)? Em alta velocidade o jogador cruza o
+   * plano do portal mais para a beirada do que a boca "de andar" aceita, e o quadro antes da
+   * travessia pode estar a até um passo de distância: a abertura e o alcance crescem com a velocidade
+   */
+  nearMouth() {
+    const { player, portals } = this.ctx;
+    const speed = player.vel?.length?.() ?? 0;
+    const step = Math.min(3, speed / 40); // (um quadro a 60 por segundo, com folga)
+    return !!(portals?.mouths(player.pos, true, 0.5 + step, 0.3).length || player.cooldown > -0.4);
+  }
+
   /** com o tempo parado: o caminho que você anda (um ponto a cada ~25 cm, e se estava pisando em algo) */
   trackFrozen() {
-    const { player, portals } = this.ctx;
+    const { player } = this.ctx;
     const path = (this.frozenPath ??= []);
     const last = path[path.length - 1];
     if (last && last.p.distanceTo(player.pos) < 0.25 && last.grounded === !!player.grounded) return;
     if (path.length > 4000) return; // (andando muito tempo parado: o começo já basta)
+    // um salto de posição entre dois pontos (passou por um portal): os dois lados estão na boca dele
+    const teleported = !!last && last.p.distanceTo(player.pos) > 2.5;
+    if (teleported) last.inMouth = true;
     path.push({
       p: player.pos.clone(),
       up: player.upSign,
       grounded: !!player.grounded,
       // atravessando um portal: a caixa do corpo entra na parede dele, não é obstrução
-      inMouth: !!(portals?.mouths(player.pos, true, 0.5).length || player.cooldown > -0.4),
+      inMouth: teleported || this.nearMouth(),
     });
   }
 
@@ -561,7 +628,7 @@ export class Chronos {
     const pb = b.w.props[k];
     const smooth = pb && !b.gap && !pa.gone && !pb.gone && pa.p.distanceTo(pb.p) < 2.5;
     const t = smooth ? Math.max(0, Math.min(1, f - i)) : 0;
-    return { p: pa.p.clone().lerp(smooth ? pb.p : pa.p, t), q: pa.q.clone().slerp(smooth ? pb.q : pa.q, t), v: pa.v, a: pa.a, gone: pa.gone, held: a.h === k };
+    return { p: pa.p.clone().lerp(smooth ? pb.p : pa.p, t), q: pa.q.clone().slerp(smooth ? pb.q : pa.q, t), v: pa.v, a: pa.a, gone: pa.gone, portaled: !!pa.portaled, held: a.h === k };
   }
 
   /** trechos do script em que você mexeu em cada objeto: [{ k, j0, j1 }] (índices do script) */
@@ -668,17 +735,45 @@ export class Chronos {
         if (f < e.j0 - 1e-6 || f >= e.j1 + 1 || c.echo?.k === e.k) continue;
         const prop = props[e.k];
         const st = prop && this.propAt(c.script, f, e.k);
-        if (!st || st.gone) continue;
-        if (prop === held) {
-          this.rollback(c.cp, 'você pegou o objeto que o seu passado estava usando', prop.pos.clone());
-          return true;
-        }
-        if (this.free.has(prop)) {
-          // fora do trilho: só dá se ainda estiver onde o seu passado o encontrou
-          if (prop.gone || prop.pos.distanceTo(st.p) > MISPLACED) {
-            this.rollback(c.cp, 'o objeto que o seu passado usou não estava mais no lugar', prop.pos.clone());
+        if (!st) continue;
+        // âncora: o seu passado usa este objeto agora. Se ele não pode (foi para o futuro por um
+        // vermelho, está na sua mão, saiu do lugar), outro igual que esteja onde ele estaria faz o
+        // papel dele (outro caminho); só sem nenhum é paradoxo. "O lugar" é onde o seu passado o
+        // encontrou: a foto de logo antes de ele começar a usá-lo (mexido com o tempo parado, a foto do
+        // instante já o tem onde ele o deixou)
+        const before = e.j0 > 0 ? this.propAt(c.script, e.j0 - 1, e.k) : null;
+        const found = before && !before.gone ? before.p : st.p;
+        const misplaced = (p) => Math.min(p.distanceTo(found), p.distanceTo(st.p)) > MISPLACED;
+        let why = null;
+        if (st.gone) {
+          // o seu passado usa um cubo que, nesta história, já caiu num vermelho e foi para o futuro
+          if (!st.portaled) continue;
+          why = 'o seu passado usou um cubo que já tinha entrado no vermelho';
+        } else if (prop === held) why = 'você pegou o objeto que o seu passado estava usando';
+        else if (this.free.has(prop) && (prop.gone || misplaced(prop.pos))) why = 'o objeto que o seu passado usou não estava mais no lugar';
+        if (why) {
+          const fi = Math.max(0, Math.floor(f));
+          let want = st.gone ? null : found;
+          for (let j = Math.min(fi, c.script.length) - 1; !want && j >= 0; j--) {
+            const q = c.script[j].w.props[e.k];
+            if (q && !q.gone) want = q.p;
+          }
+          const busy = c.eps.filter((x) => f >= x.j0 - 1e-6 && f < x.j1 + 1).map((x) => x.k);
+          const j = want ? this.standIn(e.k, want, busy) : -1;
+          if (j < 0) {
+            this.rollback(c.cp, why, prop.pos.clone());
             return true;
           }
+          swapInScript(c.script, fi, e.k, j);
+          c.eps = this.episodes(c.script, c.echo?.k ?? -1);
+          this.free.add(prop);
+          this.snap.delete(prop);
+          this.free.delete(props[j]);
+          this.snap.add(props[j]);
+          this.standIns++;
+          break;
+        }
+        if (this.free.has(prop)) {
           this.free.delete(prop);
           this.snap.add(prop);
         }
@@ -721,6 +816,27 @@ export class Chronos {
     });
     this.driven = next;
     return false;
+  }
+
+  /**
+   * Um objeto igual a `k` (mesmo tipo e mesmo modelo), solto, que não está na sua mão nem em uso
+   * pelo seu passado agora, e que está onde `k` deveria estar: ele faz o papel de `k` (índice, ou −1)
+   */
+  standIn(k, at, busy) {
+    const props = this.props();
+    const a = props[k];
+    const held = this.ctx.held?.();
+    let best = -1;
+    let bd = MISPLACED;
+    props.forEach((b, j) => {
+      if (j === k || busy.includes(j) || b === held || b.gone || b.kind !== a.kind || !!b.special !== !!a.special || !!b.redirect !== !!a.redirect) return;
+      const d = b.pos.distanceTo(at);
+      if (d <= bd) {
+        bd = d;
+        best = j;
+      }
+    });
+    return best;
   }
 
   /** esquece os objetos em uso (salto e paradoxo: o mundo foi refeito por `restore`) */
@@ -979,19 +1095,42 @@ export class Chronos {
 
   // ------------------------------------------------------------------ bolas e objetos pelo par temporal
   /**
-   * Bola que bate no laranja temporal: ela entrou no portal aberto no passado, então
-   * (loop fechado) sai pelo azul Δ segundos depois — como o laser. Devolve true (a
-   * bola some agora).
+   * Bola que bate num vermelho temporal (o seu, o de uma versão passada ou o de estática, que uma
+   * versão passada ainda vai abrir ali — `orangeAt`, a mesma resposta do desenho): ela entrou no
+   * portal aberto no passado e (laço fechado) sai pelo ciano Δ s depois — a mesma bola (a mesma
+   * identidade). Devolve true (a bola some agora).
    */
-  ballIntoPast(p, O) {
+  ballIntoOrange(p, at) {
     if (this.paused || this.sweep) return false;
-    const pos = p.pos.clone();
-    const vel = p.vel.clone();
-    this.ballQueue ??= [];
-    this.ballQueue.push({ tIn: this.tw, tOut: this.tw + O.delta, pos, vel, key: this.orangeKey(O), O, life: p.from?.life ?? p.life });
-    (this.pastEntries ??= []).push({ li: this.ctx.world.launchers.indexOf(p.from), tIn: this.tw });
-    this.ctx.fx.fizzleBall?.(pos);
+    const O = this.orangeAt(at);
+    if (!O) return false;
+    this.linha.saidas.push({ uid: p.uid, tIn: this.tw, tOut: this.tw + O.delta, pos: p.pos.clone(), vel: p.vel.clone(), key: O.key, life: p.from?.life ?? p.life });
+    this.pastEntries.push({ li: this.ctx.world.launchers.indexOf(p.from), tIn: this.tw });
+    this.ctx.fx.fizzleBall?.(p.pos.clone());
     return true;
+  }
+
+  /**
+   * A boca de vermelho temporal no ponto `at` (na superfície) neste instante do mundo: o seu ou o
+   * de uma versão passada, abertos, ou o de estática (que uma versão passada ainda vai abrir) —
+   * { key, delta } ou null. É daqui que saem também os vermelhos de estática desenhados.
+   */
+  orangeAt(at) {
+    const { portals } = this.ctx;
+    for (const O of portals.list) {
+      if (!O.placed || !(O.delta > 0) || !portals.isLinked(O)) continue;
+      const l = O.local(at);
+      if (Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1) return { key: this.orangeKey(O), delta: O.delta };
+    }
+    for (const w of this.liveGhosts()) {
+      const f = w.f;
+      const d = at.clone().sub(f.c);
+      if (Math.abs(d.dot(f.n)) > 0.1) continue;
+      const right = new THREE.Vector3().crossVectors(f.u, f.n).normalize();
+      if ((d.dot(right) / PORTAL_A) ** 2 + (d.dot(f.u) / PORTAL_B) ** 2 > 1) continue;
+      return { key: this.frameKey(f.c), delta: w.delta };
+    }
+    return null;
   }
 
   orangeKey(O) {
@@ -1072,106 +1211,152 @@ export class Chronos {
     return out;
   }
 
-  /** bola que bate num vermelho do passado: some ali e sai pelo ciano Δ s depois (true = some agora) */
-  ballIntoGhost(p, at) {
-    if (this.paused || this.sweep) return false;
-    for (const w of this.liveGhosts()) {
-      const f = w.f;
-      const d = at.clone().sub(f.c);
-      if (Math.abs(d.dot(f.n)) > 0.1) continue;
-      const right = new THREE.Vector3().crossVectors(f.u, f.n).normalize();
-      if ((d.dot(right) / PORTAL_A) ** 2 + (d.dot(f.u) / PORTAL_B) ** 2 > 1) continue;
-      (this.ballQueue ??= []).push({ tIn: this.tw, tOut: this.tw + w.delta, pos: p.pos.clone(), vel: p.vel.clone(), key: this.frameKey(f.c), life: p.from?.life ?? p.life });
-      (this.pastEntries ??= []).push({ li: this.ctx.world.launchers.indexOf(p.from), tIn: this.tw });
-      this.ctx.fx.fizzleBall?.(p.pos.clone());
-      return true;
-    }
-    return false;
-  }
-
   /**
-   * Bolas que (na história) entraram no azul temporal: quando o tempo passa de novo por
-   * aquele instante — você voltou para antes dele —, a mesma bola some ali (ela é a que
-   * saiu do laranja lá atrás). Se ela não estiver lá (você mexeu no caminho dela), é paradoxo.
+   * A cada quadro: a linha do tempo anda (ou volta), os voos no passado entram no mundo quando é a
+   * hora deles, compromissos que passaram da hora se resolvem, as saídas pelo ciano acontecem e as
+   * bolas da história que bateram onde hoje está o vermelho entram nele.
    */
-  closeBallLoops() {
-    const prev = this.loopTw ?? this.tw;
-    this.loopTw = this.tw;
-    if (!this.blueEntries?.length || this.paused || this.sweep) return;
-    this.blueEntries = this.blueEntries.filter((e) => this.tw - e.t < KEEP);
-    // o tempo voltou para antes de um laço já fechado: ele tem de fechar de novo
-    for (const e of this.blueEntries) if (e.closedAt > this.tw + 1e-6) e.closedAt = undefined;
-    if (!(this.tw > prev)) return;
-    for (const e of this.blueEntries) {
-      if (!(e.t > prev && e.t <= this.tw)) continue;
-      if (e.closedAt !== undefined) continue; // ela já entrou no ciano (um pouco antes) desta vez
-      const p = this.ctx.energy.pellets.find((q) => this.sameBall(e, q));
-      if (!p) {
-        // ela sumiu antes da hora (pega, destruída, nem foi lançada): a que veio do futuro não poderia existir
-        this.ctx.fx.paradox?.('a esfera que foi para o passado não chegou ao ciano desta vez', e.pos.clone());
-        continue;
-      }
-      if (p.pos.distanceTo(e.pos) < 2.5) {
-        this.ctx.fx.changed?.(p); // entrou no azul (que já não está aqui): vai para o passado
-        this.ctx.energy.kill(p);
-        e.closedAt = this.tw;
-      } else this.ctx.fx.paradox?.('a esfera que foi para o passado não passou pelo ciano desta vez', p.pos.clone());
-    }
-  }
-
-  /**
-   * a bola `q` é a mesma da entrada `e` no azul? Pela identidade, ou pelo lançador: se você
-   * voltou para antes de ela ser lançada, o lançador a dispara de novo com outra identidade
-   */
-  sameBall(e, q) {
-    return e.uid === q.uid || (e.li >= 0 && e.li === this.ctx.world.launchers.indexOf(q.from));
-  }
-
-  /** solta pelo azul as bolas cuja hora de sair chegou (chamado a cada quadro) */
   pastPellets() {
     this.ctx.portals.setGhostStatics?.(this.liveGhosts().map((w) => ({ ...w.f, view: this.ghostExit(w) })));
-    const prev = this.loopTw ?? this.tw;
-    this.closeBallLoops();
-    // bolas mandadas ao passado: você voltou para antes de elas saírem do vermelho e o
-    // tempo chegou de novo àquele instante — elas saem de novo (a história se repete)
-    if (this.tw > prev && !this.paused && !this.sweep)
-      for (const d of this.ballDoubles ?? []) {
-        if (!(d.from > prev && d.from <= this.tw) || !d.track.length) continue;
-        const a = d.track[0].p;
-        const v = d.v0.clone();
-        const np = this.ctx.energy.spawnFree(a.clone(), v, d.life ?? 10);
-        d.liveFrom = Math.min(d.liveFrom ?? Infinity, d.from);
-        np.cooldown = 0.15;
-        if (d.uid) np.uid = d.uid;
-        this.ctx.fx.launch?.(a.clone());
-      }
-    // o tempo voltou (salto, paradoxo): as entradas no laranja depois de agora não aconteceram
-    if (this.pastEntries?.length) this.pastEntries = this.pastEntries.filter((e) => e.tIn <= this.tw + 1e-6);
-    this.scanPastBalls();
-    if (!this.ballQueue?.length) return;
+    // o tempo voltou (salto, paradoxo): as entradas no vermelho depois de agora não aconteceram
+    if (this.linha.irPara(this.tw)) this.pastEntries = this.pastEntries.filter((e) => e.tIn <= this.tw + 1e-6);
+    if (this.paused || this.sweep) return;
     const { portals, energy } = this.ctx;
-    // o tempo voltou (salto, paradoxo): o que entrou depois de agora não aconteceu
-    this.ballQueue = this.ballQueue.filter((b) => b.tIn <= this.tw + 1e-6);
+    // voos no passado: a bola mais velha está no mundo enquanto o instante cai no trecho dela
+    const have = new Set(energy.pellets.map((q) => q.uid));
+    for (const m of this.linha.aMaterializar(this.tw, (u) => have.has(u))) {
+      const np = energy.spawnFree(m.p, m.v, m.life);
+      np.uid = m.voo.uid;
+      np.cooldown = 0.15;
+      m.voo.noMundoDesde = Math.min(m.voo.noMundoDesde ?? Infinity, this.tw);
+      this.ctx.fx.launch?.(m.p.clone());
+    }
+    this.commitments();
+    this.scanPastBalls();
     const keep = [];
-    for (const b of this.ballQueue) {
+    for (const b of this.linha.saidas) {
       if (this.tw < b.tOut) {
         keep.push(b);
         continue;
       }
-      // o laranja mudou de lugar ou fechou: a bola se perdeu no tempo
+      // o vermelho mudou de lugar ou fechou: a bola se perdeu no tempo
       // depois de um salto, o vermelho é o da sua versão passada (o mesmo lugar)
-      const fits = (Q) => Q?.placed && Q.delta > 0 && portals.isLinked(Q) && this.orangeKey(Q) === b.key;
-      const O = [b.O ?? portals.orange, ...portals.list].find(fits);
+      const O = portals.list.find((Q) => Q?.placed && Q.delta > 0 && portals.isLinked(Q) && this.orangeKey(Q) === b.key);
       if (!O) continue;
+      // a mesma bola sai (se ela já estiver no mundo, é a da foto: não duplica)
+      if (b.uid && energy.pellets.some((q) => q.uid === b.uid)) continue;
       const pos = b.pos.clone();
       const vel = b.vel.clone();
       portals.carry(O, pos, vel);
       pos.addScaledVector(vel.clone().normalize(), 0.25);
       const np = energy.spawnFree(pos, vel, b.life);
+      if (b.uid) np.uid = b.uid;
       np.cooldown = 0.15;
       this.ctx.fx.launch?.(pos);
     }
-    this.ballQueue = keep;
+    this.linha.saidas = keep;
+    this.linha.esquecerAntigos(this.tw, KEEP);
+  }
+
+  /**
+   * Compromissos: a bola atrasada que ainda está chegando à boca entra agora (o laço fecha); o objeto
+   * no trilho da gravação repete o que aconteceu (inclusive entrar no ciano); os que passaram da hora
+   * quebram — sem dependentes, o trecho que sustentavam some da história (o voo da bola, o duplo do
+   * objeto, a emissão do laser); com uma âncora (receptor, botão), é paradoxo, a não ser que outra
+   * coisa a mantenha (outro caminho).
+   */
+  commitments() {
+    const { energy, world } = this.ctx;
+    const props = this.props();
+    for (const c of this.linha.compromissos) {
+      if (c.estado !== PENDENTE || this.tw < c.t) continue;
+      if (c.tipo === 'objeto') {
+        if (props[c.k] && this.driven.has(props[c.k])) {
+          c.estado = CUMPRIDO;
+          c.quando = this.tw;
+        }
+        continue;
+      }
+      if (c.tipo !== 'bola') continue;
+      const p = energy.pellets.find((q) => (q.uid === c.quem || (c.li >= 0 && c.li === world.launchers.indexOf(q.from))) && q.pos.distanceTo(c.onde) < 2.5);
+      if (!p) continue;
+      this.ctx.fx.changed?.(p); // entrou no ciano (que já não está aqui): vai para o passado
+      energy.kill(p);
+      c.estado = CUMPRIDO;
+      c.quando = this.tw;
+    }
+    for (const r of this.linha.vencidos(this.tw)) {
+      const x = r.apagar ?? r.ancora;
+      if (r.apagar || this.anchorsKept(r)) {
+        this.erase(r.c, x);
+        continue;
+      }
+      if (r.c.tipo === 'bola') this.ctx.fx.paradox?.('a esfera que foi para o passado não chegou ao ciano desta vez', r.c.onde.clone());
+      else if (r.c.tipo === 'objeto') this.ctx.fx.paradox?.('o objeto que foi para o passado não entrou no ciano desta vez (ele apertou um botão lá)', r.c.onde.clone());
+      else {
+        // o laser do passado ligou um receptor: sem ele, o loop se desfaz
+        const cl = this.clones.find((k) => k.id === r.c.clone);
+        if (cl) {
+          this.rollback(cl.cp, 'o laser não voltou a entrar no ciano (era ele que saía do vermelho)', r.c.onde.clone());
+          return;
+        }
+      }
+    }
+  }
+
+  /** as âncoras de um trecho que deixou a história continuam de pé por outro caminho? */
+  anchorsKept(r) {
+    const { world } = this.ctx;
+    if (r.c.tipo === 'bola') return r.receptores.every((k) => this.catcherReachedOtherwise(k, r.ancora.uid));
+    if (r.c.tipo === 'laser') return r.receptores.every((k) => this.ctx.beams?.litPresent?.has(k));
+    // botões que o duplo apertou: outra coisa (outro objeto, você, o próprio objeto mais novo) também estava lá
+    return r.botoes.every(([b, t]) => {
+      const B = world.buttons[b];
+      const S = this.samples[this.indexAt(t)];
+      return !B || !S || botaoPorOutro(B.pos, S.w.props, -1, S.p);
+    });
+  }
+
+  /** some da história um trecho cujo compromisso quebrou sem que nada dependesse dele */
+  erase(c, x) {
+    if (c.tipo === 'bola') return this.eraseFlight(x);
+    this.linha.apagar(x);
+    if (c.tipo === 'objeto') this.poseDouble(x, null);
+  }
+
+  /** some da história o voo de uma bola (e o que saiu dele); a bola mais velha, se estiver no mundo, se desfaz */
+  eraseFlight(v) {
+    const uid = this.linha.apagar(v);
+    const p = this.ctx.energy.pellets.find((q) => q.uid === uid);
+    if (p) {
+      this.ctx.fx.changed?.(p);
+      this.ctx.energy.kill(p);
+    }
+  }
+
+  /** outra bola (não `uid`) chegou ao receptor `k`? Agora ou na história gravada: então ele continua ligado sem o voo */
+  catcherReachedOtherwise(k, uid) {
+    const { world, energy } = this.ctx;
+    const C = world.catchers[k];
+    if (!C) return false;
+    const r = C.radius ?? 0.8;
+    if (receptorPorOutra(C.pos, r, energy.pellets.map((q) => ({ uid: q.uid, li: world.launchers.indexOf(q.from), pos: q.pos })), uid)) return true;
+    const near = (w) => receptorPorOutra(C.pos, r, w.pellets.map((q) => ({ uid: q.uid, li: q.li, pos: q.pos })), uid);
+    return this.samples.some((s) => near(s.w)) || this.clones.some((c) => c.script.some((s) => near(s.w)));
+  }
+
+  /** regras que a linha do tempo nunca pode quebrar (testes e depuração) */
+  invariants() {
+    const out = [];
+    const seen = new Set();
+    for (const p of this.ctx.energy.pellets) {
+      if (seen.has(p.uid)) out.push(`a bola ${p.uid} existe duas vezes ao mesmo tempo`);
+      seen.add(p.uid);
+    }
+    if (!this.sweep && !this.paused)
+      for (const c of this.linha.compromissos)
+        if (c.estado === PENDENTE && this.tw > c.t + c.tol + 0.5) out.push(`compromisso de ${c.t.toFixed(2)} s ainda pendente em ${this.tw.toFixed(2)} s`);
+    return out;
   }
 
   /**
@@ -1199,7 +1384,7 @@ export class Chronos {
     const cur = this.tw - O.delta;
     const from = this.scanTs.get(O) ?? cur;
     this.scanTs.set(O, cur);
-    const limit = Math.min(cur, O.placedTw ?? -Infinity); // depois de abrir, quem cuida é ballIntoPast
+    const limit = Math.min(cur, O.placedTw ?? -Infinity); // depois de abrir, quem cuida é ballIntoOrange
     if (!(limit > from)) return;
     const n = O.normal;
     const R = 0.16;
@@ -1231,7 +1416,11 @@ export class Chronos {
           if (!ball) break; // a bola acabou
           const flip = S.catchers.findIndex((on, c) => on && !P0.catchers[c] && world.catchers[c]?.pos.distanceTo(ball.pos) < 1.5);
           if (flip >= 0) {
-            caughtLater = true;
+            // âncora: o receptor ligado por ela. Outra bola chegou a ele depois? então ele continua
+            // ligado sem ela (outro caminho) e ela pode ter entrado no vermelho
+            const C = world.catchers[flip];
+            const after = this.samples.slice(j);
+            caughtLater = !after.some((s) => receptorPorOutra(C.pos, C.radius ?? 0.8, s.w.pellets.map((q) => ({ uid: q.uid, li: q.li, pos: q.pos })), a.uid, a.li));
             break;
           }
           if (!S.pellets.some((q) => q.li === a.li)) break; // sumiu sem ser pega
@@ -1248,10 +1437,79 @@ export class Chronos {
             energy.kill(p);
           }
         }
-        (this.pastEntries ??= []).push({ li: a.li, tIn: tHit });
-        const out = { tIn: tHit, tOut: tHit + O.delta, pos: at, vel: a.vel.clone(), key: this.orangeKey(O), life: world.launchers[a.li]?.life ?? a.life };
-        (this.ballQueue ??= []).push(out);
+        this.pastEntries.push({ li: a.li, tIn: tHit });
+        this.linha.saidas.push({ uid: a.uid, tIn: tHit, tOut: tHit + O.delta, pos: at, vel: a.vel.clone(), key: this.orangeKey(O), life: world.launchers[a.li]?.life ?? a.life });
       }
+    }
+    this.scanPastCubes(O, from, limit);
+  }
+
+  /**
+   * Cubos que JÁ estavam na história (antes de você abrir o laranja): quando o instante mostrado
+   * pelo laranja chega a um cubo dentro da boca dele, o cubo cai no portal e sai agora pelo azul
+   * (o cubo de agora é o mesmo: some de onde está e aparece no azul). Se, depois, esse cubo
+   * segurou um botão na história, tirá-lo de lá é um paradoxo e ele fica onde estava.
+   */
+  scanPastCubes(O, from, limit) {
+    const { portals, world } = this.ctx;
+    const props = this.props();
+    const blue = O.partner;
+    if (!blue?.placed) return;
+    for (let i = Math.max(1, this.indexAt(from)); i <= this.indexAt(limit); i++) {
+      const A = this.samples[i - 1];
+      const B = this.samples[i];
+      if (!A || !B || B.t <= from - 1e-6) continue;
+      A.w.props.forEach((pr, k) => {
+        const prop = props[k];
+        if (!prop || prop.kind !== 'cube' || pr.gone) return;
+        const l = O.local(pr.p);
+        const h = prop.half?.y ?? 0.3;
+        if (l.z < -0.1 || l.z > h + 0.3) return;
+        if ((l.x / (PORTAL_A + 0.08)) ** 2 + (l.y / (PORTAL_B + 0.08)) ** 2 > 1) return;
+        const key = `cube${k}|${this.orangeKey(O)}`;
+        if (this.pastHits?.has(key)) return;
+        (this.pastHits ??= new Set()).add(key);
+        if (prop.gone || prop.held) return;
+        // consequências: depois disso, esse cubo segurou um botão sozinho? (âncora; com outra coisa
+        // em cima do botão ao mesmo tempo, o botão continua apertado sem ele)
+        for (let j = i + 1; j < this.samples.length; j++) {
+          const S = this.samples[j].w;
+          const q = S.props[k];
+          if (!q || q.gone) break;
+          const on = S.buttons.findIndex(([pressed], b) => pressed && world.buttons[b]?.pos.distanceTo(q.p) < 0.9);
+          if (on >= 0 && !botaoPorOutro(world.buttons[on].pos, S.props, k, this.samples[j].p)) {
+            this.ctx.fx.paradox?.('esse cubo do passado segurou um botão depois: ele não pode ter entrado no vermelho', pr.p);
+            return;
+          }
+        }
+        const pos = pr.p.clone();
+        const vel = pr.v ? new V3(pr.v[0], pr.v[1], pr.v[2]) : new V3();
+        const { rot } = portals.carry(O, pos, vel);
+        const quat = rot.clone().multiply(pr.q);
+        const out = blue.normal;
+        // cai para fora do azul: no mínimo um empurrãozinho no sentido dele
+        const vn = vel.dot(out);
+        if (vn < 2.5) vel.addScaledVector(out, 2.5 - vn);
+        pos.addScaledVector(out, h * 0.95 + 0.08);
+        this.free.add(prop); // sai de qualquer trilho de gravação
+        this.driven.delete(prop);
+        // a história: daquele instante até agora o cubo não estava mais lá (caiu no portal e
+        // ainda não tinha saído); só volta a existir, no azul, a partir de agora
+        // (cópia de cada foto: os pontos de volta e os clones guardam as fotos de antes; `portaled`
+        // diz que o cubo não existe mais ali POR CAUSA do portal, para o clone que o usou dar paradoxo)
+        for (let j = i; j < this.samples.length; j++) {
+          const S = this.samples[j];
+          const q = S.w.props[k];
+          if (!q || q.gone) continue;
+          const props = S.w.props.slice();
+          props[k] = { ...q, gone: true, portaled: true };
+          this.samples[j] = { ...S, w: { ...S.w, props } };
+        }
+        this.ctx.fx.changed?.(prop); // some de onde estava
+        prop.place(pos, quat, { x: vel.x, y: vel.y, z: vel.z });
+        this.ctx.fx.changed?.(prop, true); // e aparece saindo do azul
+        this.ctx.fx.toPast?.(pos);
+      });
     }
   }
 
@@ -1261,17 +1519,15 @@ export class Chronos {
    * receptor (que fica ligado), pode voltar a entrar no laranja (sai do azul Δ s depois)
    * ou acabar o tempo dela. Se no caminho ela acertaria você (onde você estava então), é
    * paradoxo: ela não vai. Se sobreviver, ela está agora onde a simulação terminou.
+   * Se você voltou no tempo e um compromisso pede uma bola aqui agora, ela o cumpre (o laço
+   * fecha: é ela que já saiu do vermelho lá atrás) em vez de ir de novo.
    */
   ballToPast(p, blue) {
     const { portals, world } = this.ctx;
     const O = blue.partner;
     const delta = O.delta;
     if (!(delta > 0) || this.paused || this.sweep) return false;
-    // repetição: esta bola já foi mandada ao passado por este azul neste instante (o
-    // da sua versão passada) — é o laço fechando; ela só entra, sem mandar de novo
-    const again = this.blueEntries?.find((e) => this.sameBall(e, p) && Math.abs(e.t - this.tw) < 0.6);
-    if (again) {
-      again.closedAt = this.tw;
+    if (this.linha.cumprir(p.uid, world.launchers.indexOf(p.from), p.pos, this.tw)) {
       this.ctx.fx.changed?.(p);
       return true;
     }
@@ -1281,30 +1537,33 @@ export class Chronos {
     const vel = p.vel.clone();
     portals.carry(blue, pos, vel);
     pos.addScaledVector(O.normal, 0.2);
-    const v0 = vel.clone(); // velocidade de saída do vermelho (a simulação muda `vel`)
-    const sim = this.simBall(pos, vel, Math.max(p.life, p.from?.life ?? 0), Td, delta);
+    const life = Math.max(p.life, p.from?.life ?? 0);
+    const sim = this.simBall(pos, vel, life, Td, delta);
     if (sim.paradox) {
       this.ctx.fx.paradox?.(sim.paradox, sim.at ?? pos);
       return 'paradox';
     }
+    // a versão mais velha da bola (a que voa no passado) tem identidade própria, fixa
+    const elder = this.ctx.energy.newUid();
     // a bola do passado só existe enquanto voou de verdade: se entrou de novo no laranja,
     // foi pega ou acabou, some ali (sem ficar "grudada" na vista do azul)
     const end = sim.alive ? this.tw : Math.min(this.tw, (sim.track[sim.track.length - 1]?.t ?? Td) + RATE);
-    (this.ballDoubles ??= []).push({ from: Td, to: end, track: sim.track, v0, mesh: null, life: Math.max(p.life, p.from?.life ?? 0) });
-    // o laço fecha: se você voltar para antes de agora, esta mesma bola (a mais nova)
-    // tem de entrar no azul de novo neste instante e neste lugar
-    if (p.uid) (this.blueEntries ??= []).push({ uid: p.uid, li: world.launchers.indexOf(p.from), t: this.tw, pos: p.pos.clone(), closedAt: this.tw });
-    for (const C of sim.caught) {
+    const voo = { uid: elder, de: Td, ate: end, track: sim.track, life, cons: sim.cons, ativo: true, noMundo: true, noMundoDesde: null };
+    this.linha.voos.push(voo);
+    // o laço fecha: se você voltar para antes de agora, uma bola tem de entrar no azul de novo aqui
+    this.linha.compromissos.push({ tipo: 'bola', quem: p.uid, li: world.launchers.indexOf(p.from), t: this.tw, tol: TOL_T, onde: p.pos.clone(), estado: CUMPRIDO, quando: this.tw, voo });
+    for (const k of sim.cons.pegou) {
+      const C = world.catchers[k];
       if (C.active) continue;
       C.active = true;
       if (p.from && !p.from.free) p.from.done = true;
       this.ctx.fx.caught?.(C);
       this.ctx.fx.changed?.(C.group, true); // o receptor de agora foi ligado lá atrás
     }
-    for (const r of sim.reenter) (this.ballQueue ??= []).push(r);
+    if (sim.reenter) this.linha.saidas.push({ ...sim.reenter, uid: elder });
     if (sim.alive) {
       const np = this.ctx.energy.spawnFree(sim.pos, sim.vel, sim.life);
-      this.ballDoubles[this.ballDoubles.length - 1].uid = np.uid; // a mesma bola, se a história se repetir
+      np.uid = elder; // a mesma bola, se a história se repetir
       np.cooldown = 0.1;
       this.ctx.fx.changed?.(np, true); // a bola aparece onde estaria agora
     }
@@ -1313,12 +1572,10 @@ export class Chronos {
 
   /** voo de uma bola no passado, de t0 a t0 + dur, contra o cenário de agora */
   simBall(pos, vel, life, t0, dur) {
-    const { world, portals } = this.ctx;
+    const { world } = this.ctx;
     const R = 0.16;
-    const O = portals.orange;
     const track = [];
-    const caught = [];
-    const reenter = [];
+    const cons = { pegou: [], reentrou: false, viva: false };
     const dt = 1 / 120;
     let next = 0;
     let t = 0;
@@ -1331,14 +1588,14 @@ export class Chronos {
       // campo de dilatação ativo ali naquele instante: a bola anda e envelhece no tempo dele
       const ks = this.ctx.timeScaleAt?.(pos, t0 + t) ?? 1;
       life -= dt * ks;
-      if (life <= 0) return { track, caught, reenter, alive: false };
+      if (life <= 0) return { track, cons };
       // você estava ali naquele instante?
       const S = this.samples[this.indexAt(t0 + t)];
       if (S) {
         const half = this.ctx.player.half;
         const d = pos.clone().sub(S.p);
         if (Math.abs(d.x) < half.x + R && Math.abs(d.y) < half.y + R && Math.abs(d.z) < half.z + R)
-          return { track, caught, reenter, paradox: 'a bola mandada ao passado teria acertado você', at: pos.clone() };
+          return { track, cons, paradox: 'a bola mandada ao passado teria acertado você', at: pos.clone() };
       }
       let rest = vel.length() * dt * ks;
       while (rest > 1e-5) {
@@ -1347,11 +1604,11 @@ export class Chronos {
         const dir = vel.clone().normalize();
         const hit = world.raycast(pos, dir, step + R);
         if (hit) {
-          // de novo no laranja: entra e sai pelo azul Δ s depois
-          const l = O.local(hit.point);
-          if (O.placed && Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1) {
-            reenter.push({ tIn: t0 + t, tOut: t0 + t + O.delta, pos: pos.clone(), vel: vel.clone(), key: this.orangeKey(O), life: Math.max(life, 1) });
-            return { track, caught, reenter, alive: false };
+          // de novo num vermelho temporal: entra e sai pelo azul Δ s depois
+          const O = this.orangeAt(hit.point);
+          if (O) {
+            cons.reentrou = true;
+            return { track, cons, reenter: { tIn: t0 + t, tOut: t0 + t + O.delta, pos: pos.clone(), vel: vel.clone(), key: O.key, life: Math.max(life, 1) } };
           }
           pos.copy(hit.point).addScaledVector(hit.normal, R + 0.002);
           vel.addScaledVector(hit.normal, -2 * vel.dot(hit.normal));
@@ -1359,13 +1616,14 @@ export class Chronos {
         }
         pos.addScaledVector(dir, step);
       }
-      const C = world.catchers.find((c) => !c.active && c.pos.distanceTo(pos) < (c.radius ?? 0.8));
-      if (C) {
-        caught.push(C);
-        return { track, caught, reenter, alive: false };
+      const k = world.catchers.findIndex((c) => !c.active && c.pos.distanceTo(pos) < (c.radius ?? 0.8));
+      if (k >= 0) {
+        cons.pegou.push(k);
+        return { track, cons };
       }
     }
-    return { track, caught, reenter, alive: true, pos, vel, life };
+    cons.viva = true;
+    return { track, cons, alive: true, pos, vel, life };
   }
 
   // ------------------------------------------------------------------ torretas e o par temporal
@@ -1472,11 +1730,11 @@ export class Chronos {
   showBallDoubles(T) {
     this.ballMeshes ??= [];
     let n = 0;
-    for (const d of this.ballDoubles ?? []) {
-      if (T < d.from - 1e-6 || T >= d.to) continue;
-      // a partir de `liveFrom` ela já é uma bola de verdade na gravação (aparece sozinha): sem desenho duplicado
-      if (T >= (d.liveFrom ?? Infinity) - 1e-6) continue;
-      const i = Math.max(0, Math.min(d.track.length - 1, Math.floor((T - d.from) / RATE)));
+    for (const v of this.linha.voos) {
+      // a partir de `noMundoDesde` ela já é uma bola de verdade na gravação (aparece sozinha): sem desenho duplicado
+      if (!v.ativo || T >= (v.noMundoDesde ?? Infinity) - 1e-6) continue;
+      const at = vooEm(v, T);
+      if (!at) continue;
       let m = this.ballMeshes[n];
       if (!m) {
         m = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10), new THREE.MeshBasicMaterial({ color: new THREE.Color(3, 1.8, 0.6), toneMapped: false }));
@@ -1484,7 +1742,7 @@ export class Chronos {
         this.ballMeshes[n] = m;
       }
       m.visible = true;
-      m.position.copy(d.track[i].p);
+      m.position.copy(at.p);
       n++;
     }
     for (let i = n; i < this.ballMeshes.length; i++) this.ballMeshes[i].visible = false;
@@ -1506,7 +1764,22 @@ export class Chronos {
     if (!(delta > 0) || this.paused || this.sweep) return;
     const Td = this.tw - delta;
     if (Td < this.samples[0].t - 1e-6) return;
-    const k = this.props().indexOf(prop);
+    const props = this.props();
+    const k = props.indexOf(prop);
+    // você voltou no tempo e um compromisso pede um objeto aqui agora: este (ou um igual a ele) o
+    // cumpre — é ele a versão mais velha que já saiu do vermelho lá atrás; ele segue dali, de onde o
+    // duplo chegou (o laço fecha, sem outro duplo)
+    const same = (a, b) => !!a && !!b && a.kind === b.kind && !!a.special === !!b.special && !!a.redirect === !!b.redirect;
+    const done = this.linha.cumprirObjeto(k, prop.pos, this.tw, (j) => same(prop, props[j]));
+    if (done) {
+      const end = done.duplo.track[done.duplo.track.length - 1];
+      this.free.add(prop);
+      this.driven.delete(prop);
+      if (end) prop.place(end.p, end.q);
+      this.ctx.fx.changed?.(prop, true);
+      return;
+    }
+    const at = prop.pos.clone();
     const pos = prop.pos.clone();
     const vel = prop.vel.clone();
     const { rot } = portals.carry(blue, pos, vel);
@@ -1557,7 +1830,10 @@ export class Chronos {
         break;
       }
     }
-    this.doubles.push({ k, prop, from: Td, to: this.tw, born, track, mesh: null, box: null });
+    const duplo = novoDuplo({ k, prop, from: Td, to: this.tw, born, track, mesh: null, box: null });
+    this.linha.duplos.push(duplo);
+    // o laço: voltando para antes de agora, um objeto (este ou um igual) tem de entrar aqui de novo
+    this.linha.compromissos.push({ tipo: 'objeto', k, t: this.tw, tol: TOL_T, onde: at, estado: CUMPRIDO, quando: this.tw, duplo });
     this.free.add(prop); // sai de qualquer trilho de gravação
     this.driven.delete(prop);
     prop.place(pos, quat, { x: vel.x, y: vel.y, z: vel.z });
@@ -1567,7 +1843,7 @@ export class Chronos {
 
   /** pose do duplo no instante t (ou null fora do intervalo dele) */
   doubleAt(d, t) {
-    if (t < d.from - 1e-6 || t >= d.to) return null;
+    if (d.ativo === false || t < d.from - 1e-6 || t >= d.to) return null;
     const i = Math.max(0, Math.min(d.track.length - 1, Math.floor((t - d.from) / RATE)));
     const a = d.track[i];
     const b = d.track[Math.min(i + 1, d.track.length - 1)];
@@ -1600,9 +1876,20 @@ export class Chronos {
     if (!this.doubles?.length) return;
     const phys = this.ctx.world.physics;
     const sample = this.samples[this.indexAt(this.tw)]?.w;
+    const { world } = this.ctx;
     for (const d of this.doubles) {
       const st = this.doubleAt(d, this.tw);
       this.poseDouble(d, st);
+      // as consequências dele (âncoras): os botões apertados com ele em cima
+      if (st)
+        world.buttons.forEach((B, b) => {
+          const last = d.botoes[d.botoes.length - 1];
+          if (B.pressed && Math.hypot(B.pos.x - st.p.x, B.pos.z - st.p.z) < 0.85 && st.p.y - B.pos.y > 0 && st.p.y - B.pos.y < 1 && (!last || last[0] !== b || this.tw - last[1] > 0.25)) d.botoes.push([b, this.tw]);
+        });
+      if (d.ativo === false) {
+        if (d.box) this.dropDoubleBody(d);
+        continue;
+      }
       // o objeto ainda não existia nessa parte da história (veio depois): só o duplo existe;
       // no fim do intervalo, o objeto real reaparece onde o duplo chegou
       const younger = sample?.props?.[d.k];
@@ -1842,6 +2129,12 @@ export class Chronos {
   placeOrange(origin, dir, delta) {
     const { world, portals } = this.ctx;
     return this.inPast(delta, () => {
+      // mirou num cubo (como ele estava no passado): o portal abre na superfície mais perto dele
+      const near = this.pastCubeTarget(origin, dir, delta);
+      if (near) {
+        origin = near.origin;
+        dir = near.dir;
+      }
       const hit = world.raycast(origin, dir, 400);
       if (hit?.box.kinematic) return { ok: false, why: 'Não dá para abrir portal numa porta que se mexe, no passado.' };
       const res = portals.tryPlace('orange', origin, dir);
@@ -1853,6 +2146,57 @@ export class Chronos {
       }
       return res;
     });
+  }
+
+  /**
+   * O raio de quem mira (com o passado à mostra) passa por um cubo como ele estava em tw − Δ?
+   * Então o portal abre na superfície mais perto dele (o chão embaixo, ou a parede onde ele
+   * encosta), como se o tiro tivesse acertado o cubo. Devolve { origin, dir } para o tiro de verdade.
+   */
+  pastCubeTarget(origin, dir, delta) {
+    const { world } = this.ctx;
+    const snap = this.samples[this.indexAt(this.tw - delta)]?.w;
+    if (!snap) return null;
+    const wall = world.raycast(origin, dir, 400);
+    const limit = wall ? wall.dist : 400;
+    const props = this.props();
+    let best = null;
+    snap.props.forEach((pr, k) => {
+      const prop = props[k];
+      if (!prop || prop.kind !== 'cube' || pr.gone) return;
+      const h = prop.half?.y ?? 0.3;
+      // raio × caixa do cubo (eixos)
+      let t0 = 0;
+      let t1 = limit;
+      for (const a of ['x', 'y', 'z']) {
+        const lo = pr.p[a] - h;
+        const hi = pr.p[a] + h;
+        if (Math.abs(dir[a]) < 1e-9) {
+          if (origin[a] < lo || origin[a] > hi) return;
+          continue;
+        }
+        let ta = (lo - origin[a]) / dir[a];
+        let tb = (hi - origin[a]) / dir[a];
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta);
+        t1 = Math.min(t1, tb);
+        if (t0 > t1) return;
+      }
+      if (!best || t0 < best.t) best = { t: t0, c: pr.p.clone(), h };
+    });
+    if (!best) return null;
+    // a superfície mais perto do cubo: embaixo primeiro, depois as quatro paredes
+    // (as que aceitam portal têm prioridade: o tiro não adianta numa superfície que não aceita)
+    let surf = null;
+    const ok = (h) => (h.box.portalAt ? h.box.portalAt(h.normal) : h.box.portalable);
+    for (const d of [new V3(0, -1, 0), new V3(1, 0, 0), new V3(-1, 0, 0), new V3(0, 0, 1), new V3(0, 0, -1), new V3(0, 1, 0)]) {
+      const hit = world.raycast(best.c, d, best.h + 0.7);
+      if (!hit) continue;
+      if (!surf || (ok(hit) && !ok(surf)) || (ok(hit) === ok(surf) && hit.dist < surf.dist - 0.05)) surf = hit;
+    }
+    if (!surf) return null;
+    const n = surf.normal.clone();
+    return { origin: surf.point.clone().addScaledVector(n, 1.2), dir: n.clone().negate() };
   }
 
   /** o espaço de chegada (no laranja, no instante de destino) está ocupado? */
@@ -1876,7 +2220,9 @@ export class Chronos {
         const pose = this.clonePose(c, T);
         if (pose && overlap(min, max, pose.p.clone().sub(player.half), pose.p.clone().add(player.half), 0.05)) return true;
       }
-      return snap.props.some((p) => !p.gone && overlap(min, max, p.p.clone().addScaledVector(new V3(1, 1, 1), -0.32), p.p.clone().addScaledVector(new V3(1, 1, 1), 0.32), 0.05));
+      // (um cubo que cai neste vermelho logo depois não bloqueia a chegada: ele sai de lá)
+      const falling = this.samples[Math.min(this.samples.length - 1, this.indexAt(this.tw - O.delta) + 1)]?.w.props;
+      return snap.props.some((p, k) => !p.gone && !falling?.[k]?.portaled && overlap(min, max, p.p.clone().addScaledVector(new V3(1, 1, 1), -0.32), p.p.clone().addScaledVector(new V3(1, 1, 1), 0.32), 0.05));
     });
   }
 
@@ -1932,37 +2278,32 @@ export class Chronos {
       ghost: null,
       cp,
       exit: { c: blue.center.clone(), n: blue.normal.clone(), u: blue.up.clone() },
-      bad: {},
-      // laser que você mandou para o passado: sai do laranja Δ antes de cada entrada no azul
-      laserEmits: tail.flatMap((s) => (s.lz ?? []).map((e) => ({ t: s.t - e.delta, entryT: s.t, at: e.at, exit: e.exit, dir: e.dir, frame: e.frame, bridge: e.bridge }))),
     });
+    // a linha do tempo: o trecho da sua versão passada (com as âncoras de caminho) e o laser que ela
+    // mandou ao passado (cada entrada no azul é um compromisso; a saída do laranja Δ antes, uma emissão)
+    const cid = this.clones[this.clones.length - 1].id;
+    this.linha.trechos.push({ clone: cid, de: this.samples[i].t, ate: tail[tail.length - 1].t, ruim: [0, 0, 0, 0, 0] });
+    for (const s of tail)
+      for (const e of s.lz ?? []) {
+        const emissao = { clone: cid, t: s.t - e.delta, entryT: s.t, at: e.at, exit: e.exit, dir: e.dir, frame: e.frame, bridge: e.bridge, ativo: true, liga: [] };
+        this.linha.emissoes.push(emissao);
+        this.linha.compromissos.push({ tipo: 'laser', clone: cid, t: s.t, tol: TOL_LASER, onde: e.at.clone(), estado: PENDENTE, quando: null, emissao });
+      }
     this.samples = this.samples.slice(0, i + 1);
     this.tw = this.samples[i].t;
     this.next = this.tw + RATE;
     this.arrival = this.tw;
     this.markArrive = true; // o próximo quadro guardado é a chegada (a versão passada não "desliza" até lá)
-    // bolas mandadas ao passado que estão no ar no instante de destino: existem de verdade
-    // (criadas quando o "rebobinar" termina — ele restaura o mundo de novo)
-    this.pendingBalls = [];
-    for (const d of this.ballDoubles ?? []) {
-      if (this.tw < d.from - 1e-6 || this.tw >= d.to) continue;
-      const k = Math.max(0, Math.min(d.track.length - 1, Math.round((this.tw - d.from) / RATE)));
-      const s = d.track[k];
-      // velocidade e vida gravadas na simulação (a diferença entre dois quadros erra num quique e,
-      // dentro de um campo de dilatação, daria a velocidade lenta como se fosse a de verdade)
-      const v = s.v?.clone() ?? (d.track[k + 1] ?? s).p.clone().sub(d.track[Math.max(0, k - 1)].p).divideScalar(RATE * 2);
-      if (v.lengthSq() > 1e-4) {
-        this.pendingBalls.push({ pos: s.p.clone(), vel: v, life: Math.max(1, s.life ?? (d.life ?? 10) - (this.tw - d.from)), uid: d.uid });
-        d.liveFrom = Math.min(d.liveFrom ?? Infinity, this.tw);
-      }
-    }
+    // bolas mandadas ao passado que estão no ar no instante de destino: existem de verdade —
+    // a linha do tempo as põe no mundo quando o "rebobinar" termina (pastPellets, aMaterializar)
     // (o registro fica: voltando de novo, a mesma bola sai do vermelho de novo — é história, vale em todas as voltas)
-    // 5) os portais se desfazem; o mundo "rebobina" ao seu redor
+    // 5) os portais se desfazem; o mundo já aparece no instante de chegada (sem mostrar o "rebobinar":
+    // a duração 0 encerra a varredura no primeiro quadro)
     portals.fizzle();
     this.paused = false;
     this.setFreeze(true); // durante o "rebobinar" visual o mundo fica parado
     this.setHolo(false);
-    this.sweep = { tail, t: 0, dur: 0.75, undo: null };
+    this.sweep = { tail, t: 0, dur: 0, undo: null };
     this.ctx.fx.jump?.(delta);
     return true;
   }
@@ -1972,7 +2313,7 @@ export class Chronos {
     return {
       samples: this.samples,
       clones: this.clones.slice(),
-      doubles: (this.doubles ?? []).slice(),
+      linha: this.linha.clone(), // a linha do tempo das bolas como estava (o loop desfeito não aconteceu)
       tw: this.tw,
       next: this.next,
       arrival: this.arrival,
@@ -2039,12 +2380,6 @@ export class Chronos {
       this.sweep = null;
       // (o objeto que viajou com você na mão não volta para onde estava no passado)
       this.restore(this.samples[this.samples.length - 1].w, { keep: this.ctx.held?.() ?? null });
-      for (const b of this.pendingBalls ?? []) {
-        const np = this.ctx.energy.spawnFree(b.pos, b.vel, b.life);
-        np.cooldown = 0.1;
-        if (b.uid) np.uid = b.uid;
-      }
-      this.pendingBalls = [];
       this.setFreeze(false);
     }
   }
@@ -2061,17 +2396,9 @@ export class Chronos {
       }
       const pose = this.clonePose(c);
       if (!pose || pose.jumped || this.tw < c.born + 0.25 || this.tw > c.end - 0.05) continue;
-      const test = (key, bad, limit, why) => {
-        c.bad[key] = bad ? (c.bad[key] ?? 0) + dt : 0;
-        return c.bad[key] > limit ? why : null;
-      };
+      // as âncoras de caminho do trecho dela, cada uma com a sua folga (CAMINHO em linha.js)
       const h = this.poseProblems(pose, player.half);
-      let why = null;
-      why ??= test('solid', h.solid, 0.1, 'algo bloqueou o caminho do seu passado');
-      why ??= test('cube', h.cube, 0.1, 'um objeto ficou no caminho do seu passado');
-      why ??= test('hazard', h.hazard, 0.05, 'o seu passado caiu num perigo');
-      why ??= test('ball', h.ball, 0.03, 'uma bola de energia atingiu o seu passado');
-      why ??= test('floor', h.noFloor, 0.35, 'o chão do seu passado sumiu');
+      const why = this.linha.conferirCaminho(c.id, [h.solid, h.cube, h.hazard, h.ball, h.noFloor].map((x) => !!x), dt);
       if (why) {
         this.rollback(c.cp, why, pose.p);
         return;
@@ -2089,7 +2416,7 @@ export class Chronos {
     if (!pose.inMouth)
       for (const b of world.solids) {
         if (b.solid === false) continue;
-        if (overlap(min, max, b.min, b.max, 0.14)) {
+        if (solidTouches(b, min, max, 0.14)) {
           out.solid = true;
           break;
         }
@@ -2140,14 +2467,29 @@ export class Chronos {
   checkFrozenPaths(c) {
     if (c.fzLast == null || this.tw < c.fzLast - 1e-6) c.fzLast = Math.min(c.fzLast ?? -Infinity, this.tw); // (voltou no tempo: confere de novo)
     const half = this.ctx.player.half;
+    // perto da boca dos portais que a sua versão passada tinha abertos nesse trecho (os de antes da pausa e
+    // os colocados com o tempo parado), o corpo entra na parede de propósito
+    const near = (frames, p) =>
+      frames.some((f) => {
+        const d = p.clone().sub(f.c);
+        const right = new THREE.Vector3().crossVectors(f.u, f.n).normalize();
+        const lz = d.dot(f.n);
+        return Math.abs(d.dot(right)) < PORTAL_A + 0.45 && Math.abs(d.dot(f.u)) < PORTAL_B + 0.45 && lz > -1.6 && lz < 1.6;
+      });
+    c.script.forEach((s, j) => (s._j = j));
     for (const s of c.script) {
       if (!s.fz || s.t <= c.fzLast + 1e-6 || s.t > this.tw + 1e-6) continue;
       c.fzLast = s.t;
+      const prev = c.script[s._j - 1];
+      const frames = [s.pt?.b, s.pt?.o, prev?.pt?.b, prev?.pt?.o].filter(Boolean);
+      // (com folga, como as âncoras de caminho: um ponto só raspando numa parede não basta — dois seguidos sim)
       let gaps = 0;
+      let walls = 0;
       for (const q of s.fz) {
-        const h = this.poseProblems(q, half);
+        const h = this.poseProblems(near(frames, q.p) ? { ...q, inMouth: true } : q, half);
         const where = q.p.clone();
-        if (h.solid) return { why: 'algo bloqueou o caminho do seu passado (com o tempo parado)', at: where };
+        walls = h.solid ? walls + 1 : 0;
+        if (walls >= 2) return { why: 'algo bloqueou o caminho do seu passado (com o tempo parado)', at: where };
         if (h.cube) return { why: 'um objeto ficou no caminho do seu passado (com o tempo parado)', at: where };
         if (h.hazard) return { why: 'o seu passado caiu num perigo (com o tempo parado)', at: where };
         // chão: dois pontos seguidos sem nada embaixo (um só pode ser a borda de um degrau)
@@ -2170,12 +2512,23 @@ export class Chronos {
     this.ctx.fx.paradox?.(why, at);
     for (const c of this.clones) if (!cp.clones.includes(c)) this.dropClone(c);
     // objetos mandados ao passado dentro do loop desfeito: não aconteceu
-    for (const d of this.doubles ?? []) if (!cp.doubles?.includes(d)) this.dropDouble(d);
-    this.doubles = (this.doubles ?? []).filter((d) => cp.doubles?.includes(d));
+    // os duplos da linha desfeita somem; os que já existiam no ponto de volta continuam (com o modelo)
+    const keepIds = new Set(cp.linha.duplos.map((d) => d.id));
+    const live = new Map();
+    for (const d of this.doubles) {
+      if (keepIds.has(d.id)) live.set(d.id, d);
+      else this.dropDouble(d);
+    }
     this.sweep?.undo?.();
     this.sweep = null;
     this.resetDriven();
     this.samples = cp.samples;
+    this.linha = cp.linha.clone();
+    for (const d of this.linha.duplos) {
+      const o = live.get(d.id);
+      d.mesh = o?.mesh ?? null;
+      d.box = o?.box ?? null;
+    }
     this.clones = cp.clones;
     this.tw = cp.tw;
     this.next = cp.next;

@@ -95,3 +95,63 @@ pub fn environment_cubemap_k(images: &mut Assets<Image>, room_k: f32) -> Handle<
     img.texture_view_descriptor = Some(TextureViewDescriptor { dimension: Some(TextureViewDimension::Cube), ..default() });
     images.add(img)
 }
+
+// ------------------------------------------------------------------ ambiente "assado"
+// O Bevy 0.20 refiltra o mapa de ambiente (descida de mips + convolução do reflexo e da luz
+// difusa, tudo em compute) A CADA QUADRO para cada entidade com GeneratedEnvironmentMapLight:
+// com a câmera principal, a da arma e uma por portal eram até dez refiltragens por quadro de
+// um mapa que nunca muda. Aqui o filtro roda uma vez, em entidades temporárias; as câmeras só
+// recebem as imagens prontas (EnvironmentMapLight).
+
+/// câmera que quer a luz de ambiente (a principal e as dos portais: `gun = false`)
+#[derive(Component, Clone, Copy)]
+pub struct WantsEnv {
+    pub gun: bool,
+    pub intensity: f32,
+}
+
+#[derive(Resource, Default)]
+pub struct BakedEnv {
+    /// (entidade temporária, é a da arma, quadros esperados)
+    temps: Vec<(Entity, bool, u32)>,
+    main: Option<(Handle<Image>, Handle<Image>)>,
+    gun: Option<(Handle<Image>, Handle<Image>)>,
+}
+
+/// quadros que a GPU precisa para terminar a filtragem antes de largar a entidade temporária
+const BAKE_FRAMES: u32 = 8;
+
+pub fn start_bake(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut baked: ResMut<BakedEnv>) {
+    for (gun, k) in [(false, ENV_K), (true, 0.55)] {
+        let src = environment_cubemap_k(&mut images, k);
+        let e = commands.spawn(bevy::light::GeneratedEnvironmentMapLight { environment_map: src, intensity: 1.0, ..default() }).id();
+        baked.temps.push((e, gun, 0));
+    }
+}
+
+pub fn bake_env(mut commands: Commands, mut baked: ResMut<BakedEnv>, lights: Query<&bevy::light::EnvironmentMapLight>) {
+    let mut done = vec![];
+    for (i, (e, gun, n)) in baked.temps.iter_mut().enumerate() {
+        let Ok(l) = lights.get(*e) else { continue };
+        *n += 1;
+        if *n >= BAKE_FRAMES {
+            done.push((i, *e, *gun, (l.diffuse_map.clone(), l.specular_map.clone())));
+        }
+    }
+    for (i, e, gun, maps) in done.into_iter().rev() {
+        commands.entity(e).despawn();
+        baked.temps.remove(i);
+        if gun {
+            baked.gun = Some(maps);
+        } else {
+            baked.main = Some(maps);
+        }
+    }
+}
+
+pub fn attach_env(mut commands: Commands, baked: Res<BakedEnv>, cams: Query<(Entity, &WantsEnv), Without<bevy::light::EnvironmentMapLight>>) {
+    for (e, w) in &cams {
+        let Some((d, s)) = (if w.gun { baked.gun.as_ref() } else { baked.main.as_ref() }) else { continue };
+        commands.entity(e).insert(bevy::light::EnvironmentMapLight { diffuse_map: d.clone(), specular_map: s.clone(), intensity: w.intensity, ..default() });
+    }
+}

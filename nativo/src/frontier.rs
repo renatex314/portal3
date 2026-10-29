@@ -75,6 +75,8 @@ pub struct Frontier {
     res: Option<Res>,
     /// para o som: distância até o feixe mais perto, perto de um funil (0..1), buraco negro, vácuo
     pub nearest_beam: f32,
+    /// receptores de laser ligados neste quadro por um feixe de agora (não do passado)
+    pub lit_present: std::collections::HashSet<usize>,
     pub funnel_near: f32,
     pub bh_loud: f32,
     pub gale: f32,
@@ -632,12 +634,15 @@ impl Game {
         let mut bridge_segs: Vec<(Vec3, Vec3, Vec3, String)> = vec![];
         // os feixes de agora, os que saem do ciano vindos do laranja do passado e os que saem do
         // laranja de uma versão passada sua (laser que você mandou para o passado)
-        let mut lasers: Vec<(Vec3, Vec3, Option<String>, bool)> = self.world.lasers.iter().filter(|l| !l.off).map(|l| (l.pos, l.dir, l.bridge.clone(), false)).collect();
+        // (o último: a emissão na linha do tempo, se o feixe vem do vermelho de uma versão passada)
+        let mut lasers: Vec<(Vec3, Vec3, Option<String>, Option<usize>)> = self.world.lasers.iter().filter(|l| !l.off).map(|l| (l.pos, l.dir, l.bridge.clone(), None)).collect();
         self.frontier.prev_entries = std::mem::take(&mut self.frontier.live_entries);
         let from_blue = self.ch_laser_past(ecs);
-        lasers.extend(from_blue.into_iter().map(|(o, d)| (o, d, None, false)));
-        lasers.extend(self.ch_laser_emissions().into_iter().map(|(o, d)| (o, d, None, true)));
-        for (pos, dir, bridge, from_past) in lasers {
+        lasers.extend(from_blue.into_iter().map(|(o, d)| (o, d, None, None)));
+        lasers.extend(self.ch_laser_emissions().into_iter().map(|(e, o, d)| (o, d, None, Some(e))));
+        self.frontier.lit_present.clear();
+        for (pos, dir, bridge, emission) in lasers {
+            let from_past = emission.is_some();
             if let Some(look) = bridge {
                 let res = trace(&self.world, &self.portals, None, pos, dir, None, 8, 400.0, false);
                 for (a, b, d) in res.segs {
@@ -703,9 +708,20 @@ impl Game {
                 }
                 let Some(point) = res.point else { break };
                 self.frontier.spark(ecs, root, point, t);
-                for c in &mut self.world.laser_catchers {
+                let mut lit = vec![];
+                for (ci, c) in self.world.laser_catchers.iter_mut().enumerate() {
                     if c.pos.distance(point) < 0.75 {
                         c.active = true;
+                        lit.push(ci);
+                    }
+                }
+                // quem ligou o receptor: um feixe do passado (consequência dele) ou um de agora
+                for ci in lit {
+                    match emission {
+                        Some(e) => self.ch_laser_lit(e, ci),
+                        None => {
+                            self.frontier.lit_present.insert(ci);
+                        }
                     }
                 }
                 let Some(pi) = res.prop else { break };

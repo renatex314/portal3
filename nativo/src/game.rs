@@ -1516,7 +1516,7 @@ impl Game {
             if e == crate::energy::EnergyEvent::HitPlayer {
                 self.die("bola de energia");
             }
-            if matches!(e, crate::energy::EnergyEvent::IntoPast { .. } | crate::energy::EnergyEvent::ToPast { .. }) {
+            if matches!(e, crate::energy::EnergyEvent::IntoOrange { .. } | crate::energy::EnergyEvent::ToPast { .. }) {
                 self.ch_energy_event(ecs, &e);
                 continue;
             }
@@ -1687,7 +1687,7 @@ impl Game {
         if !crossed.is_empty() {
             self.events.push(GameEvent::PropPortal);
         }
-        self.props.sync(ecs, &self.world.phys);
+        self.props.sync(ecs, &self.world.phys, &self.portals);
         if let Some(h) = self.held {
             // longe do alvo por um tempo = preso em algo: solta
             let c = &mut self.props.list[h];

@@ -27,8 +27,21 @@ pub struct Hud {
     /// esmaecimento da tela (env_fade da campanha original)
     fade: Entity,
     xh: Entity,
-    xh_l: Entity,
-    xh_r: Entity,
+    /// mira: por lado (esquerdo/direito), os tracinhos (portal ainda não aberto) e o arco cheio (aberto)
+    xh_dash: [Vec<Entity>; 2],
+    xh_solid: [Vec<Entity>; 2],
+    xh_key: u32,
+    keys_text: Entity,
+    keys_relogio: Option<bool>,
+    /// anel do tempo lento em volta da mira: o fundo, o arco que gasta e o pulso ao ligar/desligar
+    ring: Entity,
+    ring_bg: Vec<Entity>,
+    ring_arc: Vec<Entity>,
+    ring_pulse: Entity,
+    ring_shown: usize,
+    ring_low: bool,
+    ring_on: bool,
+    ring_t: f32,
     xh_dot: Entity,
     xh_ring: Entity,
     lvl_num: Entity,
@@ -115,6 +128,21 @@ fn overlay(ecs: &mut Ecs, parent: Entity, inner: f32, c0: Color, c1: Color) -> E
     ecs.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundGradient(vec![g]), ChildOf(parent))).id()
 }
 
+/// um traço pequeno de um anel: no ângulo `ang` (graus, no sentido horário a partir da direita), a `r` do
+/// centro (cx, cy), `len` ao longo do anel e `thick` de espessura (os anéis do HUD, sem desenho de arco)
+fn ring_seg(ecs: &mut Ecs, parent: Entity, cx: f32, cy: f32, r: f32, ang: f32, len: f32, thick: f32, color: Color) -> Entity {
+    let a = ang.to_radians();
+    let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+    ecs.spawn((
+        Node { position_type: PositionType::Absolute, left: Val::Px(x - len / 2.0), top: Val::Px(y - thick / 2.0), width: Val::Px(len), height: Val::Px(thick), ..default() },
+        BackgroundColor(color),
+        UiTransform::from_rotation(Rot2::degrees(ang + 90.0)),
+        Visibility::Hidden,
+        ChildOf(parent),
+    ))
+    .id()
+}
+
 pub fn setup_hud(ecs: &mut Ecs) {
     let Some(cam) = ecs.get_resource::<Gun>().map(|g| g.cam) else { return };
     let assets = ecs.resource::<AssetServer>().clone();
@@ -141,21 +169,39 @@ pub fn setup_hud(ecs: &mut Ecs) {
     let xh = ecs
         .spawn((Node { position_type: PositionType::Absolute, left: Val::Percent(50.0), top: Val::Percent(50.0), width: Val::Px(48.0), height: Val::Px(48.0), margin: UiRect::all(Val::Px(-24.0)), ..default() }, ChildOf(root)))
         .id();
-    let arc = |ecs: &mut Ecs, left: bool| {
-        let n = Node {
-            position_type: PositionType::Absolute,
-            width: Val::Px(34.0),
-            height: Val::Px(34.0),
-            left: Val::Px(7.0),
-            top: Val::Px(7.0),
-            border: if left { UiRect::left(Val::Px(1.3)) } else { UiRect::right(Val::Px(1.3)) },
-            border_radius: BorderRadius::MAX,
-            ..default()
-        };
-        ecs.spawn((n, BorderColor::all(Color::NONE), ChildOf(xh))).id()
-    };
-    let xh_l = arc(ecs, true);
-    let xh_r = arc(ecs, false);
+    // (como na versão web: um quarto de círculo de cada lado; tracejado e fraco enquanto o portal não
+    // existe, arco cheio e mais grosso quando ele está aberto)
+    let mut xh_dash: [Vec<Entity>; 2] = [vec![], vec![]];
+    let mut xh_solid: [Vec<Entity>; 2] = [vec![], vec![]];
+    for (side, base) in [(0usize, 180.0f32), (1usize, 0.0f32)] {
+        for off in [-36.0f32, -18.0, 0.0, 18.0, 36.0] {
+            xh_dash[side].push(ring_seg(ecs, xh, 24.0, 24.0, 16.35, base + off, 3.4, 1.3, Color::NONE));
+        }
+        for k in -6..=6 {
+            xh_solid[side].push(ring_seg(ecs, xh, 24.0, 24.0, 15.8, base + k as f32 * 7.0, 3.0, 2.4, Color::NONE));
+        }
+    }
+    // anel do tempo lento (70 px): o fundo, o arco que gasta (começa em cima, no sentido horário) e o pulso
+    let ring = ecs
+        .spawn((Node { position_type: PositionType::Absolute, left: Val::Percent(50.0), top: Val::Percent(50.0), width: Val::Px(70.0), height: Val::Px(70.0), margin: UiRect::all(Val::Px(-35.0)), ..default() }, Visibility::Hidden, ChildOf(root)))
+        .id();
+    let ring_n = 96usize;
+    let (mut ring_bg, mut ring_arc) = (vec![], vec![]);
+    for k in 0..ring_n {
+        let ang = -90.0 + (k as f32 + 0.5) * 360.0 / ring_n as f32;
+        let e = ring_seg(ecs, ring, 35.0, 35.0, 29.75, ang, 2.5, 3.85, Color::srgba(1.0, 1.0, 1.0, 0.14));
+        ecs.entity_mut(e).insert(Visibility::Inherited);
+        ring_bg.push(e);
+        ring_arc.push(ring_seg(ecs, ring, 35.0, 35.0, 29.75, ang, 2.5, 3.85, Color::srgb(0.5, 0.83, 1.0)));
+    }
+    let ring_pulse = ecs
+        .spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(70.0), height: Val::Px(70.0), border: UiRect::all(Val::Px(2.0)), border_radius: BorderRadius::MAX, ..default() },
+            BorderColor::all(Color::NONE),
+            UiTransform::default(),
+            ChildOf(ring),
+        ))
+        .id();
     let xh_ring = ecs
         .spawn((
             Node { position_type: PositionType::Absolute, left: Val::Px(21.0), top: Val::Px(21.0), width: Val::Px(6.0), height: Val::Px(6.0), border_radius: BorderRadius::MAX, ..default() },
@@ -354,20 +400,33 @@ pub fn setup_hud(ecs: &mut Ecs) {
     let keys = ecs
         .spawn((Node { position_type: PositionType::Absolute, bottom: Val::Px(12.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() }, ChildOf(root)))
         .id();
-    ecs.spawn((
+    let keys_text = ecs
+        .spawn((
         Text::new("Esquerdo/Q: portal ciano · Direito/F: portal vermelho · Setas: olhar · Meio/G: tempo lento · Rodinha/Z/X: zoom · E: pegar/soltar · Esquerdo/Q segurando: arremessar · Espaço: pular · R: reiniciar · Enter: jogar · Esc: pausa"),
         label(&fonts.mono, 10.0, Color::srgba(0.957, 0.969, 0.98, 0.4), 0.04),
         TextLayout::no_wrap(),
         ChildOf(keys),
-    ));
+    ))
+        .id();
     ecs.insert_resource(Hud {
         root,
         hurt,
         flash,
         fade,
         xh,
-        xh_l,
-        xh_r,
+        xh_dash,
+        xh_solid,
+        xh_key: u32::MAX,
+        keys_text,
+        keys_relogio: None,
+        ring,
+        ring_bg,
+        ring_arc,
+        ring_pulse,
+        ring_shown: usize::MAX,
+        ring_low: false,
+        ring_on: false,
+        ring_t: 9.0,
         xh_dot,
         xh_ring,
         lvl_num,
@@ -650,6 +709,45 @@ pub fn update_hud(ecs: &mut Ecs) {
             ecs.entity_mut(e).insert(TextColor(c));
         }
         ecs.entity_mut(hud.slow_fill).insert(BackgroundColor(if f < 0.25 { Color::srgb(1.0, 0.23, 0.19) } else { Color::srgb(0.62, 0.86, 1.0) }));
+        // as teclas mudam nas fases com o relógio do tempo (como na versão web)
+        let rel = ecs.resource::<Game>().relogio.is_some();
+        if hud.keys_relogio != Some(rel) {
+            hud.keys_relogio = Some(rel);
+            let t = if rel {
+                "Esquerdo/Q: portal ciano · Direito/F: portal vermelho (parado: no passado) · Setas: olhar · 2: parar/continuar o tempo · Rodinha/Z/X parado: voltar mais/menos · Meio/G: tempo lento · E: pegar/soltar · Espaço: pular · R: reiniciar · Enter: jogar · Esc: pausa"
+            } else {
+                "Esquerdo/Q: portal ciano · Direito/F: portal vermelho · Setas: olhar · Meio/G: tempo lento · Rodinha/Z/X: zoom · E: pegar/soltar · Esquerdo/Q segurando: arremessar · Espaço: pular · R: reiniciar · Enter: jogar · Esc: pausa"
+            };
+            set_text(ecs, hud.keys_text, t);
+        }
+        // anel em volta da mira (só com o tempo lento ligado): o arco gasta junto com a reserva
+        show(ecs, hud.ring, slow.on);
+        if slow.on {
+            let n = hud.ring_arc.len();
+            let lit = ((f * n as f32).ceil() as usize).min(n);
+            let low = f < 0.25;
+            if hud.ring_shown != lit || hud.ring_low != low {
+                let col = if low { Color::srgb(1.0, 0.416, 0.29) } else { Color::srgb(0.498, 0.831, 1.0) };
+                for (k, &e) in hud.ring_arc.clone().iter().enumerate() {
+                    ecs.entity_mut(e).insert((BackgroundColor(col), if k < lit { Visibility::Inherited } else { Visibility::Hidden }));
+                }
+                hud.ring_shown = lit;
+                hud.ring_low = low;
+            }
+        }
+        // pulso ao ligar ou desligar: um anel que cresce e some em 0,55 s
+        if slow.on != hud.ring_on {
+            hud.ring_on = slow.on;
+            hud.ring_t = 0.0;
+        }
+        hud.ring_t += dt;
+        let pk = (hud.ring_t / 0.55).min(1.0);
+        let ease = 1.0 - (1.0 - pk) * (1.0 - pk);
+        let sc = 0.6 + (4.5 - 0.6) * ease;
+        ecs.entity_mut(hud.ring_pulse).insert((
+            UiTransform { scale: Vec2::splat(sc), ..default() },
+            BorderColor::all(if pk < 1.0 { Color::srgba(0.624, 0.863, 1.0, 0.9 * (1.0 - pk)) } else { Color::NONE }),
+        ));
         let full = f >= 0.999 && !slow.on;
         let _ = hud.slow;
         let a = if full { 0.6 } else { 1.0 };
@@ -671,22 +769,22 @@ pub fn update_hud(ecs: &mut Ecs) {
             Some((c, a)) => Color::srgba(c.x, c.y, c.z, a),
             None => Color::NONE,
         }));
-        // mira: arco tracejado fraco = portal não colocado; cheio = colocado
+        // mira: tracinhos fracos = portal não colocado; arco cheio = colocado
         let none = gun_mode == "none";
-        show(ecs, hud.xh_l, !none);
-        show(ecs, hud.xh_r, !none && gun_mode != "blue");
         let fade = if aim_ok == Some(false) { 0.4 } else { 1.0 };
-        let cl = BLUE.with_alpha(if placed[0] { 1.0 } else { 0.55 } * fade);
-        let cr = ORANGE.with_alpha(if placed[1] { 1.0 } else { 0.55 } * fade);
-        let bw = |on: bool| Val::Px(if on { 2.4 } else { 1.3 });
-        if let Some(mut n) = ecs.get_mut::<Node>(hud.xh_l) {
-            n.border = UiRect::left(bw(placed[0]));
+        let key = (placed[0] as u32) | ((placed[1] as u32) << 1) | ((none as u32) << 2) | (((gun_mode == "blue") as u32) << 3) | (((aim_ok == Some(false)) as u32) << 4);
+        if hud.xh_key != key {
+            hud.xh_key = key;
+            for side in 0..2 {
+                let on = !none && !(side == 1 && gun_mode == "blue");
+                let col = if side == 0 { BLUE } else { ORANGE };
+                for (set, shown, a) in [(&hud.xh_dash[side], on && !placed[side], 0.55 * fade), (&hud.xh_solid[side], on && placed[side], fade)] {
+                    for &e in set {
+                        ecs.entity_mut(e).insert((BackgroundColor(col.with_alpha(a)), if shown { Visibility::Inherited } else { Visibility::Hidden }));
+                    }
+                }
+            }
         }
-        if let Some(mut n) = ecs.get_mut::<Node>(hud.xh_r) {
-            n.border = UiRect::right(bw(placed[1]));
-        }
-        ecs.entity_mut(hud.xh_l).insert(BorderColor { left: cl, ..BorderColor::all(Color::NONE) });
-        ecs.entity_mut(hud.xh_r).insert(BorderColor { right: cr, ..BorderColor::all(Color::NONE) });
         show(ecs, hud.xh_ring, aim_ok == Some(true) && !none);
         ecs.entity_mut(hud.xh_dot).insert(BackgroundColor(if aim_ok == Some(false) { Color::srgb(1.0, 0.35, 0.29) } else { Color::WHITE }));
         // zoom

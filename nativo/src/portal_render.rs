@@ -22,12 +22,11 @@ use crate::game::Game;
 use crate::geo::{box_geo, plane_geo};
 use crate::portals::{transform, Portal, PORTAL_A, PORTAL_B};
 use crate::world::{point_light, put, put_mesh};
-use crate::{EnvMap, HeadlessTarget, MainCam, EV100};
+use crate::{HeadlessTarget, MainCam, EV100};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{Hdr, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::ecs::world::World as Ecs;
-use bevy::light::GeneratedEnvironmentMapLight;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::window::PrimaryWindow;
@@ -53,11 +52,21 @@ pub struct View {
 #[derive(Resource)]
 pub struct PortalViews {
     pub views: Vec<View>,
+    /// vermelhos de estática (do relógio: onde a sua versão do futuro abriu o vermelho): só imagem
+    pub statics: Vec<View>,
     pub size: UVec2,
     /// quadros em que as vistas desenham mesmo sem portal (fase nova: os shaders delas já ficam
     /// prontos e o primeiro olhar pelo portal não engasga)
     pub warm: u32,
     pub level: Option<usize>,
+    /// fase nova: por alguns quadros nada da fase é descartado por estar fora da vista. Cada câmera
+    /// prepara um objeto (o shader dele para ela) na primeira vez que o vê: sem isso, atravessar um portal
+    /// num mapa grande (a câmera passa a ver uma região nova de uma vez) engasgava uns 100 ms
+    pub unculled: Vec<Entity>,
+    pub unculled_frames: u32,
+    /// fase nova ainda sendo montada: (quadros esperando, modelos no quadro anterior, quadros sem mudar).
+    /// O aquecimento só vale com tudo já criado (logo na troca de fase ele aquecia uma cena vazia)
+    pub settle: Option<(u32, usize, u32)>,
 }
 
 fn new_image(ecs: &mut Ecs, size: UVec2) -> Handle<Image> {
@@ -73,6 +82,14 @@ fn screen_size(ecs: &mut Ecs) -> UVec2 {
     }
     let mut q = ecs.query_filtered::<&Window, With<PrimaryWindow>>();
     q.single(ecs).map(|w| UVec2::new(w.physical_width(), w.physical_height())).unwrap_or(UVec2::new(1280, 720))
+}
+
+/// o tamanho das imagens das vistas: a tela vezes a escala da qualidade gráfica
+fn view_size(ecs: &mut Ecs) -> UVec2 {
+    let full = screen_size(ecs);
+    let q = ecs.get_resource::<crate::quality::QualityState>().map(|s| s.current).unwrap_or(2);
+    let k = crate::quality::portal_scale(q);
+    UVec2::new(((full.x as f32 * k).round() as u32).max(1), ((full.y as f32 * k).round() as u32).max(1))
 }
 
 fn spawn_view(ecs: &mut Ecs, i: usize, size: UVec2, color: Vec3) -> View {
@@ -119,7 +136,6 @@ fn spawn_view(ecs: &mut Ecs, i: usize, size: UVec2, color: Vec3) -> View {
     ecs.entity_mut(e).insert((both, bevy::camera::visibility::NoFrustumCulling));
     let light = ecs.spawn((point_light(Color::linear_rgb(color.x, color.y, color.z), 0.0, 6.0), Transform::default())).id();
     // câmera virtual
-    let env = ecs.get_resource::<EnvMap>().map(|e| e.0.clone());
     let mut cam = ecs.spawn((
         Camera3d::default(),
         Camera { order: -1 - i as isize, is_active: false, clear_color: ClearColorConfig::Default, ..default() },
@@ -135,18 +151,31 @@ fn spawn_view(ecs: &mut Ecs, i: usize, size: UVec2, color: Vec3) -> View {
         RenderLayers::from_layers(&[0, own_layer(i), crate::characters::BODY_LAYER, crate::relogio::PRESENT_LAYER]),
         Name::new(format!("câmera do portal {i}")),
     ));
-    if let Some(env) = env {
-        cam.insert(GeneratedEnvironmentMapLight { environment_map: env, ..default() });
-    }
+    cam.insert(crate::env::WantsEnv { gun: false, intensity: 1.0 });
     let cam = cam.id();
     View { cam, group, light, images, write: 0, screens, rim, glow, sparks }
 }
 
 pub fn setup_portal_views(ecs: &mut Ecs) {
-    let size = screen_size(ecs);
+    let size = view_size(ecs);
     let colors: Vec<Vec3> = ecs.resource::<Game>().portals.list.iter().take(2).map(|p| p.color).collect();
     let views = colors.iter().enumerate().map(|(i, c)| spawn_view(ecs, i, size, *c)).collect();
-    ecs.insert_resource(PortalViews { views, size, warm: 0, level: None });
+    let sc: Vec<Vec3> = ecs.resource::<Game>().portals.statics.iter().map(|p| p.color).collect();
+    // (a câmera delas nunca liga: imagem pequena)
+    let statics = sc.iter().enumerate().map(|(k, c)| spawn_view(ecs, MAX_VIEWS + k, UVec2::new(4, 4), *c)).collect();
+    ecs.insert_resource(PortalViews { views, statics, size, warm: 0, level: None, unculled: vec![], unculled_frames: 0, settle: None });
+}
+
+/// fase nova: tira o descarte por campo de visão de todos os modelos da fase por alguns quadros (a câmera
+/// principal e as dos portais preparam todos eles enquanto a fase abre)
+fn uncull_level(ecs: &mut Ecs, pv: &mut PortalViews) {
+    use bevy::camera::visibility::NoFrustumCulling;
+    let ents: Vec<Entity> = ecs.query_filtered::<Entity, (With<Mesh3d>, Without<NoFrustumCulling>)>().iter(ecs).collect();
+    for &e in &ents {
+        ecs.entity_mut(e).insert(NoFrustumCulling);
+    }
+    pv.unculled.extend(ents);
+    pv.unculled_frames = 3;
 }
 
 /// a abertura com "passar do ponto" (portals.js update)
@@ -160,7 +189,7 @@ fn open_curve(o: f32) -> f32 {
 
 /// anima a abertura dos portais (PortalSystem.update)
 pub fn animate(portals: &mut crate::portals::Portals, dt: f32) {
-    for p in &mut portals.list {
+    for p in portals.list.iter_mut().chain(portals.statics.iter_mut()) {
         p.open = (p.open + dt * 4.5).min(1.0);
         p.age += dt;
     }
@@ -183,7 +212,7 @@ pub fn update_portal_views(ecs: &mut Ecs) {
         setup_portal_views(ecs);
     }
     // a tela mudou de tamanho: novas imagens
-    let size = screen_size(ecs);
+    let size = view_size(ecs);
     ecs.resource_scope(|ecs, mut pv: Mut<PortalViews>| {
         if size != pv.size && size.x > 0 && size.y > 0 {
             pv.size = size;
@@ -209,12 +238,67 @@ pub fn update_portal_views(ecs: &mut Ecs) {
         let game = ecs.resource::<Game>();
         if game.level != pv.level {
             pv.level = game.level;
-            pv.warm = 4;
+            pv.settle = Some((0, 0, 0));
         }
+        let _ = game;
+        // espera a fase terminar de ser montada (o número de modelos para de mudar) e então aquece: tudo
+        // visível para todas as câmeras por alguns quadros, com as vistas dos portais desenhando
+        if let Some((waited, last, stable)) = pv.settle {
+            let n = ecs.query_filtered::<(), With<Mesh3d>>().iter(ecs).count();
+            // (e com o mapa de ambiente já nas câmeras: ele muda a configuração delas e o que foi preparado antes)
+            let env_missing = ecs.query_filtered::<(), (With<crate::env::WantsEnv>, Without<bevy::light::EnvironmentMapLight>)>().iter(ecs).count();
+            let stable = if n == last && n > 0 && env_missing == 0 { stable + 1 } else { 0 };
+            if stable >= 3 || waited >= 600 {
+                pv.settle = None;
+                pv.warm = 4;
+                uncull_level(ecs, &mut pv);
+            } else {
+                pv.settle = Some((waited + 1, n, stable));
+            }
+        } else if pv.unculled_frames > 0 {
+            pv.unculled_frames -= 1;
+            if pv.unculled_frames == 0 {
+                for e in std::mem::take(&mut pv.unculled) {
+                    if let Ok(mut x) = ecs.get_entity_mut(e) {
+                        x.remove::<bevy::camera::visibility::NoFrustumCulling>();
+                    }
+                }
+            }
+        }
+        let game = ecs.resource::<Game>();
         let warming = pv.warm > 0;
         pv.warm = pv.warm.saturating_sub(1);
         let t = game.t;
+        let statics: Vec<Portal> = game.portals.statics.clone();
         let portals: Vec<Portal> = game.portals.list.iter().take(pv.views.len()).cloned().collect();
+        // vermelhos de estática: só estática por cima, sem vista e sem levar a lugar nenhum
+        for (v, p) in pv.statics.iter().zip(statics.iter()) {
+            ecs.entity_mut(v.group).insert((Transform::from_matrix(p.matrix), if p.placed { Visibility::Visible } else { Visibility::Hidden }));
+            let li = if p.placed { 3.0 + 2.0 * (t * 23.0).sin() * (t * 7.0).sin() } else { 0.0 };
+            ecs.entity_mut(v.light).insert((point_light(Color::linear_rgb(p.color.x, p.color.y, p.color.z), li, 6.0), Transform::from_translation(p.center + p.normal * 0.6)));
+            let open = open_curve(p.open);
+            let mut fx = ecs.resource_mut::<Assets<Fx>>();
+            for h in &v.screens {
+                if let Some(mut m) = fx.get_mut(h) {
+                    m.u.p0 = p.center.extend(open);
+                    m.u.p1 = p.right.extend(1.0);
+                    m.u.p2 = p.up.extend(0.0);
+                    m.u.p3 = p.normal.extend(1.0);
+                    m.u.color = p.color.extend(1.0);
+                }
+            }
+            for h in [&v.rim, &v.glow] {
+                if let Some(mut m) = fx.get_mut(h) {
+                    m.u.p0 = Vec4::new(open, 0.0, 0.0, 0.0);
+                    m.u.color = p.color.extend(1.0);
+                }
+            }
+            if let Some(mut m) = fx.get_mut(&v.sparks) {
+                m.u.p0 = Vec4::new(PORTAL_A, PORTAL_B, open, 0.0);
+                m.u.color = p.color.extend(1.0);
+            }
+        }
+        let game = ecs.resource::<Game>();
         let linked: Vec<bool> = (0..portals.len()).map(|i| game.portals.is_linked(i)).collect();
         let cam_fwd = cam_tr.rotation * Vec3::NEG_Z;
         for (i, v) in pv.views.iter_mut().enumerate() {
@@ -233,7 +317,7 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             ecs.entity_mut(v.group).insert((Transform::from_matrix(p.matrix), if shown { Visibility::Visible } else { Visibility::Hidden }));
             let open = open_curve(p.open);
             let flash = (1.0 - p.age / 0.5).max(0.0).powi(2);
-            let li = if shown { 9.0 + 1.5 * (t * 2.6).sin() + 14.0 * flash } else { 0.0 };
+            let li = if shown { 2.8 + 0.5 * (t * 2.6).sin() + 0.4 * flash } else { 0.0 }; // (a luz do Bevy cai com 1/d², a do three.js com 1/d^1,6: perto da parede o clarão aqui estourava mais)
             let lp = point_light(Color::linear_rgb(p.color.x, p.color.y, p.color.z), li, 6.0);
             ecs.entity_mut(v.light).insert((lp, Transform::from_translation(p.center + p.normal * 0.6)));
             // a vista: só quando ligado e (mais ou menos) na frente da câmera
@@ -241,9 +325,11 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             let facing = to.dot(p.normal) < PORTAL_DEPTH; // câmera na frente do portal (ou dentro da caixa)
             let ahead = to.dot(cam_fwd) > -PORTAL_B * 1.5 || to.length() < PORTAL_B * 2.0;
             let real = shown && linked[i] && facing && ahead;
-            let active = real || warming;
+            // a câmera fica ligada enquanto o portal existe: ligar e desligar a cada olhada jogava fora e
+            // refazia as texturas dela (um tranco a cada vez); fora da vista ela não desenha nada
+            let active = real || warming || (shown && linked[i]);
             let w = 1 - v.write;
-            if active {
+            if real || warming {
                 v.write = w;
             }
             let current = v.images[v.write].clone();
@@ -251,7 +337,15 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             let past = if q.delta > 0.0 || p.gray { 1.0 } else { 0.0 };
             // pelo ciano temporal: a sala de Δ s atrás (as cópias do passado, sem as coisas de agora)
             let when = if q.delta > 0.0 { crate::relogio::PAST_LAYER } else { crate::relogio::PRESENT_LAYER };
-            ecs.entity_mut(v.cam).insert(RenderLayers::from_layers(&[0, own_layer(i), crate::characters::BODY_LAYER, when]));
+            // o seu corpo de agora não existe no passado (lá só a sua versão de então, a cópia cinza)
+            let layers = if !(real || warming) {
+                RenderLayers::none()
+            } else if q.delta > 0.0 {
+                RenderLayers::from_layers(&[0, own_layer(i), when])
+            } else {
+                RenderLayers::from_layers(&[0, own_layer(i), crate::characters::BODY_LAYER, when])
+            };
+            ecs.entity_mut(v.cam).insert(layers);
             {
                 let mut fx = ecs.resource_mut::<Assets<Fx>>();
                 for (k, h) in v.screens.iter().enumerate() {
@@ -279,7 +373,7 @@ pub fn update_portal_views(ecs: &mut Ecs) {
             if let Some(mut c) = e.get_mut::<Camera>() {
                 c.is_active = active;
             }
-            if !active {
+            if !(real || warming) {
                 continue;
             }
             let m = if real { transform(p, q) } else { Mat4::IDENTITY };

@@ -2739,8 +2739,7 @@ function update(dt, t) {
     pop: () => sfx.pop(),
     hitPlayer: () => die(),
     props: () => [...cubes, ...turrets],
-    intoPast: (p, O) => relogio?.ballIntoPast(p, O),
-    intoGhost: (p, at) => relogio?.ballIntoGhost(p, at),
+    intoOrange: (p, at) => relogio?.ballIntoOrange(p, at),
     toPast: relogio ? (p, P) => relogio.ballToPast(p, P) : null,
   });
   relogio?.pastPellets(); // bolas do passado que entraram no vermelho temporal saem pelo ciano

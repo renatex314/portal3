@@ -8,14 +8,14 @@ use crate::frontier::{closest, trace_t, LaserEntry, PastCube};
 /// laser que uma versão passada sua mandou para o passado: sai de `exit` em `t`, entrou no ciano em `entry_t`
 #[derive(Clone, Debug)]
 pub(super) struct LaserEmit {
-    t: f32,
-    entry_t: f32,
-    at: Vec3,
-    exit: Vec3,
-    dir: Vec3,
+    pub(super) t: f32,
+    pub(super) entry_t: f32,
+    pub(super) at: Vec3,
+    pub(super) exit: Vec3,
+    pub(super) dir: Vec3,
 }
 
-/// as saídas de laser gravadas num trecho de história (para o clone)
+/// as saídas de laser gravadas num trecho de história (vão para a linha do tempo no salto)
 pub(super) fn laser_emits(tail: &[Arc<Sample>]) -> Vec<LaserEmit> {
     tail.iter().flat_map(|s| s.lz.iter().map(|e: &LaserEntry| LaserEmit { t: s.t - e.delta, entry_t: s.t, at: e.at, exit: e.exit, dir: e.dir })).collect()
 }
@@ -23,23 +23,24 @@ pub(super) fn laser_emits(tail: &[Arc<Sample>]) -> Vec<LaserEmit> {
 const TOL: f32 = RATE * 0.6;
 
 impl Game {
-    /// os feixes que as versões passadas mandaram ao passado e saem do laranja delas agora
-    pub fn ch_laser_emissions(&self) -> Vec<(Vec3, Vec3)> {
+    /// os feixes que as versões passadas mandaram ao passado e saem do laranja delas agora:
+    /// (emissão na linha do tempo, saída, direção)
+    pub fn ch_laser_emissions(&self) -> Vec<(usize, Vec3, Vec3)> {
         let Some(ch) = self.relogio.as_ref() else { return vec![] };
         if ch.clones.is_empty() || ch.paused || ch.sweep.is_some() {
             return vec![];
         }
-        let mut out: Vec<(Vec3, Vec3)> = vec![];
-        for id in &ch.clones {
-            let Some(c) = ch.arena.get(id) else { continue };
-            for e in &c.laser_emits {
-                if (e.t - ch.tw).abs() > TOL || out.iter().any(|x| x.0.distance(e.exit) < 0.2 && x.1.dot(e.dir) > 0.98) {
-                    continue;
-                }
-                out.push((e.exit, e.dir));
+        ch.tb.linha.emissoes_em(ch.tw, TOL, |id| ch.clones.contains(&id))
+    }
+
+    /// o feixe do passado (a emissão `e`) ligou o receptor de laser `c`: uma consequência dela (âncora)
+    pub fn ch_laser_lit(&mut self, e: usize, c: usize) {
+        let Some(ch) = self.relogio.as_mut() else { return };
+        if let Some(em) = ch.tb.linha.emissoes.get_mut(e) {
+            if !em.liga.contains(&c) {
+                em.liga.push(c);
             }
         }
-        out
     }
 
     /// o feixe que veio do passado acertaria a sua versão passada? (paradoxo)
@@ -62,28 +63,17 @@ impl Game {
         }
     }
 
-    /// depois dos feixes do quadro: no instante gravado, o feixe tem de entrar de novo no ciano
-    pub fn ch_check_laser_loops(&mut self, dt: f32) {
-        let entries = self.frontier.live_entries.clone();
+    /// depois dos feixes do quadro: os que entraram num ciano cumprem os compromissos de laser de
+    /// agora (no instante gravado, o feixe tem de entrar de novo ali; os que não entram quebram na
+    /// resolução dos compromissos — paradoxo só se o feixe do passado ligou um receptor sozinho)
+    pub fn ch_check_laser_loops(&mut self, _dt: f32) {
+        let entries: Vec<Vec3> = self.frontier.live_entries.iter().map(|x| x.at).collect();
         let Some(ch) = self.relogio.as_mut() else { return };
         if ch.clones.is_empty() || ch.paused || ch.sweep.is_some() {
             return;
         }
         let tw = ch.tw;
-        for id in ch.clones.clone() {
-            let Some(c) = ch.arena.get_mut(&id) else { continue };
-            let need = c.laser_emits.iter().filter(|e| (e.entry_t - tw).abs() <= TOL).last().cloned();
-            let Some(need) = need else {
-                c.laser_miss = 0.0;
-                continue;
-            };
-            let ok = entries.iter().any(|x| x.at.distance(need.at) < 0.5);
-            c.laser_miss = if ok { 0.0 } else { c.laser_miss + dt };
-            if c.laser_miss > 0.2 && self.rollback_pending.is_none() {
-                self.rollback_pending = Some((c.cp.clone(), "o laser não voltou a entrar no ciano (era ele que saía do vermelho)", Some(need.at)));
-                return;
-            }
-        }
+        ch.tb.linha.cumprir_laser(&entries, tw);
     }
 
     /// o laser do passado: com o laranja temporal aberto, refeito como era Δ s antes (portas e cubos da

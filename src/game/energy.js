@@ -132,10 +132,15 @@ export class EnergySystem {
       light.intensity = 6;
     }
     const hist = Array.from({ length: TRAIL }, () => L.pos.clone());
-    const p = { uid: `b${(this.uidSeq = (this.uidSeq ?? 0) + 1)}`, pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, light, cooldown: 0 };
+    const p = { uid: this.newUid(), pos: L.pos.clone(), vel: L.dir.clone().multiplyScalar(L.speed), life: L.life, from: L, group: g, sprite: sp, shell, trail, hist, light, cooldown: 0 };
     L.pellet = p;
     this.pellets.push(p);
     return p;
+  }
+
+  /** identidade nova (nunca repete) */
+  newUid() {
+    return `b${(this.uidSeq = (this.uidSeq ?? 0) + 1)}`;
   }
 
   /** bola solta (sem lançador): a que veio do passado pelo par temporal */
@@ -323,21 +328,9 @@ export class EnergySystem {
             const l = Q.local(hit.point);
             return (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1;
           });
-        // o laranja temporal (aberto no passado): a bola entra e sai pelo azul Δ s depois
-        // (o seu ou o de uma versão passada sua)
-        if (hit && !intoPortal)
-          for (const O of portals.list) {
-            if (!O.placed || !(O.delta > 0) || !portals.isLinked(O)) continue;
-            const l = O.local(hit.point);
-            if (Math.abs(l.z) < 0.1 && (l.x / PORTAL_A) ** 2 + (l.y / PORTAL_B) ** 2 <= 1 && on.intoPast?.(p, O)) {
-              this.kill(p);
-              entered = true;
-              break;
-            }
-          }
-        // o vermelho de uma versão passada sua, visto do passado (fundo preto): a bola some
-        // ali e sai pelo ciano Δ s depois
-        if (hit && !intoPortal && !entered && on.intoGhost?.(p, hit.point)) {
+        // um vermelho temporal (o seu, o de uma versão passada ou o de estática, visto do
+        // passado): a bola entra e sai pelo azul Δ s depois (o relógio decide; true = entrou)
+        if (hit && !intoPortal && on.intoOrange?.(p, hit.point)) {
           this.kill(p);
           entered = true;
         }

@@ -403,6 +403,8 @@ export const EN = new Map([
   ["Essa amostra rosa é de quartzo, achada lá no fundo da mina. Trata ela com carinho, viu?", "This pink sample is quartz, found deep down in the mine. Treat it gently, okay?"],
   ["Essa bola cai do teto e quica no chão. A plataforma só anda com energia no receptor.", "This ball falls from the ceiling and bounces on the floor. The platform only moves with energy in the receiver."],
   ["essa bola do passado ligou um receptor depois: ela não pode ter entrado no vermelho", "that ball from the past powered a receiver later: it can't have gone into the red one"],
+  ["esse cubo do passado segurou um botão depois: ele não pode ter entrado no vermelho", "that cube from the past held a button down later: it can't have gone into the red one"],
+  ["o seu passado usou um cubo que já tinha entrado no vermelho", "your past self used a cube that had already gone into the red one"],
   ["Essa doeu. De novo!", "That one hurt. Again!"],
   ["Essa pasta não parece ser a do Portal. Escolha a pasta \"Portal\" (a que tem as pastas \"portal\" e \"hl2\" dentro).", "This folder doesn't look like Portal's. Choose the \"Portal\" folder (the one with the \"portal\" and \"hl2\" folders inside)."],
   ["Essa é a arma de portais: botão esquerdo abre o portal ciano, botão direito abre o vermelho.", "This is the portal gun: the left button opens the cyan portal, the right button opens the red one."],

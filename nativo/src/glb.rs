@@ -43,10 +43,54 @@ fn extra_mat(extras: &Option<Box<serde_json::value::RawValue>>) -> Option<serde_
     v.get("mat").cloned()
 }
 
-fn load(name: &str, ecs: &mut Ecs) -> Option<Model> {
+type Imported = (gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>);
+
+fn import(name: &str) -> Option<Imported> {
     let path = asset_dir().join("models").join(format!("{name}.glb"));
     let bytes = std::fs::read(&path).ok()?;
-    let (doc, buffers, images) = gltf::import_slice(&bytes).ok()?;
+    gltf::import_slice(&bytes).ok()
+}
+
+/// modelos lidos em segundo plano (a leitura e a decodificação das texturas são o grosso do
+/// tempo; a arma sozinha tem 6 MB): pronto = esperando a vez, pedido = alguém já está usando
+static PRELOAD: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Option<Imported>>>> = std::sync::OnceLock::new();
+
+fn preload_map() -> &'static std::sync::Mutex<HashMap<String, Option<Imported>>> {
+    PRELOAD.get_or_init(Default::default)
+}
+
+fn take_preloaded(name: &str) -> Option<Imported> {
+    let mut m = preload_map().lock().ok()?;
+    match m.get_mut(name) {
+        Some(slot) => slot.take(),
+        None => {
+            // (ninguém começou: marca como pedido para o segundo plano não repetir)
+            m.insert(name.to_string(), None);
+            None
+        }
+    }
+}
+
+/// começa a ler, em segundo plano, os modelos que quase toda fase usa
+pub fn start_preload() {
+    for group in [&["gun", "cube", "floor_button"][..], &["turret", "cube_special", "cube_laser"][..]] {
+        std::thread::spawn(move || {
+            for &name in group {
+                if preload_map().lock().map(|m| m.contains_key(name)).unwrap_or(true) {
+                    continue;
+                }
+                let got = import(name);
+                if let Ok(mut m) = preload_map().lock() {
+                    // (se pediram enquanto lia, a cópia de lá já foi feita: descarta)
+                    m.entry(name.to_string()).or_insert(got);
+                }
+            }
+        });
+    }
+}
+
+fn load(name: &str, ecs: &mut Ecs) -> Option<Model> {
+    let (doc, buffers, images) = take_preloaded(name).or_else(|| import(name))?;
     // modelos novos (o chefe): as cores fora da curva de tom da versão web são compensadas
     let untone = ["boss", "rocket", "core_"].iter().any(|p| name.starts_with(p));
     // texturas
@@ -300,11 +344,33 @@ pub fn meshes_of(ecs: &mut Ecs, e: Entity) -> Vec<Entity> {
 /// dá à peça um material só dela (cópia), para mudar cor sem afetar as outras instâncias
 pub fn unique_material(ecs: &mut Ecs, e: Entity) -> Option<Handle<StandardMaterial>> {
     let meshes = meshes_of(ecs, e);
-    let first = meshes.first().and_then(|m| ecs.get::<MeshMaterial3d<StandardMaterial>>(*m)).map(|m| m.0.clone())?;
+    let mat_of = |ecs: &Ecs, m: Entity| ecs.get::<MeshMaterial3d<StandardMaterial>>(m).map(|m| m.0.clone());
+    // o material da própria peça (não o de uma peça presa nela, como a tampa com os sulcos do
+    // botão de chão); só as malhas com esse mesmo material ganham a cópia
+    let first = mat_of(ecs, e)
+        .or_else(|| {
+            // (busca em largura: a malha mais perto da peça vem antes das presas nela)
+            let mut level = vec![e];
+            while !level.is_empty() {
+                let mut next = vec![];
+                for x in level {
+                    if let Some(m) = mat_of(ecs, x) {
+                        return Some(m);
+                    }
+                    if let Some(ch) = ecs.get::<Children>(x) {
+                        next.extend(ch.iter());
+                    }
+                }
+                level = next;
+            }
+            None
+        })?;
     let copy = ecs.resource::<Assets<StandardMaterial>>().get(&first).cloned()?;
     let h = ecs.resource_mut::<Assets<StandardMaterial>>().add(copy);
     for m in meshes {
-        ecs.entity_mut(m).insert(MeshMaterial3d(h.clone()));
+        if mat_of(ecs, m).as_ref() == Some(&first) {
+            ecs.entity_mut(m).insert(MeshMaterial3d(h.clone()));
+        }
     }
     Some(h)
 }

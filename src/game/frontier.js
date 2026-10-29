@@ -383,24 +383,17 @@ export class Frontier {
   }
 
   /**
-   * Laser mandado para o passado: depois de um salto, as versões passadas guardam os
-   * instantes em que um feixe entrava num azul temporal; Δ segundos antes deles, o feixe
-   * sai de verdade do laranja (liga receptores, queima). O laço tem de fechar: no instante
-   * gravado o feixe precisa entrar de novo no azul — senão, paradoxo.
+   * Laser mandado para o passado: depois de um salto, as entradas do feixe num azul temporal
+   * estão na linha do tempo (as emissões); Δ segundos antes delas, o feixe sai de verdade do
+   * laranja da versão passada (liga receptores, queima). O laço tem de fechar: no instante gravado
+   * o feixe precisa entrar de novo no azul (um compromisso) — senão, paradoxo só se o feixe do
+   * passado ligou um receptor sozinho.
    */
   pastEmissions(ctx) {
     const R = ctx.relogio;
-    if (!R?.clones?.length || R.paused || R.sweep) return [];
-    const out = [];
-    const tol = 1 / 30 * 0.6;
-    for (const c of R.clones) {
-      for (const e of c.laserEmits ?? []) {
-        if (Math.abs(e.t - R.tw) > tol) continue;
-        if (out.some((x) => x.o.distanceTo(e.exit) < 0.2 && x.d.dot(e.dir) > 0.98)) continue;
-        out.push({ o: e.exit.clone(), d: e.dir.clone(), fromPast: true, frame: e.frame, bridge: e.bridge });
-      }
-    }
-    return out;
+    if (!R?.clones?.length || R.paused || R.sweep || !R.linha) return [];
+    const ids = new Set(R.clones.map((c) => c.id));
+    return R.linha.emissoesEm(R.tw, (1 / 30) * 0.6, (id) => ids.has(id)).map((e) => ({ o: e.exit.clone(), d: e.dir.clone(), fromPast: true, emissao: e, frame: e.frame, bridge: e.bridge }));
   }
 
   /** o feixe que veio do passado acertaria a sua versão passada? (paradoxo) */
@@ -418,25 +411,14 @@ export class Frontier {
     }
   }
 
-  /** depois dos feixes do quadro: o laço de cada laser mandado ao passado fechou? */
-  checkLaserLoops(ctx, dt) {
+  /**
+   * Depois dos feixes do quadro: os que entraram num azul cumprem os compromissos de laser de agora
+   * (os que não entram quebram na resolução dos compromissos, no relógio)
+   */
+  checkLaserLoops(ctx) {
     const R = ctx.relogio;
-    if (!R?.clones?.length || R.paused || R.sweep) return;
-    const tol = 1 / 30 * 0.6;
-    for (const c of R.clones) {
-      let need = null;
-      for (const e of c.laserEmits ?? []) if (Math.abs(e.entryT - R.tw) <= tol) need = e;
-      if (!need) {
-        c.laserMiss = 0;
-        continue;
-      }
-      const ok = (this.liveEntries ?? []).some((x) => x.at.distanceTo(need.at) < 0.5);
-      c.laserMiss = ok ? 0 : (c.laserMiss ?? 0) + dt;
-      if (c.laserMiss > 0.2) {
-        R.rollback(c.cp, 'o laser não voltou a entrar no ciano (era ele que saía do vermelho)', need.at.clone());
-        return;
-      }
-    }
+    if (!R?.clones?.length || R.paused || R.sweep || !R.linha) return;
+    R.linha.cumprirLaser((this.liveEntries ?? []).map((x) => x.at), R.tw);
   }
 
   /**
@@ -1028,6 +1010,8 @@ export class Frontier {
     this.prevEntries = this.liveEntries ?? [];
     this.liveEntries = [];
     const emitted = this.pastEmissions(ctx);
+    // receptores ligados neste quadro por um feixe de agora (não do passado): o outro caminho de uma âncora
+    this.litPresent = new Set();
     const bridgeSegs = [];
     for (const L of [...W.lasers.filter((L) => !L.off), ...this.updatePast(ctx), ...emitted]) {
       let o = L.pos ?? L.o;
@@ -1086,7 +1070,14 @@ export class Frontier {
         if (!res.point) break;
         this.spark(res.point, ctx.t);
         // receptor
-        for (const C of W.laserCatchers) if (C.pos.distanceTo(res.point) < 0.75) C.active = true;
+        W.laserCatchers.forEach((C, ci) => {
+          if (C.pos.distanceTo(res.point) >= 0.75) return;
+          C.active = true;
+          // quem ligou: um feixe do passado (consequência dele: âncora) ou um de agora
+          if (L.emissao) {
+            if (!L.emissao.liga.includes(ci)) L.emissao.liga.push(ci);
+          } else this.litPresent.add(ci);
+        });
         const p = res.prop;
         if (p?.redirect) {
           // cubo refletor: sai pela lente da frente

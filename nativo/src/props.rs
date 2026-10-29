@@ -67,6 +67,44 @@ pub struct Prop {
     /// preso no lugar pelo mapa (núcleo da campanha original até EnableMotion)
     pub pinned: bool,
     pub frozen_v: Option<(Vec3, Vec3)>,
+    /// a cópia que aparece saindo do outro portal enquanto o objeto está na boca de um
+    pub twin: Option<Twin>,
+}
+
+/// cópia só visual do modelo (raiz e pares origem → cópia de cada nó)
+pub struct Twin {
+    root: Entity,
+    pairs: Vec<(Entity, Entity)>,
+}
+
+impl Twin {
+    fn new(ecs: &mut Ecs, src: Entity, parent: Entity) -> Self {
+        fn rec(ecs: &mut Ecs, s: Entity, parent: Option<Entity>, pairs: &mut Vec<(Entity, Entity)>) -> Entity {
+            let t = ecs.get::<Transform>(s).copied().unwrap_or_default();
+            let d = ecs.spawn((t, Visibility::Hidden)).id();
+            if let Some(p) = parent {
+                ecs.entity_mut(d).insert(ChildOf(p));
+            }
+            if let Some(m) = ecs.get::<Mesh3d>(s).cloned() {
+                ecs.entity_mut(d).insert(m);
+            }
+            if let Some(m) = ecs.get::<MeshMaterial3d<StandardMaterial>>(s).cloned() {
+                ecs.entity_mut(d).insert(m);
+            }
+            if let Some(m) = ecs.get::<MeshMaterial3d<crate::fx::Fx>>(s).cloned() {
+                ecs.entity_mut(d).insert(m);
+            }
+            pairs.push((s, d));
+            let kids: Vec<Entity> = ecs.get::<Children>(s).map(|c| c.iter().collect()).unwrap_or_default();
+            for k in kids {
+                rec(ecs, k, Some(d), pairs);
+            }
+            d
+        }
+        let mut pairs = vec![];
+        let root = rec(ecs, src, Some(parent), &mut pairs);
+        Twin { root, pairs }
+    }
 }
 
 /// o que o filtro de contato precisa saber de cada objeto (cópia, para poder rodar em paralelo)
@@ -129,6 +167,7 @@ impl Prop {
             frozen_bt: false,
             pinned: false,
             frozen_v: None,
+            twin: None,
         }
     }
 
@@ -371,13 +410,36 @@ impl Props {
         crossed
     }
 
-    /// copia o estado dos corpos para os campos e para os modelos
-    pub fn sync(&mut self, ecs: &mut Ecs, ph: &Physics) {
+    /// copia o estado dos corpos para os campos e para os modelos; o objeto atravessando a boca
+    /// de um portal também aparece saindo do outro (a cópia)
+    pub fn sync(&mut self, ecs: &mut Ecs, ph: &Physics, portals: &Portals) {
         for p in &mut self.list {
             p.body_state(ph);
             let t = Transform::from_translation(p.quat * p.mesh_offset + p.pos).with_rotation(p.quat).with_scale(Vec3::splat(p.mesh_scale));
             if let Ok(mut e) = ecs.get_entity_mut(p.mesh) {
                 e.insert((t, if p.gone { Visibility::Hidden } else { Visibility::Inherited }));
+            }
+            let mouth = if p.gone { None } else { portals.straddled(p.pos, p.radius) };
+            let Some(i) = mouth else {
+                if let Some(tw) = &p.twin {
+                    if let Ok(mut e) = ecs.get_entity_mut(tw.root) {
+                        e.insert(Visibility::Hidden);
+                    }
+                }
+                continue;
+            };
+            if p.twin.as_ref().is_none_or(|tw| ecs.get_entity(tw.root).is_err()) {
+                let Some(parent) = ecs.get::<ChildOf>(p.mesh).map(|c| c.parent()) else { continue };
+                p.twin = Some(Twin::new(ecs, p.mesh, parent));
+            }
+            let tw = p.twin.as_ref().unwrap();
+            let m = portals.transform(i, portals.list[i].partner) * t.to_matrix();
+            for (k, &(s, d)) in tw.pairs.iter().enumerate() {
+                let local = if k == 0 { Transform::from_matrix(m) } else { ecs.get::<Transform>(s).copied().unwrap_or_default() };
+                let vis = if k == 0 { Visibility::Inherited } else { ecs.get::<Visibility>(s).copied().unwrap_or_default() };
+                if let Ok(mut e) = ecs.get_entity_mut(d) {
+                    e.insert((local, vis));
+                }
             }
         }
     }

@@ -731,7 +731,7 @@ export class PortalSystem {
    * Portais ligados em cuja boca está o centro de um corpo (o corpo está
    * entrando neles). `wall`: jogador — em portal de parede precisa caber em pé.
    */
-  mouths(center, wall = false, reach = 0) {
+  mouths(center, wall = false, reach = 0, pad = 0) {
     const out = [];
     for (const P of this.list) {
       if (!this.isLinked(P) || !P.box || P.delta > 0) continue; // o laranja do passado não existe no presente (o azul temporal deixa passar)
@@ -740,7 +740,7 @@ export class PortalSystem {
       // parede: o corpo pode estar até ~0,45 m abaixo do centro ideal (portal um pouco
       // acima do chão: dá para entrar andando, sem pular a beirada)
       const mv = wall && Math.abs(P.normal.y) < 0.5 ? 0.45 : 0.25;
-      if (Math.abs(l.x) <= PORTAL_A - 0.25 && Math.abs(l.y) <= PORTAL_B - mv) out.push(P);
+      if (Math.abs(l.x) <= PORTAL_A - 0.25 + pad && Math.abs(l.y) <= PORTAL_B - mv + pad) out.push(P);
     }
     return out;
   }
@@ -820,6 +820,16 @@ export class PortalSystem {
         const l = P.local(_v.copy(a).lerp(b, sa / (sa - sb)));
         if (Math.abs(l.x) <= PORTAL_A && Math.abs(l.y) <= PORTAL_B) return P;
       }
+    }
+    return null;
+  }
+
+  /** a boca de portal ligado (não temporal) que um objeto de raio `r` em `c` atravessa agora */
+  straddled(c, r) {
+    for (const P of this.list) {
+      if (!this.isLinked(P) || P.delta > 0 || P.partner.delta > 0) continue;
+      const l = P.local(c);
+      if (Math.abs(l.z) < r && Math.abs(l.x) < PORTAL_A && Math.abs(l.y) < PORTAL_B) return P;
     }
     return null;
   }

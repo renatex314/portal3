@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "serve": "node server.js",
     "start": "vite build && node server.js",
-    "pacote": "node scripts/pacote-portal.mjs"
+    "pacote": "node scripts/pacote-portal.mjs",
+    "teste": "node --test scripts/teste-web/linha.test.mjs && node scripts/teste-web/cenarios.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",

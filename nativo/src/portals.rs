@@ -485,6 +485,23 @@ impl Portals {
         out
     }
 
+    /// como `mouths`, mas olhando o caminho inteiro do passo (a, b): em velocidade alta o ponto
+    /// de partida pode estar fora da abertura estreita enquanto o caminho cruza o portal
+    pub fn mouths_swept(&self, a: Vec3, b: Vec3, wall: bool) -> Vec<usize> {
+        let reach = (b - a).length();
+        let n = ((reach / 0.4).ceil() as usize).clamp(1, 12);
+        let mut out: Vec<usize> = vec![];
+        for k in 0..=n {
+            let c = a.lerp(b, k as f32 / n as f32);
+            for i in self.mouths(c, wall, reach) {
+                if !out.contains(&i) {
+                    out.push(i);
+                }
+            }
+        }
+        out
+    }
+
     /// a caixa deixa de colidir com um corpo (min..max) que está na boca de um dos portais?
     pub fn passes(&self, solids: &[Solid], solid: usize, mouths: &[usize], min: Vec3, max: Vec3) -> bool {
         let b = &solids[solid];
@@ -578,6 +595,33 @@ impl Portals {
             }
         }
         None
+    }
+
+    /// a boca de vermelho temporal em `point` (na superfície) neste instante do mundo: o seu ou o de uma
+    /// versão passada, abertos, ou o de estática (que uma versão passada ainda vai abrir ali). A mesma
+    /// resposta para o desenho e para a física: (centro, Δ)
+    pub fn temporal_orange_at(&self, point: Vec3) -> Option<(Vec3, f32)> {
+        let inside = |q: &Portal| {
+            let l = q.local(point);
+            l.z.abs() < 0.1 && (l.x / PORTAL_A).powi(2) + (l.y / PORTAL_B).powi(2) <= 1.0
+        };
+        let open = (0..self.list.len()).find(|&i| self.list[i].placed && self.list[i].delta > 0.0 && self.is_linked(i) && inside(&self.list[i]));
+        if let Some(i) = open {
+            return Some((self.list[i].center, self.list[i].delta));
+        }
+        self.statics.iter().find(|q| q.placed && q.delta > 0.0 && inside(q)).map(|q| (q.center, q.delta))
+    }
+
+    /// a boca de portal ligado (não temporal) que um objeto de raio `r` em `c` atravessa agora
+    pub fn straddled(&self, c: Vec3, r: f32) -> Option<usize> {
+        (0..self.list.len()).find(|&i| {
+            let p = &self.list[i];
+            if !self.is_linked(i) || p.delta > 0.0 || self.list[p.partner].delta > 0.0 {
+                return false;
+            }
+            let l = p.local(c);
+            l.z.abs() < r && l.x.abs() < PORTAL_A && l.y.abs() < PORTAL_B
+        })
     }
 
     /// o ponto terminou atrás do plano de um portal sem cruzá-lo (entrou rápido demais)

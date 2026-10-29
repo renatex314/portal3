@@ -10,10 +10,15 @@
 //!    o que você fez — pisa em botões — até o momento do salto, quando mergulha no ciano e some.
 //!  • O QUE ACONTECEU SE REPETE: cubos e torretas seguem a gravação ("no trilho") até você os
 //!    perturbar; o objeto que você leva no salto existe duas vezes até o instante do salto.
+//!  • A LINHA DO TEMPO (relogio/linha.rs): bolas, objetos e o laser que vão ao passado têm trechos
+//!    de vida lá e compromissos (entrar de novo no ciano na hora). Um compromisso que não se cumpre
+//!    só é paradoxo se algo dependia do trecho (um receptor, um botão) e nada mais mantém isso;
+//!    coisas iguais (bolas, cubos do mesmo modelo) fazem o papel umas das outras.
 //!  • PARADOXO: se o clone não puder repetir o passado, o loop colapsa e você volta ao instante
 //!    do salto, com os portais como estavam.
 
 mod bolas;
+pub mod linha;
 mod lasers;
 
 use crate::game::{Game, GameEvent};
@@ -46,6 +51,8 @@ pub struct PropSnap {
     pub v: Vec3,
     pub a: Vec3,
     pub gone: bool,
+    /// não existe mais ali POR CAUSA de um portal (caiu no vermelho e foi para o futuro)
+    pub portaled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +170,8 @@ pub struct Checkpoint {
     loop_n: u32,
     presses: usize,
     fields: usize,
+    /// a linha do tempo das bolas como estava (o loop desfeito não aconteceu)
+    linha: linha::Linha,
 }
 
 /// a versão passada sua que refaz a gravação
@@ -177,16 +186,16 @@ pub struct CloneData {
     pub ghost: Option<crate::characters::Dino>,
     cp: Arc<Checkpoint>,
     exit: (Vec3, Vec3, Vec3),
-    bad: HashMap<&'static str, f32>,
     echoed: bool,
     closed: bool,
     fz_last: Option<f32>,
     marker: Option<Entity>,
-    laser_emits: Vec<lasers::LaserEmit>,
-    laser_miss: f32,
     /// o par de portais (cinza) que o clone disparou, e o que está mostrado em cada um
     pair: Option<(usize, usize)>,
     shown: [Option<Arc<PFrame>>; 2],
+    /// vermelhos temporais que essa versão abriu (de, até, quadro): no passado dela eles aparecem
+    /// como um vermelho de estática (ghostWindows de relogio.js)
+    ghost_wins: Option<Vec<(f32, f32, Arc<PFrame>)>>,
 }
 
 pub struct Sweep {
@@ -223,6 +232,8 @@ pub struct Chronos {
     pub rollbacks: u32,
     /// voltas completas (cada salto bem-sucedido: os apertos e campos passam a ser "do passado")
     pub loop_n: u32,
+    /// vezes em que um objeto igual fez o papel do que o seu passado usou (para os testes)
+    pub stand_ins: u32,
     /// apertos de botões na linha do tempo: (tw, botão, volta)
     pub presses: Vec<(f32, usize, u32)>,
     press_last: f32,
@@ -254,6 +265,7 @@ struct Holo {
 }
 
 impl Chronos {
+
     pub fn new() -> Self {
         Chronos {
             paused: false,
@@ -280,6 +292,7 @@ impl Chronos {
             paradoxes: 0,
             rollbacks: 0,
             loop_n: 0,
+            stand_ins: 0,
             presses: vec![],
             press_last: 0.0,
             eco: None,
@@ -342,6 +355,8 @@ impl Chronos {
                 }
             }
         }
+        // os duplos (a versão mais velha de um objeto mandado ao passado) também apertam botões
+        out.extend(self.tb.linha.duplos.iter().filter_map(|d| d.em(self.tw, RATE).map(|x| x.0)));
         out
     }
 
@@ -389,6 +404,7 @@ struct PropAt {
     v: Vec3,
     a: Vec3,
     gone: bool,
+    portaled: bool,
     held: bool,
 }
 
@@ -402,10 +418,60 @@ fn prop_at(script: &[Arc<Sample>], f: f32, k: usize) -> Option<PropAt> {
     let smooth = pb.is_some_and(|pb| !b.gap && !pa.gone && !pb.gone && pa.p.distance(pb.p) < 2.5);
     let t = if smooth { (f - i as f32).clamp(0.0, 1.0) } else { 0.0 };
     let (bp, bq) = if smooth { let pb = pb.unwrap(); (pb.p, pb.q) } else { (pa.p, pa.q) };
-    Some(PropAt { p: pa.p.lerp(bp, t), q: pa.q.slerp(bq, t), v: pa.v, a: pa.a, gone: pa.gone, held: a.h == k as i32 })
+    Some(PropAt { p: pa.p.lerp(bp, t), q: pa.q.slerp(bq, t), v: pa.v, a: pa.a, gone: pa.gone, portaled: pa.portaled, held: a.h == k as i32 })
 }
 
 /// trechos do script em que você mexeu em cada objeto
+/// o corpo (caixa mn–mx) entra mais de `eps` na peça? Pela forma de verdade: a caixa alinhada aos eixos
+/// de uma peça girada ou convexa (mapas importados, paredes em diagonal, rampas) é bem maior que ela —
+/// perto de uma, no ar, o corpo "encostava" e o seu passado acusava um bloqueio que não existe
+fn solid_touches(b: &crate::world::Solid, mn: Vec3, mx: Vec3, eps: f32) -> bool {
+    if !overlap(mn, mx, b.min, b.max, eps) {
+        return false;
+    }
+    let planes: Vec<(Vec3, f32)> = if let Some(pl) = &b.planes {
+        pl.iter().map(|p| (p.n, p.d)).collect()
+    } else if let Some(o) = &b.obb {
+        let mut v = vec![];
+        for k in 0..3 {
+            for sgn in [1.0f32, -1.0] {
+                let mut a = Vec3::ZERO;
+                a[k] = sgn;
+                let n = o.q * a;
+                v.push((n, n.dot(o.c) + o.half[k]));
+            }
+        }
+        v
+    } else {
+        return true;
+    };
+    // a caixa encolhida da folga: separada por algum plano da peça? então não entra nela
+    let (a, b2) = (mn + Vec3::splat(eps), mx - Vec3::splat(eps));
+    let mut corners = [Vec3::ZERO; 8];
+    for (i, c) in corners.iter_mut().enumerate() {
+        *c = Vec3::new(if i & 1 == 0 { a.x } else { b2.x }, if i & 2 == 0 { a.y } else { b2.y }, if i & 4 == 0 { a.z } else { b2.z });
+    }
+    !planes.iter().any(|(n, d)| corners.iter().all(|c| n.dot(*c) > *d))
+}
+
+/// a partir do quadro `from`, a gravação passa a dizer que o seu passado usou o objeto `j` no lugar de `k`
+/// (e o `k` fez o que o `j` fazia): troca os dois em cada foto, no objeto segurado e nos empurrados
+fn swap_in_script(script: &mut [Arc<Sample>], from: usize, k: usize, j: usize) {
+    let sw = |x: usize| if x == k { j } else if x == j { k } else { x };
+    for smp in script.iter_mut().skip(from) {
+        let s = Arc::make_mut(smp);
+        if s.h >= 0 {
+            s.h = sw(s.h as usize) as i32;
+        }
+        s.hm.iter_mut().for_each(|x| *x = sw(*x));
+        s.pm.iter_mut().for_each(|x| *x = sw(*x));
+        let w = Arc::make_mut(&mut s.w);
+        if k < w.props.len() && j < w.props.len() {
+            w.props.swap(k, j);
+        }
+    }
+}
+
 fn episodes(script: &[Arc<Sample>], skip: i32) -> Vec<Episode> {
     let mut open: HashMap<usize, Episode> = HashMap::new();
     let mut out = vec![];
@@ -436,6 +502,15 @@ fn episodes(script: &[Arc<Sample>], skip: i32) -> Vec<Episode> {
 
 // ------------------------------------------------------------------ o relógio no jogo
 impl Game {
+    /// o holograma da pausa: (grupo, o seu eu do passado) — para os testes
+    pub fn ch_holo_entities(&self) -> Option<(Entity, Option<Entity>)> {
+        self.relogio.as_ref()?.holo.as_ref().map(|h| (h.root, h.me.as_ref().map(|m| m.root)))
+    }
+
+    pub fn ch_linha(&self) -> Option<&linha::Linha> {
+        self.relogio.as_deref().map(|c| &c.tb.linha)
+    }
+
     pub fn ch(&self) -> Option<&Chronos> {
         self.relogio.as_deref()
     }
@@ -464,7 +539,7 @@ impl Game {
                 .iter()
                 .map(|c| {
                     let (v, a) = w.phys.body(c.body).map(|b| (b.linvel(), b.angvel())).unwrap_or_default();
-                    PropSnap { p: c.pos, q: c.quat, v, a, gone: c.gone }
+                    PropSnap { p: c.pos, q: c.quat, v, a, gone: c.gone, portaled: false }
                 })
                 .collect(),
         }
@@ -750,12 +825,31 @@ impl Game {
 
     /// com o tempo parado: o caminho que você anda (um ponto a cada ~25 cm)
     fn ch_track_frozen(&mut self) {
-        let in_mouth = self.in_mouth();
+        // na boca: o centro no meio dela (in_mouth), ou o corpo na região de um portal ligado (em alta
+        // velocidade, o quadro antes de atravessar pega o corpo já entrando na parede, fora do centro)
+        let pos = self.player.pos;
+        let near_portal = (0..self.portals.list.len()).any(|i| {
+            let p = &self.portals.list[i];
+            if !self.portals.is_linked(i) {
+                return false;
+            }
+            let l = p.local(pos);
+            l.x.abs() < PORTAL_A + 0.45 && l.y.abs() < PORTAL_B + 0.45 && l.z > -1.6 && l.z < 1.6
+        });
+        let in_mouth = self.in_mouth() || near_portal;
         let pl = &self.player;
         let Some(ch) = self.relogio.as_mut() else { return };
         let Some(path) = ch.frozen_path.as_mut() else { return };
-        if let Some(last) = path.last() {
+        if let Some(last) = path.last_mut() {
             if last.p.distance(pl.pos) < 0.25 && last.grounded == pl.grounded {
+                return;
+            }
+            // um salto entre dois pontos seguidos é um portal atravessado: os dois lados estão na boca
+            if last.p.distance(pl.pos) > 1.5 {
+                last.in_mouth = true;
+                if path.len() <= 4000 {
+                    path.push(FrozenPt { p: pl.pos, up: pl.up_sign, grounded: pl.grounded, in_mouth: true });
+                }
                 return;
             }
         }
@@ -862,6 +956,11 @@ impl Game {
             self.ch_drive_props();
             return 0.0;
         }
+        // o tempo voltou a andar: o holograma do passado (só da pausa) some
+        if ch.holo.is_some() {
+            self.ch_set_holo(ecs, false);
+        }
+        let ch = self.relogio.as_mut().unwrap();
         ch.tw += dt;
         ch.vt += dt;
         loop {
@@ -985,6 +1084,58 @@ impl Game {
         }
         self.relogio = Some(ch);
         self.ch_update_eco(ecs);
+        self.ch_ghost_statics();
+    }
+
+    /// os vermelhos do passado abertos neste instante do mundo: um vermelho de estática onde a sua
+    /// versão do futuro abriu o vermelho temporal (setGhostStatics de relogio.js)
+    fn ch_ghost_statics(&mut self) {
+        let mut frames: Vec<Arc<PFrame>> = vec![];
+        if let Some(ch) = self.relogio.as_mut() {
+            let tw = ch.tw;
+            for id in ch.clones.clone() {
+                let Some(c) = ch.arena.get_mut(&id) else { continue };
+                let wins = c.ghost_wins.get_or_insert_with(|| {
+                    let mut out: Vec<(f32, f32, Arc<PFrame>)> = vec![];
+                    for smp in &c.script {
+                        let Some(o) = &smp.pt.o else { continue };
+                        if !(o.delta > 0.0) || smp.pt.b.is_none() {
+                            continue;
+                        }
+                        let t = smp.t - o.delta;
+                        if let Some(last) = out.last_mut() {
+                            if Arc::ptr_eq(&last.2, o) && t - last.1 < RATE * 1.5 {
+                                last.1 = t;
+                                continue;
+                            }
+                        }
+                        out.push((t, t, o.clone()));
+                    }
+                    out
+                });
+                for (from, to, f) in wins.iter() {
+                    if tw >= from - 1e-6 && tw <= to + RATE && !frames.iter().any(|g| g.c.distance(f.c) < 0.3) {
+                        frames.push(f.clone());
+                    }
+                }
+            }
+        }
+        for (k, st) in self.portals.statics.iter_mut().enumerate() {
+            match frames.get(k) {
+                Some(f) => {
+                    if !st.placed || st.center.distance(f.c) > 1e-3 || st.normal.dot(f.n) < 0.999 {
+                        st.set_frame(f.c, f.n, f.u, Some(f.solid));
+                    }
+                    // as bolas que batem nele entram (e saem pelo ciano Δ s depois)
+                    st.delta = f.delta;
+                }
+                None => {
+                    if st.placed {
+                        st.remove();
+                    }
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ objetos no trilho
@@ -1082,24 +1233,50 @@ impl Game {
                 }
                 let Some(prop) = self.props.list.get(e.k) else { continue };
                 let Some(st) = prop_at(&c.script, f, e.k) else { continue };
-                if st.gone {
-                    continue;
-                }
-                if self.held == Some(e.k) {
+                // âncora: o seu passado usa este objeto agora. Se ele não pode (foi para o futuro por um
+                // vermelho, está na sua mão, saiu do lugar), outro igual que esteja onde ele estaria faz
+                // o papel dele (outro caminho); só sem nenhum é paradoxo. "O lugar" é onde o seu passado o
+                // encontrou: a foto de logo antes de ele começar a usá-lo (mexido com o tempo parado, a foto
+                // do instante já o tem onde ele o deixou)
+                let found = e.j0.checked_sub(1).and_then(|j| prop_at(&c.script, j as f32, e.k)).filter(|q| !q.gone).map(|q| q.p).unwrap_or(st.p);
+                let misplaced = |p: Vec3| p.distance(found).min(p.distance(st.p)) > MISPLACED;
+                let why = if st.gone {
+                    // o seu passado usa um cubo que, nesta história, já caiu num vermelho e foi para o futuro
+                    if !st.portaled {
+                        continue;
+                    }
+                    Some("o seu passado usou um cubo que já tinha entrado no vermelho")
+                } else if self.held == Some(e.k) {
+                    Some("você pegou o objeto que o seu passado estava usando")
+                } else if ch.free.contains(&e.k) && (prop.gone || misplaced(prop.pos)) {
+                    Some("o objeto que o seu passado usou não estava mais no lugar")
+                } else {
+                    None
+                };
+                if let Some(why) = why {
                     let at = prop.pos;
-                    let cp = c.cp.clone();
-                    self.relogio = Some(ch);
-                    self.ch_rollback_later(cp, "você pegou o objeto que o seu passado estava usando", Some(at));
-                    return true;
-                }
-                if ch.free.contains(&e.k) {
-                    if prop.gone || prop.pos.distance(st.p) > MISPLACED {
-                        let at = prop.pos;
+                    let fi = f.floor().max(0.0) as usize;
+                    let want = if st.gone { c.script[..fi.min(c.script.len())].iter().rev().find_map(|s| s.w.props.get(e.k).filter(|q| !q.gone).map(|q| q.p)) } else { Some(found) };
+                    let busy: Vec<usize> = c.eps.iter().filter(|x| f >= x.j0 as f32 - 1e-6 && f < (x.j1 + 1) as f32).map(|x| x.k).collect();
+                    let sub = want.and_then(|w| self.ch_stand_in(e.k, w, &busy));
+                    let Some(j) = sub else {
                         let cp = c.cp.clone();
                         self.relogio = Some(ch);
-                        self.ch_rollback_later(cp, "o objeto que o seu passado usou não estava mais no lugar", Some(at));
+                        self.ch_rollback_later(cp, why, Some(at));
                         return true;
-                    }
+                    };
+                    let echo = c.echo.map(|x| x.0 as i32).unwrap_or(-1);
+                    let c = ch.arena.get_mut(&id).unwrap();
+                    swap_in_script(&mut c.script, fi, e.k, j);
+                    c.eps = episodes(&c.script, echo);
+                    ch.free.insert(e.k);
+                    ch.snap.remove(&e.k);
+                    ch.free.remove(&j);
+                    ch.snap.insert(j);
+                    ch.stand_ins += 1;
+                    break;
+                }
+                if ch.free.contains(&e.k) {
                     ch.free.remove(&e.k);
                     ch.snap.insert(e.k);
                 }
@@ -1162,12 +1339,27 @@ impl Game {
         false
     }
 
+    /// um objeto igual a `k` (mesmo tipo e mesmo modelo), solto, que não está na sua mão nem em uso pelo
+    /// seu passado agora, e que está onde `k` deveria estar: ele faz o papel de `k`
+    fn ch_stand_in(&self, k: usize, at: Vec3, busy: &[usize]) -> Option<usize> {
+        let a = self.props.list.get(k)?;
+        self.props
+            .list
+            .iter()
+            .enumerate()
+            .filter(|(j, b)| *j != k && !busy.contains(j) && self.held != Some(*j) && !b.gone && b.kind == a.kind && b.special == a.special && b.redirect == a.redirect && b.pos.distance(at) <= MISPLACED)
+            .min_by(|x, y| x.1.pos.distance(at).total_cmp(&y.1.pos.distance(at)))
+            .map(|(j, _)| j)
+    }
+
     // ------------------------------------------------------------------ colocar o vermelho no passado
     /// tiro vermelho com Δ: o raio vê as paredes (portas) do instante tw − Δ
     pub fn ch_place_orange(&mut self, ecs: &mut Ecs, origin: Vec3, dir: Vec3) -> bool {
         let delta = self.relogio.as_ref().map(|c| c.delta).unwrap_or(0.0);
         let tw = self.relogio.as_ref().map(|c| c.tw);
         self.ch_in_past(ecs, delta, |g| {
+            // mirou num cubo (como ele estava no passado): o portal abre na superfície mais perto dele
+            let (origin, dir) = g.ch_past_cube_target(origin, dir, delta).unwrap_or((origin, dir));
             let hit = g.world.raycast(origin, dir, 400.0);
             if hit.as_ref().is_some_and(|h| g.world.solids[h.solid].kbody.is_some()) {
                 g.toast("Não dá para abrir portal numa porta que se mexe, no passado.");
@@ -1182,6 +1374,64 @@ impl Game {
             }
             ok
         })
+    }
+
+    /// o raio de quem mira (com o passado à mostra) passa por um cubo como ele estava em tw − Δ? Então o
+    /// portal abre na superfície mais perto dele (o chão embaixo, ou a parede onde ele encosta), como se
+    /// o tiro tivesse acertado o cubo: devolve a origem e a direção do tiro de verdade
+    fn ch_past_cube_target(&self, origin: Vec3, dir: Vec3, delta: f32) -> Option<(Vec3, Vec3)> {
+        let ch = self.relogio.as_ref()?;
+        let snap = &ch.samples[ch.index_at(ch.tw - delta)].w;
+        let limit = self.world.raycast(origin, dir, 400.0).map(|h| h.dist).unwrap_or(400.0);
+        let mut best: Option<(f32, Vec3, f32)> = None;
+        for (k, pr) in snap.props.iter().enumerate() {
+            let Some(c) = self.props.list.get(k) else { continue };
+            if c.kind != crate::props::Kind::Cube || pr.gone {
+                continue;
+            }
+            let h = c.half.y;
+            let (mut t0, mut t1) = (0.0f32, limit);
+            let mut miss = false;
+            for a in 0..3 {
+                let (lo, hi) = (pr.p[a] - h, pr.p[a] + h);
+                if dir[a].abs() < 1e-9 {
+                    if origin[a] < lo || origin[a] > hi {
+                        miss = true;
+                        break;
+                    }
+                    continue;
+                }
+                let (mut ta, mut tb) = ((lo - origin[a]) / dir[a], (hi - origin[a]) / dir[a]);
+                if ta > tb {
+                    std::mem::swap(&mut ta, &mut tb);
+                }
+                t0 = t0.max(ta);
+                t1 = t1.min(tb);
+                if t0 > t1 {
+                    miss = true;
+                    break;
+                }
+            }
+            if !miss && best.is_none_or(|b| t0 < b.0) {
+                best = Some((t0, pr.p, h));
+            }
+        }
+        let (_, c, h) = best?;
+        // a superfície mais perto do cubo (as que aceitam portal têm prioridade)
+        let ok = |hit: &crate::world::RayHit| self.world.solids[hit.solid].portal_at(hit.normal);
+        let mut surf: Option<crate::world::RayHit> = None;
+        for d in [Vec3::NEG_Y, Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z, Vec3::Y] {
+            let Some(hit) = self.world.raycast(c, d, h + 0.7) else { continue };
+            let better = match &surf {
+                None => true,
+                Some(s) => (ok(&hit) && !ok(s)) || (ok(&hit) == ok(s) && hit.dist < s.dist - 0.05),
+            };
+            if better {
+                surf = Some(hit);
+            }
+        }
+        let s = surf?;
+        Some((s.point + s.normal * 1.2, -s.normal))
     }
 
     /// o espaço de chegada (no vermelho, no instante de destino) está ocupado?
@@ -1211,7 +1461,10 @@ impl Game {
                     }
                 }
             }
-            snap.props.iter().any(|p| !p.gone && overlap(mn, mx, p.p - Vec3::splat(0.32), p.p + Vec3::splat(0.32), 0.05))
+            // (um cubo que cai neste vermelho logo depois não bloqueia a chegada: ele sai de lá)
+            let ch = g.relogio.as_ref().unwrap();
+            let falling = ch.samples.get((ch.index_at(ch.tw - o.delta) + 1).min(ch.samples.len() - 1)).map(|s| s.w.clone());
+            snap.props.iter().enumerate().any(|(k, p)| !p.gone && !falling.as_ref().is_some_and(|f| f.props.get(k).is_some_and(|q| q.portaled)) && overlap(mn, mx, p.p - Vec3::splat(0.32), p.p + Vec3::splat(0.32), 0.05))
         })
     }
 
@@ -1233,6 +1486,7 @@ impl Game {
             orange: frame(&self.portals.list[1]),
             loop_n: ch.loop_n,
             presses: ch.presses.len(),
+            linha: ch.tb.linha.clone(),
             fields: self.field.events.len(),
         }
     }
@@ -1311,8 +1565,15 @@ impl Game {
         let born = ch.samples[i].t;
         let end = tail.last().unwrap().t;
         let eps = episodes(&tail, held_k);
-        let laser_emits = lasers::laser_emits(&tail);
-        ch.arena.insert(id, CloneData { id, born, end, script: tail, eps, echo, ghost: None, cp, exit, bad: HashMap::new(), echoed: false, closed: false, fz_last: None, marker: None, laser_emits, laser_miss: 0.0, pair: None, shown: [None, None] });
+        // a linha do tempo: o trecho da sua versão passada (com as âncoras de caminho) e o laser que ela
+        // mandou ao passado (cada entrada no ciano é um compromisso; a saída do vermelho, uma emissão)
+        ch.tb.linha.trechos.push(linha::Trecho { clone: id, de: born, ate: end, ruim: [0.0; 5] });
+        for e in lasers::laser_emits(&tail) {
+            let i = ch.tb.linha.emissoes.len();
+            ch.tb.linha.emissoes.push(linha::Emissao { clone: id, t: e.t, entrada: e.entry_t, at: e.at, exit: e.exit, dir: e.dir, ativo: true, liga: vec![] });
+            ch.tb.linha.compromissos.push(linha::Compromisso { quem: linha::Quem::Laser { clone: id }, t: e.entry_t, tol: linha::TOL_LASER, onde: e.at, estado: linha::Estado::Pendente, sustenta: linha::Sustenta::Emissao(i) });
+        }
+        ch.arena.insert(id, CloneData { id, born, end, script: tail, eps, echo, ghost: None, cp, exit, echoed: false, closed: false, fz_last: None, marker: None, pair: None, shown: [None, None], ghost_wins: None });
         ch.clones.push(id);
         ch.samples.truncate(i + 1);
         ch.tw = ch.samples[i].t;
@@ -1320,14 +1581,15 @@ impl Game {
         ch.arrival = ch.tw;
         ch.mark_arrive = true;
         ch.loop_n += 1;
-        // 5) os portais se desfazem; o mundo "rebobina" ao seu redor
+        // 5) os portais se desfazem; o mundo já aparece no instante de chegada (sem mostrar o
+        // "rebobinar": a duração 0 encerra a varredura no primeiro quadro)
         let tail_sweep = ch.arena[&id].script.clone();
         ch.paused = false;
         self.portals.fizzle();
         self.ch_set_freeze(true);
         self.ch_set_holo(ecs, false);
         let ch = self.relogio.as_mut().unwrap();
-        ch.sweep = Some(Sweep { tail: tail_sweep, t: 0.0, dur: 0.75 });
+        ch.sweep = Some(Sweep { tail: tail_sweep, t: 0.0, dur: 0.0 });
         ch.fx_jump = 0.8;
         ch.fx_kick = Some((1.1, 1.0, false));
         self.events.push(GameEvent::TimeJump(delta));
@@ -1399,7 +1661,7 @@ impl Game {
         let (mn, mx) = (p - half, p + half);
         let mut solid = false;
         if !in_mouth {
-            solid = self.world.solid_ids().any(|i| overlap(mn, mx, self.world.solids[i].min, self.world.solids[i].max, 0.14));
+            solid = self.world.solid_ids().any(|i| solid_touches(&self.world.solids[i], mn, mx, 0.14));
         }
         let ch = self.relogio.as_ref().unwrap();
         let cube = self.props.list.iter().enumerate().any(|(k, c)| !c.gone && !c.held && !ch.driven.contains_key(&k) && overlap(mn, mx, c.pos - Vec3::splat(0.3), c.pos + Vec3::splat(0.3), 0.08));
@@ -1433,24 +1695,43 @@ impl Game {
                 continue;
             }
             let (solid, cube, hazard, ball, no_floor) = self.ch_pose_problems(pose.p, pose.up, pose.grounded, pose.in_mouth);
+            // as âncoras de caminho do trecho dela, cada uma com a sua folga (linha::CAMINHO)
             let ch = self.relogio.as_mut().unwrap();
-            let c = ch.arena.get_mut(&id).unwrap();
-            let mut test = |key: &'static str, bad: bool, limit: f32, why: &'static str| -> Option<&'static str> {
-                let v = if bad { c.bad.get(key).copied().unwrap_or(0.0) + dt } else { 0.0 };
-                c.bad.insert(key, v);
-                (v > limit).then_some(why)
-            };
-            let why = test("solid", solid, 0.1, "algo bloqueou o caminho do seu passado")
-                .or_else(|| test("cube", cube, 0.1, "um objeto ficou no caminho do seu passado"))
-                .or_else(|| test("hazard", hazard, 0.05, "o seu passado caiu num perigo"))
-                .or_else(|| test("ball", ball, 0.03, "uma bola de energia atingiu o seu passado"))
-                .or_else(|| test("floor", no_floor, 0.35, "o chão do seu passado sumiu"));
+            let why = ch.tb.linha.conferir_caminho(id, [solid, cube, hazard, ball, no_floor], dt);
             if let Some(why) = why {
-                let cp = c.cp.clone();
+                let cp = ch.arena[&id].cp.clone();
                 self.ch_rollback(ecs, cp, why, Some(pose.p));
                 return;
             }
         }
+    }
+
+    /// diagnóstico (paradoxo-caminho.json, na pasta de dados do jogo): o caminho andado com o tempo parado,
+    /// os portais daquele instante e as peças em que o corpo entrou — para achar um bloqueio que não devia
+    fn ch_dump_blocked(&self, fz: &[FrozenPt], frames: &[Arc<PFrame>], at: Vec3) {
+        let half = self.player.half;
+        let (mn, mx) = (at - half, at + half);
+        let solids: Vec<serde_json::Value> = self
+            .world
+            .solid_ids()
+            .filter(|&i| solid_touches(&self.world.solids[i], mn, mx, 0.14))
+            .map(|i| {
+                let b = &self.world.solids[i];
+                serde_json::json!({ "i": i, "min": b.min.to_array(), "max": b.max.to_array(), "mat": b.mat, "planos": b.planes.as_ref().map(|p| p.len()), "girada": b.obb.is_some(), "porta": b.kbody.is_some() })
+            })
+            .collect();
+        let v = serde_json::json!({
+            "fase": self.level.and_then(|l| self.levels.get(l)).map(|l| format!("{} {}", l.id, l.name)),
+            "ponto": at.to_array(),
+            "pecas": solids,
+            "portais": frames.iter().map(|f| serde_json::json!({ "c": f.c.to_array(), "n": f.n.to_array(), "delta": f.delta })).collect::<Vec<_>>(),
+            "portais_agora": self.portals.list.iter().filter(|p| p.placed).map(|p| serde_json::json!({ "c": p.center.to_array(), "n": p.normal.to_array(), "delta": p.delta })).collect::<Vec<_>>(),
+            "caminho": fz.iter().map(|q| serde_json::json!([q.p.x, q.p.y, q.p.z, q.in_mouth, q.grounded])).collect::<Vec<_>>(),
+        });
+        // (testes: na pasta temporária, nunca na de quem joga)
+        let dir = if std::env::var("PORTAL3_MUTE").is_ok() { std::env::temp_dir() } else { crate::menu::data_dir() };
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("paradoxo-caminho.json"), serde_json::to_string_pretty(&v).unwrap_or_default());
     }
 
     /// o caminho que o seu passado andou com o tempo parado, conferido contra o mundo de agora
@@ -1462,21 +1743,39 @@ impl Game {
             c.fz_last = Some(c.fz_last.unwrap_or(f32::NEG_INFINITY).min(tw));
         }
         let last = c.fz_last.unwrap();
+        // (com os portais que a sua versão passada tinha abertos nesse trecho — os de antes da pausa e os
+        // colocados com o tempo parado: perto da boca deles, o corpo entra na parede de propósito)
         let mut todo = vec![];
-        for s in &c.script {
+        for (j, s) in c.script.iter().enumerate() {
             if let Some(fz) = &s.fz {
                 if s.t > last + 1e-6 && s.t <= tw + 1e-6 {
-                    todo.push((s.t, fz.clone()));
+                    let mut frames: Vec<Arc<PFrame>> = vec![];
+                    for pt in [Some(&s.pt), j.checked_sub(1).map(|i| &c.script[i].pt)].into_iter().flatten() {
+                        frames.extend([pt.b.clone(), pt.o.clone()].into_iter().flatten());
+                    }
+                    todo.push((s.t, fz.clone(), frames));
                 }
             }
         }
         let cp = c.cp.clone();
-        for (t, fz) in todo {
+        let near = |frames: &[Arc<PFrame>], p: Vec3| {
+            frames.iter().any(|f| {
+                let d = p - f.c;
+                let right = f.u.cross(f.n).normalize_or_zero();
+                let (lx, ly, lz) = (d.dot(right), d.dot(f.u), d.dot(f.n));
+                lx.abs() < PORTAL_A + 0.45 && ly.abs() < PORTAL_B + 0.45 && lz > -1.6 && lz < 1.6
+            })
+        };
+        for (t, fz, frames) in todo {
             self.relogio.as_mut().unwrap().arena.get_mut(&id).unwrap().fz_last = Some(t);
-            let mut gaps = 0;
+            // (com folga, como as âncoras de caminho: um ponto só raspando numa parede não basta — dois
+            // seguidos dentro de algo sólido sim)
+            let (mut gaps, mut walls) = (0, 0);
             for q in fz.iter() {
-                let (solid, cube, hazard, _, no_floor) = self.ch_pose_problems(q.p, q.up, q.grounded, q.in_mouth);
-                if solid {
+                let (solid, cube, hazard, _, no_floor) = self.ch_pose_problems(q.p, q.up, q.grounded, q.in_mouth || near(&frames, q.p));
+                walls = if solid { walls + 1 } else { 0 };
+                if walls >= 2 {
+                    self.ch_dump_blocked(&fz, &frames, q.p);
                     return Some(("algo bloqueou o caminho do seu passado (com o tempo parado)", q.p, cp));
                 }
                 if cube {
@@ -1516,6 +1815,18 @@ impl Game {
         ch.free.clear();
         ch.snap.clear();
         ch.samples = cp.samples.clone();
+        // os modelos dos duplos são refeitos (os da linha desfeita somem)
+        for d in &ch.tb.linha.duplos {
+            if let Some(m) = d.mesh {
+                if let Ok(e) = ecs.get_entity_mut(m) {
+                    e.despawn();
+                }
+            }
+        }
+        ch.tb.linha = cp.linha.clone();
+        for d in &mut ch.tb.linha.duplos {
+            d.mesh = None;
+        }
         ch.clones = cp.clones.clone();
         ch.tw = cp.tw;
         ch.next = cp.next;
@@ -1613,6 +1924,14 @@ impl Game {
         }
         if let Some(h) = &ch.holo {
             ecs.entity_mut(h.root).insert(if on { Visibility::Inherited } else { Visibility::Hidden });
+            // o seu eu do passado fica fora do grupo do holograma (na raiz do mundo): some junto
+            if !on {
+                if let Some(me) = &h.me {
+                    if let Ok(mut e) = ecs.get_entity_mut(me.root) {
+                        e.insert(Visibility::Hidden);
+                    }
+                }
+            }
         }
     }
 

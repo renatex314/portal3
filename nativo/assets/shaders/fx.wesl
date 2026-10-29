@@ -395,7 +395,12 @@ fn shade(in: Out, front: bool) -> vec4<f32> {
         let p = vec2<f32>(in.uv.x * 7.0, in.uv.y * 4.0 - t * 3.2);
         let f = fbm41(p + fbm41(p * 1.7 + t * 0.9));
         let bands = 0.65 + 0.35 * sin(in.uv.y * 34.0 - t * 14.0);
-        return vec4<f32>(fx.color.rgb * (0.3 + 1.6 * f * f + fx.p0.x) * bands, 1.0);
+        // fio quente no meio do tubo (quase branco: o brilho da câmera da arma acende em volta)
+        let mid = exp(-pow((in.uv.x - 0.5) * 5.0, 2.0));
+        let flick = 0.85 + 0.15 * sin(t * 23.0 + in.uv.y * 9.0);
+        var col = fx.color.rgb * (0.4 + 2.2 * f * f + fx.p0.x) * bands;
+        col += mix(fx.color.rgb, vec3<f32>(1.0), 0.55) * mid * (0.8 + 1.4 * f) * flick * (1.0 + fx.p0.x);
+        return vec4<f32>(col, 1.0);
     }
     if (k == DISSOLVE) {
         // objeto que some: buracos de ruído crescendo (p0.x = 0 → 1), borda acesa na cor
@@ -430,7 +435,8 @@ fn shade(in: Out, front: bool) -> vec4<f32> {
         let flow = 0.5 + 0.3 * sin(in.uv.x * 46.0 - t * 7.0);
         var pulse = 0.0;
         if (fx.p0.x >= 0.0) { pulse = exp(-pow((in.uv.x - fx.p0.x) * 9.0, 2.0)) * 3.5; }
-        return vec4<f32>(fx.color.rgb * (flow + pulse), 1.0);
+        let core = mix(fx.color.rgb, vec3<f32>(1.0), 0.35 * pulse / 3.5);
+        return vec4<f32>(core * (flow * 1.4 + pulse), 1.0);
     }
     if (k == HOLO) {
         // holograma do passado: azul, mais forte na silhueta, com faixas correndo
@@ -467,7 +473,7 @@ fn shade(in: Out, front: bool) -> vec4<f32> {
         var col = uc * (0.42 + 0.75 * fast + 0.5 * hot) + uc * uc * hot * 0.45 + vec3<f32>(hot * hot * 0.35);
         var a = clamp(band * (0.8 + 0.2 * fast) + hot * 0.6 + halo, 0.0, 1.0);
         a *= 1.0 - smoothstep(RIM - 0.08, RIM, r);
-        col *= 1.6 * (1.0 + fx.p0.y * 2.5);
+        col *= 1.0 * (1.0 + fx.p0.y * 0.5);
         if (a < 0.005) { discard; }
         return vec4<f32>(col, a);
     }
@@ -484,17 +490,18 @@ fn shade(in: Out, front: bool) -> vec4<f32> {
         let wisp = fbm41(c * 7.5 + vec2<f32>(-t * 1.2, t * 0.85) - d * 5.0 + t * 0.7);
         let pulse = 0.82 + 0.18 * sin(t * 2.6 + flow * 2.0);
         let dd = max(d, 0.0);
-        let glow = exp(-dd * 2.4) * (0.4 + 0.6 * flow) * pulse;
+        let glow = exp(-dd * 3.4) * (0.4 + 0.6 * flow) * pulse;
         let streak = smoothstep(0.52, 0.85, wisp) * exp(-dd * 4.5);
-        var a = (glow * 0.6 + streak * 0.9) * smoothstep(-0.06, 0.03, d);
+        var a = (glow * 0.28 + streak * 0.45) * smoothstep(-0.06, 0.03, d);
         a *= 1.0 - smoothstep(GLOW - 0.3, GLOW, length(p));
-        // clarão da abertura: na versão web o bloom largo espalha esse pico pela parede toda;
-        // aqui o próprio halo se abre junto (mais largo e mais forte enquanto o clarão dura)
+        // clarão da abertura: na versão web o bloom largo espalha o pico (HDR) pela parede; aqui o
+        // próprio halo se abre junto, só nos primeiros instantes (cai com o quadrado do clarão)
         let flash = fx.p0.y;
-        a += flash * exp(-dd * 0.7) * 0.85 * smoothstep(-0.06, 0.03, d) * (1.0 - smoothstep(GLOW - 0.3, GLOW, length(p)));
+        let f2 = flash * flash;
+        a += f2 * exp(-dd * 2.5) * 0.15 * smoothstep(-0.06, 0.03, d) * (1.0 - smoothstep(GLOW - 0.3, GLOW, length(p)));
         a *= min(1.0, fx.p0.x * 1.5);
         let uc = fx.color.rgb;
-        let col = uc * uc * (2.2 + 2.4 * streak + flash * 6.0) + uc * streak * 0.6 + vec3<f32>(flash * 1.6);
+        let col = uc * uc * (0.95 + 1.0 * streak + flash * 0.3) + uc * streak * 0.25;
         return vec4<f32>(col, min(1.0, a));
     }
 @if(VERTEX_COLORS) {

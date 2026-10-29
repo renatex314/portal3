@@ -15,7 +15,6 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::ecs::world::World as Ecs;
-use bevy::light::GeneratedEnvironmentMapLight;
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use rand::Rng;
@@ -58,9 +57,14 @@ pub struct Gun {
     halos: Vec<(Handle<Fx>, f32)>,
     win_halo: Option<Handle<Fx>>,
     tip_glow: Option<(Entity, Handle<Fx>)>,
+    glass: Option<Handle<StandardMaterial>>,
     arcs: Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
     holo: Option<(Handle<Image>, Canvas)>,
     light: Entity,
+    /// iluminação de estúdio só da arma: contraluz ciano (o contorno) e o preenchimento de baixo
+    /// na cor do último portal
+    rim: [Entity; 2],
+    fill: Entity,
     pub anim: GunAnim,
 }
 
@@ -82,11 +86,26 @@ fn layer_all(ecs: &mut Ecs, e: Entity, l: &RenderLayers) {
     }
 }
 
+/// luzes extras de estúdio na arma (contraluz ciano e preenchimento): PORTAL3_ARMA_LUZ=1 liga; o padrão é
+/// o visual da versão web, em que a arma só tem a própria luz
+fn rim_scale() -> f32 {
+    std::env::var("PORTAL3_ARMA_LUZ").ok().and_then(|v| v.parse().ok()).unwrap_or(0.6)
+}
+
+pub fn gun_bloom() -> bevy::post_process::bloom::Bloom {
+    use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
+    Bloom {
+        intensity: std::env::var("PORTAL3_ARMA_BLOOM").ok().and_then(|v| v.parse().ok()).unwrap_or(0.22),
+        low_frequency_boost: 0.4,
+        prefilter: BloomPrefilter { threshold: 1.2, threshold_softness: 0.3 },
+        composite_mode: BloomCompositeMode::Additive,
+        ..Bloom::NATURAL
+    }
+}
+
 pub fn setup_gun(ecs: &mut Ecs) {
     let layer = RenderLayers::layer(GUN_LAYER);
     // câmera da arma: depois da principal, sem limpar a cor, profundidade limpa
-    // os modelos da versão web têm o próprio mapa de reflexo (a sala, ~0,55): mais brilho que o do cenário
-    let env = Some(crate::env::environment_cubemap_k(&mut ecs.resource_mut::<Assets<Image>>(), 0.55));
     let target = ecs.get_resource::<HeadlessTarget>().cloned();
     let mut cam = ecs.spawn((
         Camera3d::default(),
@@ -98,6 +117,10 @@ pub fn setup_gun(ecs: &mut Ecs) {
             output_mode: bevy::camera::CameraOutputMode::Write { blend_state: Some(bevy::render::render_resource::BlendState::PREMULTIPLIED_ALPHA_BLENDING), clear_color: ClearColorConfig::None },
             ..default()
         },
+        // HDR e brilho próprios: o que passa do limiar (plasma, LEDs, ponta) acende em volta; o brilho
+        // fora da silhueta tem alfa 0 e soma por cima do mundo (mistura pré-multiplicada)
+        bevy::camera::Hdr,
+        gun_bloom(),
         Tonemapping::AcesFitted,
         bevy::camera::Exposure { ev100: EV100 },
         bevy::render::view::ColorGrading { global: bevy::render::view::ColorGradingGlobal { exposure: GRADE_EV, ..default() }, ..default() },
@@ -107,10 +130,9 @@ pub fn setup_gun(ecs: &mut Ecs) {
         layer.clone(),
         Name::new("câmera da arma"),
     ));
-    if let Some(env) = env {
-        let k = std::env::var("PORTAL3_GUNENV").ok().and_then(|v| v.parse().ok()).unwrap_or(1.8); // (calibrado contra a versão web)
-        cam.insert(GeneratedEnvironmentMapLight { environment_map: env, intensity: k, ..default() });
-    }
+    // os modelos da versão web têm o próprio mapa de reflexo (a sala, ~0,55): mais brilho que o do cenário
+    let k = std::env::var("PORTAL3_GUNENV").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0); // (calibrado contra a versão web: o casco da arma na mesma cor)
+    cam.insert(crate::env::WantsEnv { gun: true, intensity: k });
     if let Some(t) = target {
         cam.insert(RenderTarget::Image(t.0.clone().into()));
     }
@@ -215,6 +237,33 @@ pub fn setup_gun(ecs: &mut Ecs) {
         (ih, cv)
     });
     let light = ecs.spawn((point_light(crate::mats::hex(0x9fd8ff), 0.6, 1.2), Transform::from_xyz(0.16, -0.04, -1.2), ChildOf(cam), layer.clone())).id();
+    // contraluz: atrás e acima (desenha a borda de cima e a de trás) e um recorte do lado direito
+    let rim = [
+        ecs.spawn((point_light(crate::mats::hex(0x6fd4ff), 1.4, 1.6), Transform::from_xyz(0.1, 0.32, -1.45), ChildOf(cam), layer.clone())).id(),
+        ecs.spawn((point_light(crate::mats::hex(0x9ad8ff), 0.7, 1.4), Transform::from_xyz(0.75, 0.0, -0.95), ChildOf(cam), layer.clone())).id(),
+    ];
+    let fill = ecs.spawn((point_light(crate::mats::hex(0x4fb8ff), 1.0, 1.2), Transform::from_xyz(0.18, -0.48, -0.42), ChildOf(cam), layer.clone())).id();
+    // verniz nas partes de metal: reflexos nítidos sobre a pintura
+    let mut glass = None;
+    let mut seen = std::collections::HashSet::new();
+    for m in crate::glb::meshes_of(ecs, root) {
+        let Some(h) = ecs.get::<MeshMaterial3d<StandardMaterial>>(m).map(|x| x.0.clone()) else { continue };
+        if !seen.insert(h.id()) {
+            continue;
+        }
+        if let Some(mut mat) = ecs.resource_mut::<Assets<StandardMaterial>>().get_mut(&h) {
+            // o vidro do cano: aceso por dentro (a cor vem do núcleo)
+            if !mat.unlit && (0.2..0.5).contains(&mat.base_color.alpha()) && glass.is_none() {
+                glass = Some(h.clone());
+            }
+            if mat.metallic >= 0.3 && !mat.unlit {
+                if rim_scale() > 0.0 {
+                    mat.clearcoat = 0.25;
+                    mat.clearcoat_perceptual_roughness = 0.2;
+                }
+            }
+        }
+    }
     layer_all(ecs, root, &layer);
     let base_tf = parts.values().filter_map(|&e| ecs.get::<Transform>(e).map(|t| (e, *t))).collect();
     ecs.insert_resource(Gun {
@@ -229,9 +278,12 @@ pub fn setup_gun(ecs: &mut Ecs) {
         halos,
         win_halo,
         tip_glow,
+        glass,
         arcs,
         holo,
         light,
+        rim,
+        fill,
         anim: GunAnim { pulse: -1.0, base: Vec3::new(0.5, 1.6, 3.2), ..default() },
     });
 }
@@ -293,6 +345,14 @@ pub fn update_gun(ecs: &mut Ecs) {
                 l.color = Color::linear_rgb(c.x, c.y, c.z);
             }
         }
+        {
+            let burst = a.recoil;
+            if let Some(mut l) = ecs.get_mut::<PointLight>(gun.light) {
+                // a luz de dentro da arma: respira devagar na cor do último portal e acende no tiro
+                l.intensity = point_light(Color::WHITE, 1.3 + 0.35 * (t * 2.1).sin() + burst * 3.5, 1.2).intensity;
+                l.range = 2.5;
+            }
+        }
         a.look += look;
         a.recoil = (a.recoil - dt * 6.0).max(0.0);
         // mola: a arma fica um pouco para trás quando a câmera gira e volta balançando
@@ -324,11 +384,24 @@ pub fn update_gun(ecs: &mut Ecs) {
             }
         }
         let base = a.base;
+        // preenchimento de baixo: a cor do último portal, respirando devagar, com um clarão no tiro
+        {
+            let c = (base / base.max_element().max(1e-3)).max(Vec3::splat(0.15));
+            let k = (0.85 + 0.2 * (t * 2.2).sin() + recoil * 3.0 + open * 0.6) * if visible { 1.0 } else { 0.0 };
+            let fill = point_light(Color::linear_rgb(c.x, c.y, c.z), 0.55 * k * rim_scale(), 1.2);
+            ecs.entity_mut(gun.fill).insert(fill);
+            let rim_k = if visible { 1.0 } else { 0.0 };
+            for (i, &e) in gun.rim.iter().enumerate() {
+                let (col, base_i) = if i == 0 { (0x6fd4ff, 1.4) } else { (0x9ad8ff, 0.7) };
+                let base_i = base_i * rim_scale();
+                ecs.entity_mut(e).insert(point_light(crate::mats::hex(col), base_i * rim_k * (1.0 + recoil * 0.5), if i == 0 { 1.6 } else { 1.4 }));
+            }
+        }
         // LEDs de carga: correm quando segurando, ficam acesos parados (×2,6 acima do limiar do bloom)
         for i in 0..3 {
             let on = if open > 0.5 { if (t * 10.0).floor() as i32 % 3 == i { 1.6 } else { 0.3 } } else { 1.0 };
             if let Some(h) = gun.mats.get(&format!("leds_{i}")).cloned() {
-                set_rgb(ecs, &h, base * 0.5 * on * 2.6);
+                set_rgb(ecs, &h, base * 0.5 * on * 3.6);
             }
         }
         // condutos: fluxo contínuo e um pulso correndo para a frente depois do tiro
@@ -355,12 +428,12 @@ pub fn update_gun(ecs: &mut Ecs) {
         }
         // plasma na ponta
         if let Some((e, m)) = gun.tip_glow.clone() {
-            let s = 0.05 + rand::random::<f32>() * 0.012 + recoil * 0.14 + open * 0.03;
+            let s = 0.05 + rand::random::<f32>() * 0.012 + recoil * 0.18 + open * 0.035;
             if let Some(mut tr) = ecs.get_mut::<Transform>(e) {
                 tr.scale = Vec3::new(s, s, 1.0);
             }
             if let Some(mut fx) = ecs.resource_mut::<Assets<Fx>>().get_mut(&m) {
-                fx.u.color = (base * 0.35).extend(1.0);
+                fx.u.color = (base * (0.45 + recoil * 0.5)).extend(1.0);
             }
         }
         // ---- efeitos da Mark III
@@ -390,7 +463,7 @@ pub fn update_gun(ecs: &mut Ecs) {
             let glow_col = slow_col.lerp(base, 1.0 - slow);
             for (h, k) in &gun.halos {
                 if let Some(mut m) = fx.get_mut(h) {
-                    m.u.color = (glow_col * *k * (1.0 + recoil * 1.5 + open * 0.5) * (0.85 + 0.15 * (t * 5.0).sin())).extend(1.0);
+                    m.u.color = (glow_col * *k * 1.3 * (1.0 + recoil * 1.5 + open * 0.5) * (0.85 + 0.15 * (t * 5.0).sin())).extend(1.0);
                 }
             }
             if let Some(h) = &gun.win_halo {
@@ -400,12 +473,18 @@ pub fn update_gun(ecs: &mut Ecs) {
             }
         }
         if let Some(h) = gun.mats.get("innerGlow").cloned() {
-            set_rgb(ecs, &h, base * (0.24 + 0.05 * (t * 2.0).sin() + recoil * 0.3));
+            set_rgb(ecs, &h, base * (1.0 + 0.25 * (t * 2.0).sin() + recoil * 1.6 + open * 0.4));
+        }
+        if let Some(h) = gun.glass.clone() {
+            if let Some(mut m) = ecs.resource_mut::<Assets<StandardMaterial>>().get_mut(&h) {
+                let e = base * (0.2 + 0.05 * (t * 2.0).sin() + recoil * 0.3 + open * 0.08);
+                m.emissive = LinearRgba::rgb(e.x, e.y, e.z);
+            }
         }
         let hot = (recoil * 1.8 + open * 0.6 + heat * 0.5 + 0.05 + 0.04 * (t * 4.0).sin()).min(1.6);
         if let Some(h) = gun.mats.get("copper").cloned() {
             if let Some(mut m) = ecs.resource_mut::<Assets<StandardMaterial>>().get_mut(&h) {
-                let e = base * 0.045 * hot;
+                let e = base * 0.07 * hot;
                 m.emissive = LinearRgba::rgb(e.x, e.y, e.z);
             }
         }

@@ -53,6 +53,7 @@ pub struct SceneFx {
     pub lens2: Vec4,
     /// centro da esfera do campo no mundo (para a profundidade e o contato suave)
     pub lens3: Vec4,
+    pub clip_from_world: Mat4,
 }
 
 impl Default for SceneFx {
@@ -70,6 +71,7 @@ impl Default for SceneFx {
             lens: Vec4::ZERO,
             lens2: Vec4::ZERO,
             lens3: Vec4::ZERO,
+            clip_from_world: Mat4::IDENTITY,
         }
     }
 }
@@ -226,6 +228,7 @@ fn update_post(
     gun: Option<Res<crate::gun::Gun>>,
     gt: Query<&GlobalTransform>,
     names: Query<(&Name, &GlobalTransform)>,
+    quality: Option<Res<crate::quality::QualityState>>,
 ) {
     let Some(mut game) = game else { return };
     let kick = game.relogio.as_mut().and_then(|c| c.fx_kick.take());
@@ -292,12 +295,14 @@ fn update_post(
         .collect();
     lakes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     lakes.truncate(LAKES);
-    let mut fx = SceneFx { world_from_clip: clip_from_world.inverse(), prev_clip_from_world: prev, cam: pos.extend(st.t), blur: Vec4::new(strength, max_len, radial, if blur_on { 1.0 } else { 0.0 }), ..default() };
+    let mut fx = SceneFx { world_from_clip: clip_from_world.inverse(), clip_from_world, prev_clip_from_world: prev, cam: pos.extend(st.t), blur: Vec4::new(strength, max_len, radial, if blur_on { 1.0 } else { 0.0 }), ..default() };
     for (i, (_, mn, mx)) in lakes.iter().enumerate() {
         fx.lakes[i] = Vec4::new(mn.x, mn.z, mx.x, mx.z);
         fx.tops[i / 4][i % 4] = mx.y;
     }
-    fx.misc = Vec4::new(lakes.len() as f32, pp.aspect_ratio, 0.0, 0.0);
+    // oclusão de ambiente (cantos e contato dos objetos com o chão): desligada na qualidade Baixa
+    let ao = std::env::var("PORTAL3_AO").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(if quality.map(|q| q.current).unwrap_or(1) == 0 { 0.0 } else { 1.0 });
+    fx.misc = Vec4::new(lakes.len() as f32, pp.aspect_ratio, ao, 0.0);
     // onda de choque do tiro: sai da boca da arma (a arma dispara em gun.rs)
     st.shock_t = (st.shock_t + dt * if st.shock_big { 1.4 } else { 2.6 }).min(1.0);
     let mut center = Vec2::new(0.5, 0.5);
@@ -323,15 +328,19 @@ fn update_post(
             fx.lens = Vec4::new(0.5, 0.5, 0.62, fade);
             fx.lens2 = Vec4::new(1.0, 0.0, 0.0, 0.0);
         } else {
+            // (a esfera é desenhada no espaço do mundo: continua valendo com o centro ao lado ou
+            // atrás da câmera, onde a projeção do centro na tela não existe ou vira para o lado oposto)
             let c = clip_from_world * field.center.extend(1.0);
-            if c.w > 0.05 {
+            {
+                let c = if c.w > 0.05 { c } else { Vec4::new(0.0, 0.0, 0.0, 1.0) };
                 let ang = (f.r / dist).min(0.999).asin();
                 let scale = 0.2 + 0.8 * (1.0 - (1.0 - born).powi(3));
                 let r = ang.tan() / (pp.fov / 2.0).tan() * 0.5 * scale;
                 fx.lens = Vec4::new(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, r, fade);
                 // a esfera de verdade: raio no mundo, distância e a escala da projeção
                 fx.lens2 = Vec4::new(0.0, f.r * scale, dist, 0.5 / (pp.fov / 2.0).tan());
-                fx.lens3 = field.center.extend(1.0);
+                let age = ((f.life - field.left) / f.life).clamp(0.0, 1.0);
+                fx.lens3 = field.center.extend((0.7 * (1.0 - 0.7 * age)).max(0.01));
             }
         }
     }
